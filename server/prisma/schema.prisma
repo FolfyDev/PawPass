@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+  OWNER
+}
+
+enum RegistrationStatus {
+  CONFIRMED
+  WAITLIST
+  CANCELLED
+}
+
+enum RegistrationTier {
+  FREE
+  DONATION
+}
+
+enum RsvpStatus {
+  YES
+  MAYBE
+  NO
+}
+
+/// A person. Attendees always arrive through Telegram; staff may also hold a password.
+model User {
+  id               String         @id @default(cuid())
+  telegramId       String?        @unique
+  telegramUsername String?
+  telegramPhotoUrl String?
+  displayName      String
+  legalName        String?
+  fursonaName      String?
+  email            String?        @unique
+  passwordHash     String?        // staff only — attendees never get one
+  role             Role           @default(USER)
+  createdAt        DateTime       @default(now())
+
+  registrations    Registration[]
+  checkIns         Registration[] @relation("CheckedInBy")
+  auditEntries     AuditLog[]
+}
+
+model Event {
+  id               String         @id @default(cuid())
+  slug             String         @unique
+  title            String
+  tagline          String?
+  description      String         @default("")
+  venue            String?
+  startsAt         DateTime
+  endsAt           DateTime
+  timezone         String         @default("America/New_York")
+  capacity         Int?           // null = unlimited
+  waitlistEnabled  Boolean        @default(true)
+  opensAt          DateTime?
+  closesAt         DateTime?
+  published        Boolean        @default(false)
+  tosTitle         String         @default("Code of Conduct & Terms")
+  tosBody          String         @default("")
+  /// Extra questions, rendered on web and asked by the bot.
+  /// [{ key, label, type: text|select|checkbox|number, required, options[], help }]
+  customFields     Json           @default("[]")
+  badgeTemplateId  String?
+  badgeTemplate    BadgeTemplate? @relation(fields: [badgeTemplateId], references: [id])
+  accentColor      String         @default("#FF5B04")
+  /// Fixed two-tier model: everyone can register free; this is the paid/optional tier.
+  donationTierName String         @default("Supporter")
+  donationPaypalLink String?      // null = donation tier is hidden for this event
+  /// Atomically incremented to hand out sequential badge numbers.
+  nextBadgeNumber  Int            @default(1)
+  createdAt        DateTime       @default(now())
+
+  registrations    Registration[]
+  campaigns        EmailCampaign[]
+}
+
+model Registration {
+  id            String             @id @default(cuid())
+  /// Human-readable, printed on the badge. e.g. "RL7-4KQ2"
+  code          String             @unique
+  /// Opaque secret embedded in the QR so codes can't be guessed.
+  secret        String             @unique
+  eventId       String
+  event         Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  legalName     String
+  fursonaName   String
+  email         String?
+  answers       Json               @default("{}")
+  status        RegistrationStatus @default(CONFIRMED)
+  tier          RegistrationTier   @default(FREE)
+  badgeNumber   Int?
+  rsvp          RsvpStatus         @default(YES)
+  source        String             @default("web") // web | telegram | admin
+
+  tosAcceptedAt DateTime?
+  tosVersion    String?
+  checkedInAt   DateTime?
+  checkedInById String?
+  checkedInBy   User?              @relation("CheckedInBy", fields: [checkedInById], references: [id])
+  badgePrintedAt DateTime?
+  printCount    Int                @default(0)
+  createdAt     DateTime           @default(now())
+
+  @@unique([eventId, userId])
+  @@index([eventId, status])
+}
+
+/// Everything about how a badge looks lives here as data, so it is editable in the UI.
+model BadgeTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  widthMm   Float    @default(85.6)
+  heightMm  Float    @default(54)
+  dpi       Int      @default(300)
+  background String  @default("#0E1116")
+  /// [{ id, type: text|qr|image|rect|line, x, y, w, h, ... }] — mm units, top-left origin
+  elements  Json     @default("[]")
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  events    Event[]
+}
+
+model EmailCampaign {
+  id          String   @id @default(cuid())
+  eventId     String?
+  event       Event?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  subject     String
+  body        String   // supports {{fursona_name}} {{legal_name}} {{code}} {{event_title}}
+  audience    String   @default("all") // all | checked_in | not_checked_in | waitlist
+  sentAt      DateTime?
+  sentCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+/// Single-use sign-in codes handed out by the bot. This is how someone signs
+/// in when the Login Widget is unavailable — on localhost, on plain HTTP, or
+/// before /setdomain has been configured.
+model LoginCode {
+  code       String   @id
+  telegramId String
+  createdAt  DateTime @default(now())
+  usedAt     DateTime?
+
+  @@index([telegramId])
+}
+
+/// Conversation state for the registration bot.
+model BotSession {
+  telegramId String   @id
+  state      String   @default("idle")
+  draft      Json     @default("{}")
+  updatedAt  DateTime @updatedAt
+}
+
+/// Single-row-per-key store for branding and instance settings.
+model Setting {
+  key   String @id
+  value Json
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  target    String?
+  meta      Json     @default("{}")
+  createdAt DateTime @default(now())
+}
