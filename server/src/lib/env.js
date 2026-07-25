@@ -1,4 +1,15 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+/// `dotenv/config` loads `.env` from process.cwd(), but the README's local-dev
+/// flow runs this from inside server/ (`cd server && npm run dev`), where
+/// there is no .env — the real one lives at the repo root. Resolve it
+/// relative to this file instead of trusting the cwd. In Docker, env vars are
+/// already injected via compose's `env_file`, so this is a harmless no-op
+/// there (dotenv never overrides an already-set process.env value).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const bool = (v) => v === 'true' || v === '1';
 

@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, InputFile } from 'grammy';
+import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
@@ -227,12 +228,31 @@ export function createBot() {
       orderBy: { createdAt: 'desc' },
     });
     if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(`Show QR — ${r.event.title}`, `ticketqr:${r.id}`);
+      if (i < regs.length - 1) kb.row();
+    });
     await ctx.reply(
       regs.map((r) =>
         `${r.event.title}\n${r.status === 'WAITLIST' ? 'Waitlist' : 'Confirmed'} — code ${r.code}` +
         (r.checkedInAt ? '\nChecked in' : '')).join('\n\n') +
       `\n\nWallet passes: ${env.webUrl}/tickets`,
+      { reply_markup: kb },
     );
+  });
+
+  bot.callbackQuery(/^ticketqr:(.+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    const reg = await prisma.registration.findUnique({ where: { id: ctx.match[1] }, include: { event: true } });
+    if (!reg || reg.userId !== user.id) return ctx.reply('That ticket is not yours.');
+    const png = await QRCode.toBuffer(`${env.publicUrl}/t/${reg.secret}`, { width: 640, margin: 1 });
+    const caption =
+      `${reg.event.title}\n` +
+      `Ticket number: ${reg.badgeNumber != null ? reg.badgeNumber : 'not assigned yet'}\n` +
+      `Registration code: ${reg.code}`;
+    await ctx.replyWithPhoto(new InputFile(png, `${reg.code}.png`), { caption });
   });
 
   bot.command('rsvp', async (ctx) => {
