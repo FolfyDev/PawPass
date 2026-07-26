@@ -48,6 +48,7 @@ export default function Reconciliation() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Cash reconciliation</h1>
         </div>
+        <a className="btn" href={`${api.base}/api/admin/events/${id}/reconciliation.csv`}>Export CSV</a>
       </div>
       <EventTabs id={id} />
 
@@ -68,7 +69,7 @@ export default function Reconciliation() {
       )}
 
       <div className="grid-2" style={{ gap: 20 }}>
-        <MethodTable title="Donations (kiosk-recorded)" byMethod={data.donations} total={data.donationsTotal} />
+        <MethodTable title="Donations (registrations + in-person)" byMethod={data.donations} total={data.donationsTotal} />
         <MethodTable title="Merch sales" byMethod={data.merch} total={data.merchTotal} />
       </div>
     </>

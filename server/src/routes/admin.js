@@ -158,7 +158,14 @@ adminRouter.get('/events/:id/merch', async (req, res) => {
     orderBy: { createdAt: 'desc' },
     take: 100,
   });
+  const donations = await prisma.donation.findMany({
+    where: { eventId: req.params.id },
+    include: { processedBy: true },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
   const revenueTotal = sales.reduce((sum, s) => sum + (s.item.price || 0) * s.quantity, 0);
+  const donationsTotal = donations.reduce((sum, d) => sum + d.amount, 0);
   res.json({
     items: items.map((i) => ({ ...i, remaining: Math.max(i.maxCount - i.soldCount, 0) })),
     sales: sales.map((s) => ({
@@ -166,8 +173,45 @@ adminRouter.get('/events/:id/merch', async (req, res) => {
       paymentMethod: s.paymentMethod, paymentNote: s.paymentNote,
       processedByName: s.processedBy.displayName, createdAt: s.createdAt,
     })),
+    donations: donations.map((d) => ({
+      id: d.id, amount: d.amount, paymentMethod: d.paymentMethod, note: d.note,
+      processedByName: d.processedBy.displayName, createdAt: d.createdAt,
+    })),
     revenueTotal,
+    donationsTotal,
   });
+});
+
+/// A donation taken in person at the table, not tied to a merch item or an
+/// event registration — e.g. a walk-up donation box. Rolls into the Cash
+/// reconciliation totals the same as donation-tier registrations do.
+adminRouter.post('/events/:id/donations', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const amount = Number(req.body.amount);
+  if (!(amount > 0)) return res.status(400).json({ error: 'Enter an amount greater than zero.' });
+  if (!PAYMENT_METHODS.includes(req.body.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method.' });
+  const donation = await prisma.donation.create({
+    data: {
+      eventId: event.id, amount, paymentMethod: req.body.paymentMethod,
+      note: req.body.note?.trim() || null, processedById: req.user.id,
+    },
+    include: { processedBy: true },
+  });
+  await audit(req.user.id, 'donation.create', donation.id, { amount, paymentMethod: donation.paymentMethod });
+  res.json({
+    id: donation.id, amount: donation.amount, paymentMethod: donation.paymentMethod,
+    note: donation.note, processedByName: donation.processedBy.displayName, createdAt: donation.createdAt,
+  });
+});
+
+/// Undoes a mistaken entry, mirroring /merch/sales/:id.
+adminRouter.delete('/donations/:id', async (req, res) => {
+  const donation = await prisma.donation.findUnique({ where: { id: req.params.id } });
+  if (!donation) return res.status(404).json({ error: 'Donation not found.' });
+  await prisma.donation.delete({ where: { id: donation.id } });
+  await audit(req.user.id, 'donation.undo', donation.id, { amount: donation.amount });
+  res.json({ ok: true });
 });
 
 adminRouter.post('/events/:id/merch', async (req, res) => {
@@ -269,6 +313,7 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
     where: { item: { eventId: req.params.id } },
     include: { item: true },
   });
+  const donationEntries = await prisma.donation.findMany({ where: { eventId: req.params.id } });
 
   const byMethod = () => Object.fromEntries(PAYMENT_METHODS.map((m) => [m, { count: 0, total: 0 }]));
   const sumTotals = (obj) => Object.values(obj).reduce((sum, m) => sum + m.total, 0);
@@ -280,6 +325,10 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
     donations[r.paymentMethod].count++;
     donations[r.paymentMethod].total += r.paymentAmount || 0;
   }
+  for (const d of donationEntries) {
+    donations[d.paymentMethod].count++;
+    donations[d.paymentMethod].total += d.amount;
+  }
 
   const merch = byMethod();
   for (const s of sales) {
@@ -290,6 +339,58 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
   const donationsTotal = sumTotals(donations);
   const merchTotal = sumTotals(merch);
   res.json({ donations, merch, unrecordedDonations, donationsTotal, merchTotal, grandTotal: donationsTotal + merchTotal });
+});
+
+/// Full sales log, not just the last 100 shown on screen.
+adminRouter.get('/events/:id/merch.csv', async (req, res) => {
+  const sales = await prisma.sale.findMany({
+    where: { item: { eventId: req.params.id } },
+    include: { item: true, processedBy: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const keys = ['createdAt', 'item', 'quantity', 'total', 'paymentMethod', 'paymentNote', 'processedBy'];
+  const rows = sales.map((s) => keys.map((k) => csv({
+    createdAt: s.createdAt.toISOString(),
+    item: s.item.name,
+    quantity: s.quantity,
+    total: ((s.item.price || 0) * s.quantity).toFixed(2),
+    paymentMethod: s.paymentMethod,
+    paymentNote: s.paymentNote,
+    processedBy: s.processedBy.displayName,
+  }[k])).join(','));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="merch.csv"').send([keys.join(','), ...rows].join('\n'));
+});
+
+/// One combined ledger of every place money got recorded for this event —
+/// donation-tier registrations, merch sales, and in-person donations — for
+/// end-of-event bookkeeping. The on-screen reconciliation view only shows
+/// totals by method; this is the transaction-level detail behind them.
+adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
+  const eventId = req.params.id;
+  const [donationRegs, sales, donationEntries] = await Promise.all([
+    prisma.registration.findMany({ where: { eventId, tier: 'DONATION', status: { not: 'CANCELLED' }, paymentMethod: { not: null } } }),
+    prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true, processedBy: true } }),
+    prisma.donation.findMany({ where: { eventId }, include: { processedBy: true } }),
+  ]);
+
+  const rows = [
+    ...donationRegs.map((r) => ({
+      createdAt: r.createdAt, type: 'Registration', description: `${r.legalName} (${r.code})`,
+      amount: r.paymentAmount || 0, paymentMethod: r.paymentMethod, note: r.paymentNote || '', processedBy: '',
+    })),
+    ...sales.map((s) => ({
+      createdAt: s.createdAt, type: 'Merch', description: `${s.quantity} x ${s.item.name}`,
+      amount: (s.item.price || 0) * s.quantity, paymentMethod: s.paymentMethod, note: s.paymentNote || '', processedBy: s.processedBy.displayName,
+    })),
+    ...donationEntries.map((d) => ({
+      createdAt: d.createdAt, type: 'Donation', description: 'In-person donation',
+      amount: d.amount, paymentMethod: d.paymentMethod, note: d.note || '', processedBy: d.processedBy.displayName,
+    })),
+  ].sort((a, b) => a.createdAt - b.createdAt);
+
+  const keys = ['createdAt', 'type', 'description', 'amount', 'paymentMethod', 'note', 'processedBy'];
+  const csvRows = rows.map((r) => keys.map((k) => csv(k === 'createdAt' ? r.createdAt.toISOString() : k === 'amount' ? r.amount.toFixed(2) : r[k])).join(','));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="cash.csv"').send([keys.join(','), ...csvRows].join('\n'));
 });
 
 /* ---------------- vouchers ---------------- */

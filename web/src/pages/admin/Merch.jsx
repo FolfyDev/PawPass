@@ -12,6 +12,9 @@ export default function Merch() {
   const [items, setItems] = useState(null);
   const [sales, setSales] = useState([]);
   const [revenueTotal, setRevenueTotal] = useState(0);
+  const [donations, setDonations] = useState([]);
+  const [donationsTotal, setDonationsTotal] = useState(0);
+  const [donationDraft, setDonationDraft] = useState({ amount: '', paymentMethod: '', note: '' });
   const [newItem, setNewItem] = useState({ name: '', price: '', maxCount: '' });
   const [sellDrafts, setSellDrafts] = useState({}); // itemId -> { quantity, paymentMethod, paymentNote }
   const [msg, setMsg] = useState('');
@@ -20,6 +23,8 @@ export default function Merch() {
     setItems(r.items);
     setSales(r.sales);
     setRevenueTotal(r.revenueTotal);
+    setDonations(r.donations);
+    setDonationsTotal(r.donationsTotal);
   });
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); load(); /* eslint-disable-next-line */ }, [id]);
 
@@ -69,6 +74,24 @@ export default function Merch() {
     catch (e) { setMsg(e.message); }
   };
 
+  const recordDonation = async () => {
+    setMsg('');
+    if (!(Number(donationDraft.amount) > 0)) return setMsg('Enter an amount greater than zero.');
+    if (!donationDraft.paymentMethod) return setMsg('Choose a payment method before recording the donation.');
+    try {
+      await api.post(`/api/admin/events/${id}/donations`, donationDraft);
+      setDonationDraft({ amount: '', paymentMethod: '', note: '' });
+      load();
+    } catch (e) { setMsg(e.message); }
+  };
+
+  const undoDonation = async (donation) => {
+    if (!confirm(`Undo the ${money(donation.amount)} donation?`)) return;
+    setMsg('');
+    try { await api.del(`/api/admin/donations/${donation.id}`); load(); }
+    catch (e) { setMsg(e.message); }
+  };
+
   if (!event || !items) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
 
   return (
@@ -78,7 +101,10 @@ export default function Merch() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Merch</h1>
         </div>
-        <span className="small muted">Revenue: {money(revenueTotal)}</span>
+        <div className="row">
+          <span className="small muted">Merch: {money(revenueTotal)} · Donations: {money(donationsTotal)}</span>
+          <a className="btn" href={`${api.base}/api/admin/events/${id}/merch.csv`}>Export CSV</a>
+        </div>
       </div>
       <EventTabs id={id} />
 
@@ -146,6 +172,44 @@ export default function Merch() {
           ))}
         </div>
       )}
+
+      <div className="card stack" style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: 0 }}>Record a donation</h2>
+        <p className="small muted" style={{ margin: 0 }}>For cash/card given in person that isn't tied to a ticket or an item — tracked in Cash reconciliation.</p>
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <input type="number" step="0.01" min="0.01" placeholder="Amount" value={donationDraft.amount}
+            onChange={(e) => setDonationDraft({ ...donationDraft, amount: e.target.value })} style={{ width: 100 }} />
+          <PaymentButtons value={donationDraft.paymentMethod} onChange={(v) => setDonationDraft({ ...donationDraft, paymentMethod: v })} />
+          <input placeholder="Note (optional)" value={donationDraft.note}
+            onChange={(e) => setDonationDraft({ ...donationDraft, note: e.target.value })} style={{ width: 160 }} />
+          <button className="btn sm signal" onClick={recordDonation}>Record donation</button>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 0, marginBottom: 24 }}>
+        <p className="eyebrow" style={{ padding: '14px 16px 0' }}>Recent donations</p>
+        {donations.length === 0
+          ? <p className="small muted" style={{ padding: 16 }}>Nothing recorded yet.</p>
+          : (
+            <table>
+              <thead><tr><th>When</th><th>Amount</th><th>Method</th><th>Note</th><th>Staff</th><th /></tr></thead>
+              <tbody>
+                {donations.map((d) => (
+                  <tr key={d.id}>
+                    <td className="small muted">{new Date(d.createdAt).toLocaleString()}</td>
+                    <td className="mono">{money(d.amount)}</td>
+                    <td>{d.paymentMethod}</td>
+                    <td className="small muted">{d.note || '—'}</td>
+                    <td className="small muted">{d.processedByName}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button className="btn sm danger" onClick={() => undoDonation(d)}>Undo</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </div>
 
       <div className="card" style={{ padding: 0 }}>
         <p className="eyebrow" style={{ padding: '14px 16px 0' }}>Recent sales</p>

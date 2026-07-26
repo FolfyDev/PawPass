@@ -55,6 +55,7 @@ model User {
   checkIns         Registration[] @relation("CheckedInBy")
   auditEntries     AuditLog[]
   sales            Sale[]         @relation("SalesProcessedBy")
+  donationsProcessed Donation[]   @relation("DonationsProcessedBy")
 }
 
 model Event {
@@ -91,6 +92,7 @@ model Event {
   campaigns        EmailCampaign[]
   merchItems       MerchItem[]
   voucherCodes     VoucherCode[]
+  donations        Donation[]
 }
 
 model Registration {
@@ -200,6 +202,25 @@ model Sale {
   createdAt     DateTime      @default(now())
 
   @@index([itemId])
+}
+
+/// A cash/card/etc. donation taken in person at the table — not tied to any
+/// merch item or event registration, e.g. a walk-up donation box. Recorded
+/// from the Merch tab (where staff are already handling in-person payments)
+/// and rolled into the Cash reconciliation totals alongside donation-tier
+/// registrations and merch sales.
+model Donation {
+  id            String        @id @default(cuid())
+  eventId       String
+  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  amount        Float
+  paymentMethod PaymentMethod
+  note          String?
+  processedById String
+  processedBy   User          @relation("DonationsProcessedBy", fields: [processedById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  @@index([eventId])
 }
 
 /// A code that grants a free, guaranteed-confirmed registration tagged with a
