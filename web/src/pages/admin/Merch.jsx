@@ -186,7 +186,7 @@ export default function Merch() {
         </div>
       </div>
 
-      <div className="card" style={{ padding: 0, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 0, marginBottom: 24, overflow: 'auto' }}>
         <p className="eyebrow" style={{ padding: '14px 16px 0' }}>Recent donations</p>
         {donations.length === 0
           ? <p className="small muted" style={{ padding: 16 }}>Nothing recorded yet.</p>
@@ -211,7 +211,7 @@ export default function Merch() {
           )}
       </div>
 
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card" style={{ padding: 0, overflow: 'auto' }}>
         <p className="eyebrow" style={{ padding: '14px 16px 0' }}>Recent sales</p>
         {sales.length === 0
           ? <p className="small muted" style={{ padding: 16 }}>Nothing sold yet.</p>

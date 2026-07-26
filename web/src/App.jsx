@@ -39,7 +39,7 @@ export default function App() {
           <NavLink to="/" className="link" end>Events</NavLink>
           {user && <NavLink to="/tickets" className="link">My tickets</NavLink>}
           {isStaff && <NavLink to="/admin" className="link">Admin</NavLink>}
-          <span style={{ flex: 1 }} />
+          <span className="nav-spacer" />
           <button className="btn ghost icon sm" onClick={toggleTheme} aria-label="Toggle dark mode" title="Toggle dark mode">
             {theme === 'dark' ? '☀' : '☾'}
           </button>

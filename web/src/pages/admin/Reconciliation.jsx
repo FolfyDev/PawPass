@@ -8,7 +8,7 @@ const METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
 
 function MethodTable({ title, byMethod, total }) {
   return (
-    <div className="card" style={{ padding: 0 }}>
+    <div className="card" style={{ padding: 0, overflow: 'auto' }}>
       <p className="eyebrow" style={{ padding: '14px 16px 0' }}>{title}</p>
       <table>
         <thead><tr><th>Method</th><th>Count</th><th>Total</th></tr></thead>

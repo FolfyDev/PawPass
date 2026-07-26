@@ -33,7 +33,7 @@ export default function Staff() {
       {!isOwner && <p className="note">Only owners can change roles. You can see who has access.</p>}
       {msg && <p className="note bad">{msg}</p>}
 
-      <div className="card" style={{ padding: 0, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 0, marginBottom: 24, overflow: 'auto' }}>
         <table>
           <thead><tr><th>Person</th><th>Telegram</th><th>Email</th><th>Role</th><th /></tr></thead>
           <tbody>
