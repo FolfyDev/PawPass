@@ -56,9 +56,14 @@ badgeRouter.post('/preview.svg', async (req, res) => {
   res.type('image/svg+xml').send(svg);
 });
 
-async function resolve(code) {
-  const reg = await prisma.registration.findUnique({
-    where: { code },
+/// Accepts either a clean badge code or a raw scanned value — a QR payload
+/// is the full `.../t/<secret>` URL, not the code — same flexible match
+/// /print already does, so any caller (browser-print included) can hand
+/// this whatever a camera or a manual code entry produced.
+async function resolve(raw) {
+  const secret = raw.split('/').pop();
+  const reg = await prisma.registration.findFirst({
+    where: { OR: [{ secret }, { code: raw.toUpperCase() }] },
     include: { event: { include: { badgeTemplate: true } } },
   });
   if (!reg) return null;
@@ -86,6 +91,22 @@ badgeRouter.get('/registration/:code.zpl', async (req, res) => {
   const r = await resolve(req.params.code);
   if (!r) return res.status(404).json({ error: 'Ticket not found.' });
   res.type('text/plain').send(await badgeToZPL(r.template, r.ctx, req.query));
+});
+
+/// Browser-print bookkeeping: there's no TCP handshake to confirm a job was
+/// accepted like /print has, so the frontend calls this right after handing
+/// the badge image to the OS print dialog — best-effort, same as /print's
+/// own guarantee really (a successful send doesn't confirm the label came out).
+badgeRouter.post('/registration/:code/printed', async (req, res) => {
+  const raw = req.params.code;
+  const reg = await prisma.registration.findFirst({ where: { OR: [{ secret: raw }, { code: raw.toUpperCase() }] } });
+  if (!reg) return res.status(404).json({ error: 'Ticket not found.' });
+  const updated = await prisma.registration.update({
+    where: { id: reg.id },
+    data: { badgePrintedAt: new Date(), printCount: { increment: 1 } },
+  });
+  await audit(req.user.id, 'badge.print', reg.id, { code: reg.code, via: 'browser' });
+  res.json({ ok: true, code: updated.code, printCount: updated.printCount });
 });
 
 /// Scan-to-print: the badge desk scans a QR, this renders and pushes the job

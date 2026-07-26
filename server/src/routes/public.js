@@ -17,6 +17,7 @@ publicRouter.get('/settings', async (_req, res) => {
     ...s,
     wallet: { apple: env.apple.enabled, google: env.google.enabled },
     telegramBot: env.telegram.username,
+    printMode: env.zebra.mode,
   });
 });
 

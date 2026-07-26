@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Empty, PaymentButtons } from '../../components/Bits.jsx';
+import EventTabs from '../../components/EventTabs.jsx';
 
 const money = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
 
@@ -77,11 +78,9 @@ export default function Merch() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Merch</h1>
         </div>
-        <div className="row">
-          <span className="small muted">Revenue: {money(revenueTotal)}</span>
-          <Link className="btn" to={`/admin/events/${id}/attendees`}>Attendees</Link>
-        </div>
+        <span className="small muted">Revenue: {money(revenueTotal)}</span>
       </div>
+      <EventTabs id={id} />
 
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 

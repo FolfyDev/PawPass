@@ -102,7 +102,7 @@ adminRouter.get('/events/:id/registrations', async (req, res) => {
 
 adminRouter.get('/events/:id/registrations.csv', async (req, res) => {
   const regs = await prisma.registration.findMany({ where: { eventId: req.params.id }, include: { user: true }, orderBy: { createdAt: 'asc' } });
-  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tier','paymentMethod','paymentAmount','paymentNote'];
+  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tier','badgeTier','paymentMethod','paymentAmount','paymentNote'];
   const rows = regs.map((r) => keys.map((k) => csv(k === 'telegram' ? r.user.telegramUsername : r[k])).join(','));
   res.type('text/csv').set('Content-Disposition', 'attachment; filename="registrations.csv"').send([keys.join(','), ...rows].join('\n'));
 });
@@ -316,6 +316,21 @@ adminRouter.get('/events/:id/vouchers', async (req, res) => {
     orderBy: { createdAt: 'desc' },
   });
   res.json(vouchers.map((v) => ({ ...v, remaining: Math.max(v.maxUses - v.usedCount, 0) })));
+});
+
+/// A handout sheet for staff: codes and their badge tier, ready to give to
+/// organizers/photographers ahead of time instead of reading them off a screen.
+adminRouter.get('/events/:id/vouchers.csv', async (req, res) => {
+  const vouchers = await prisma.voucherCode.findMany({
+    where: { eventId: req.params.id },
+    include: { redemptions: { select: { legalName: true, fursonaName: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  const keys = ['code', 'badgeTier', 'maxUses', 'usedCount', 'redeemedBy'];
+  const rows = vouchers.map((v) => keys.map((k) => csv(
+    k === 'redeemedBy' ? v.redemptions.map((r) => r.fursonaName || r.legalName).join('; ') : v[k],
+  )).join(','));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="vouchers.csv"').send([keys.join(','), ...rows].join('\n'));
 });
 
 adminRouter.post('/events/:id/vouchers', async (req, res) => {

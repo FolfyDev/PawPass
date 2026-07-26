@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import { useSession } from '../../lib/session.jsx';
+import { printBadge } from '../../lib/print.js';
 import { StatusPill, Pill, Empty } from '../../components/Bits.jsx';
+import EventTabs from '../../components/EventTabs.jsx';
 
 export default function Attendees() {
   const { id } = useParams();
+  const { settings } = useSession();
   const [rows, setRows] = useState(null);
   const [q, setQ] = useState('');
   const [event, setEvent] = useState(null);
@@ -16,7 +20,7 @@ export default function Attendees() {
 
   const print = async (code) => {
     setMsg('');
-    try { const r = await api.post('/api/badges/print', { code }); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); }
+    try { const r = await printBadge(code, settings?.printMode); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); }
     catch (e) { setMsg(e.message); }
     load();
   };
@@ -37,6 +41,7 @@ export default function Attendees() {
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
       </div>
+      <EventTabs id={id} />
 
       <div className="row" style={{ marginBottom: 14 }}>
         <input placeholder="Search name, fursona, code or email" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 340 }} />

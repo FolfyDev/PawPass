@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, PaymentButtons } from '../../components/Bits.jsx';
+import EventTabs from '../../components/EventTabs.jsx';
+import { printBadge } from '../../lib/print.js';
 
 const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', paymentMethod: '', paymentAmount: '', paymentNote: '', tosAccepted: false };
 
@@ -57,7 +59,7 @@ export default function Kiosk() {
 
   const print = async () => {
     setPrintMsg('');
-    try { const r = await api.post('/api/badges/print', { code: result.code }); setPrintMsg(`Sent to the printer (copy ${r.printCount}).`); }
+    try { const r = await printBadge(result.code, settings?.printMode); setPrintMsg(`Sent to the printer (copy ${r.printCount}).`); }
     catch (e) { setPrintMsg(e.message); }
   };
 
@@ -70,8 +72,8 @@ export default function Kiosk() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Kiosk</h1>
         </div>
-        <Link className="btn" to={`/admin/events/${id}/attendees`}>Attendees</Link>
       </div>
+      <EventTabs id={id} />
 
       <div className="card" style={{ maxWidth: 560 }}>
         {result ? (

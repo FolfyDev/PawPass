@@ -108,6 +108,7 @@ export function createBot() {
       '/mytickets — show your tickets\n' +
       '/rsvp — say whether you\'re going\n' +
       '/going — see who else is going\n' +
+      '/merch — see what is for sale\n' +
       '/login — get a code to sign in on the website\n' +
       '/cancel — stop what we are doing\n' +
       '/help — command list',
@@ -121,6 +122,7 @@ export function createBot() {
       '/mytickets — your tickets and codes\n' +
       '/rsvp — say whether you\'re going, any time\n' +
       '/going — see who else is going\n' +
+      '/merch — see what is for sale\n' +
       '/login — a one-time code for the website\n' +
       '/accept — accept the terms during registration\n' +
       '/skip — skip an optional question\n' +
@@ -367,6 +369,42 @@ export function createBot() {
       return `${r.rsvp === 'MAYBE' ? '· maybe — ' : '· '}${name}${tag}`;
     });
     await ctx.reply(`Going to ${event.title}:\n\n${lines.join('\n')}`);
+  }
+
+  bot.command('merch', async (ctx) => {
+    const { user } = await load(ctx);
+    const regs = await prisma.registration.findMany({
+      where: { userId: user.id, status: { not: 'CANCELLED' } },
+      include: { event: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
+    if (regs.length === 1) return showMerch(ctx, regs[0].event);
+
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(r.event.title, `merchfor:${r.eventId}`);
+      if (i < regs.length - 1) kb.row();
+    });
+    await ctx.reply('Which event?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^merchfor:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    await showMerch(ctx, event);
+  });
+
+  async function showMerch(ctx, event) {
+    const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
+    if (!items.length) return ctx.reply(`Nothing for sale at ${event.title} yet.`);
+    const lines = items.map((i) => {
+      const remaining = Math.max(i.maxCount - i.soldCount, 0);
+      const price = i.price != null ? ` — $${Number(i.price).toFixed(2)}` : '';
+      return `· ${i.name}${price} (${remaining > 0 ? `${remaining} left` : 'sold out'})`;
+    });
+    await ctx.reply(`Merch at ${event.title}:\n\n${lines.join('\n')}`);
   }
 
   /* ---------------- admin: broadcast ---------------- */

@@ -38,11 +38,7 @@ export default function Events() {
                 <td>{e.registrationCount}{e.capacity ? ` / ${e.capacity}` : ''}</td>
                 <td>{e.published ? <Pill tone="go">Live</Pill> : <Pill>Draft</Pill>}</td>
                 <td style={{ textAlign: 'right' }}>
-                  <Link className="btn sm" to={`/admin/events/${e.id}/attendees`}>Attendees</Link>{' '}
-                  <Link className="btn sm" to={`/admin/events/${e.id}/kiosk`}>Kiosk</Link>{' '}
-                  <Link className="btn sm" to={`/admin/events/${e.id}/merch`}>Merch</Link>{' '}
-                  <Link className="btn sm" to={`/admin/events/${e.id}/reconciliation`}>Cash</Link>{' '}
-                  <Link className="btn sm" to={`/admin/events/${e.id}/vouchers`}>Vouchers</Link>
+                  <Link className="btn sm" to={`/admin/events/${e.id}/attendees`}>Attendees</Link>
                 </td>
               </tr>
             ))}

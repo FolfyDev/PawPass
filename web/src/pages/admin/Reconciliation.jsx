@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import EventTabs from '../../components/EventTabs.jsx';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 const METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
@@ -47,11 +48,8 @@ export default function Reconciliation() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Cash reconciliation</h1>
         </div>
-        <div className="row">
-          <Link className="btn" to={`/admin/events/${id}/attendees`}>Attendees</Link>
-          <Link className="btn" to={`/admin/events/${id}/merch`}>Merch</Link>
-        </div>
       </div>
+      <EventTabs id={id} />
 
       <div className="card" style={{ marginBottom: 20 }}>
         <p className="eyebrow" style={{ marginBottom: 4 }}>Grand total collected</p>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Empty } from '../../components/Bits.jsx';
+import EventTabs from '../../components/EventTabs.jsx';
 
 export default function Vouchers() {
   const { id } = useParams();
@@ -45,8 +46,9 @@ export default function Vouchers() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Voucher codes</h1>
         </div>
-        <Link className="btn" to={`/admin/events/${id}/attendees`}>Attendees</Link>
+        <a className="btn" href={`${api.base}/api/admin/events/${id}/vouchers.csv`}>Export CSV</a>
       </div>
+      <EventTabs id={id} />
       <p className="small muted" style={{ marginTop: -8, marginBottom: 16 }}>
         Redeeming a valid code on the public event page registers someone for free with a guaranteed spot,
         regardless of tier or capacity, and prints the badge tier label on their badge.

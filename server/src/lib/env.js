@@ -49,6 +49,11 @@ export const env = {
     host: process.env.ZEBRA_HOST || '',
     port: Number(process.env.ZEBRA_PORT || 9100),
     dpi: Number(process.env.ZEBRA_DPI || 300),
+    /// 'network' pushes raw ZPL straight to host:port (requires the printer
+    /// reachable from wherever this server runs). 'browser' is for a
+    /// USB-attached printer on a different machine than the server — the
+    /// frontend opens the badge image and uses the OS print dialog instead.
+    mode: process.env.ZEBRA_PRINT_MODE === 'browser' ? 'browser' : 'network',
   },
   apple: {
     passTypeId: process.env.APPLE_PASS_TYPE_ID || '',
