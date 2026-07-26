@@ -10,8 +10,9 @@ export default function EventPage() {
   const nav = useNavigate();
   const { user, settings } = useSession();
   const [event, setEvent] = useState(null);
-  const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE' });
+  const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', voucherCode: '' });
   const [showTos, setShowTos] = useState(false);
+  const [showVoucher, setShowVoucher] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [going, setGoing] = useState(null);
@@ -61,9 +62,11 @@ export default function EventPage() {
   const accept = async () => {
     setBusy(true);
     try {
-      await api.post(`/api/events/${slug}/register`, { ...form, acceptedTos: true });
+      const reg = await api.post(`/api/events/${slug}/register`, { ...form, acceptedTos: true });
       setShowTos(false);
-      if (form.tier === 'DONATION' && event.donationPaypalLink) {
+      // Gate on the server's actual result, not the pre-submit form state — a
+      // voucher code can override a Donation pick to a free confirmed spot.
+      if (reg.tier === 'DONATION' && event.donationPaypalLink) {
         window.open(event.donationPaypalLink, '_blank', 'noopener');
       }
       nav('/tickets');
@@ -114,15 +117,19 @@ export default function EventPage() {
                 </p>
               )}
             </>
-          ) : !event.state.open ? (
+          ) : !event.state.open && !showVoucher ? (
             <>
               <h2>Registration closed</h2>
               <p className="muted">{event.state.reason}</p>
+              <button type="button" className="btn ghost sm" style={{ marginTop: 12, justifySelf: 'start' }} onClick={() => setShowVoucher(true)}>
+                Have a voucher code?
+              </button>
             </>
           ) : (
             <form className="stack" onSubmit={openTos}>
               <h2 style={{ margin: 0 }}>Register</h2>
-              {event.state.waitlist && <p className="note">{event.state.reason}</p>}
+              {event.state.open && event.state.waitlist && <p className="note">{event.state.reason}</p>}
+              {!event.state.open && <p className="note">Registration is normally closed ({event.state.reason}) — a valid voucher code will still get you in.</p>}
 
               <Field label={settings?.legalNameLabel || 'Full legal name'} help={settings?.legalNameHelp}>
                 <input value={form.legalName} required autoComplete="name"
@@ -158,7 +165,7 @@ export default function EventPage() {
                 </Field>
               ))}
 
-              {event.donationPaypalLink && (
+              {event.donationPaypalLink && event.state.open && (
                 <Field label="Tier">
                   <div className="tiers">
                     <button type="button" className={`tier${form.tier === 'FREE' ? ' selected' : ''}`}
@@ -173,6 +180,17 @@ export default function EventPage() {
                     </button>
                   </div>
                 </Field>
+              )}
+
+              {(showVoucher || !event.state.open) ? (
+                <Field label="Voucher code" help="Grants free entry and a guaranteed spot">
+                  <input value={form.voucherCode} autoFocus={!event.state.open}
+                    onChange={(e) => setForm({ ...form, voucherCode: e.target.value })} />
+                </Field>
+              ) : (
+                <button type="button" className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => setShowVoucher(true)}>
+                  Have a voucher code?
+                </button>
               )}
 
               {error && <p className="note bad">{error}</p>}

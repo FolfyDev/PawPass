@@ -8,6 +8,7 @@ import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError } from '../lib/registrations.js';
+import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg } from './public.js';
@@ -101,7 +102,7 @@ adminRouter.get('/events/:id/registrations', async (req, res) => {
 
 adminRouter.get('/events/:id/registrations.csv', async (req, res) => {
   const regs = await prisma.registration.findMany({ where: { eventId: req.params.id }, include: { user: true }, orderBy: { createdAt: 'asc' } });
-  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt'];
+  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tier','paymentMethod','paymentAmount','paymentNote'];
   const rows = regs.map((r) => keys.map((k) => csv(k === 'telegram' ? r.user.telegramUsername : r[k])).join(','));
   res.type('text/csv').set('Content-Disposition', 'attachment; filename="registrations.csv"').send([keys.join(','), ...rows].join('\n'));
 });
@@ -114,6 +115,20 @@ adminRouter.post('/registrations', async (req, res) => {
     ? await prisma.user.findUnique({ where: { telegramId: String(req.body.telegramId) } })
     : null;
   if (!user) {
+    // No Telegram ID to match on, so this would otherwise always create a
+    // brand-new person — catch the common case of someone who preregistered
+    // online walking up and getting entered as a second, separate attendee.
+    const dup = await prisma.registration.findFirst({
+      where: {
+        eventId: req.body.eventId,
+        status: { not: 'CANCELLED' },
+        OR: [
+          { legalName: { equals: req.body.legalName, mode: 'insensitive' } },
+          ...(req.body.email ? [{ email: { equals: req.body.email, mode: 'insensitive' } }] : []),
+        ],
+      },
+    });
+    if (dup) return res.status(409).json({ error: `${dup.legalName} already has a registration for this event (code ${dup.code}). Look them up in Attendees instead of creating a new one.` });
     user = await prisma.user.create({
       data: { displayName: req.body.legalName, legalName: req.body.legalName, fursonaName: req.body.fursonaName },
     });
@@ -129,7 +144,7 @@ adminRouter.post('/registrations', async (req, res) => {
 });
 
 adminRouter.patch('/registrations/:code', async (req, res) => {
-  const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentNote'];
+  const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentAmount','paymentNote'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
   if (data.status === 'CANCELLED') {
@@ -171,6 +186,8 @@ adminRouter.get('/events/:id/merch', async (req, res) => {
 });
 
 adminRouter.post('/events/:id/merch', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
   const { name, price, maxCount } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Give the item a name.' });
   const max = Number(maxCount);
@@ -211,7 +228,7 @@ adminRouter.delete('/merch/:id', async (req, res) => {
 /// Compare-and-swap stock check so concurrent sales at the table can never
 /// oversell past maxCount, without needing a serializable transaction.
 adminRouter.post('/merch/:id/sale', async (req, res) => {
-  const quantity = Number(req.body.quantity) || 1;
+  const quantity = req.body.quantity === undefined ? 1 : Number(req.body.quantity);
   if (!Number.isInteger(quantity) || quantity < 1) return res.status(400).json({ error: 'Quantity must be a positive whole number.' });
   if (!PAYMENT_METHODS.includes(req.body.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method.' });
 
@@ -251,6 +268,108 @@ adminRouter.delete('/merch/sales/:id', async (req, res) => {
     prisma.sale.delete({ where: { id: sale.id } }),
   ]);
   await audit(req.user.id, 'merch.sale.undo', sale.id, { itemId: sale.itemId, quantity: sale.quantity });
+  res.json({ ok: true });
+});
+
+/// Combines the two separate places money gets recorded — donation-tier
+/// registrations and merch sales — into one end-of-shift total, broken out
+/// by payment method. Donation registrations with no paymentMethod recorded
+/// (i.e. nobody at the door confirmed the PayPal payment actually happened)
+/// are called out separately rather than silently counted as zero.
+adminRouter.get('/events/:id/reconciliation', async (req, res) => {
+  const donationRegs = await prisma.registration.findMany({
+    where: { eventId: req.params.id, tier: 'DONATION', status: { not: 'CANCELLED' } },
+  });
+  const sales = await prisma.sale.findMany({
+    where: { item: { eventId: req.params.id } },
+    include: { item: true },
+  });
+
+  const byMethod = () => Object.fromEntries(PAYMENT_METHODS.map((m) => [m, { count: 0, total: 0 }]));
+  const sumTotals = (obj) => Object.values(obj).reduce((sum, m) => sum + m.total, 0);
+
+  const donations = byMethod();
+  let unrecordedDonations = 0;
+  for (const r of donationRegs) {
+    if (!r.paymentMethod) { unrecordedDonations++; continue; }
+    donations[r.paymentMethod].count++;
+    donations[r.paymentMethod].total += r.paymentAmount || 0;
+  }
+
+  const merch = byMethod();
+  for (const s of sales) {
+    merch[s.paymentMethod].count += s.quantity;
+    merch[s.paymentMethod].total += (s.item.price || 0) * s.quantity;
+  }
+
+  const donationsTotal = sumTotals(donations);
+  const merchTotal = sumTotals(merch);
+  res.json({ donations, merch, unrecordedDonations, donationsTotal, merchTotal, grandTotal: donationsTotal + merchTotal });
+});
+
+/* ---------------- vouchers ---------------- */
+
+adminRouter.get('/events/:id/vouchers', async (req, res) => {
+  const vouchers = await prisma.voucherCode.findMany({
+    where: { eventId: req.params.id },
+    include: { redemptions: { select: { code: true, legalName: true, fursonaName: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(vouchers.map((v) => ({ ...v, remaining: Math.max(v.maxUses - v.usedCount, 0) })));
+});
+
+adminRouter.post('/events/:id/vouchers', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const badgeTier = String(req.body.badgeTier || '').trim();
+  if (!badgeTier) return res.status(400).json({ error: 'Give the voucher a badge tier label, e.g. "Organizer".' });
+  const maxUses = req.body.maxUses === undefined ? 1 : Number(req.body.maxUses);
+  if (!Number.isInteger(maxUses) || maxUses < 1) return res.status(400).json({ error: 'Max uses must be a positive whole number.' });
+  const code = req.body.code ? String(req.body.code).trim().toUpperCase() : ticketCode();
+
+  try {
+    const voucher = await prisma.voucherCode.create({
+      data: { eventId: event.id, code, badgeTier, maxUses },
+    });
+    await audit(req.user.id, 'voucher.create', voucher.id, { code: voucher.code, badgeTier });
+    res.json({ ...voucher, remaining: voucher.maxUses, redemptions: [] });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That code is already in use.' });
+    throw e;
+  }
+});
+
+adminRouter.patch('/vouchers/:id', async (req, res) => {
+  const voucher = await prisma.voucherCode.findUnique({ where: { id: req.params.id } });
+  if (!voucher) return res.status(404).json({ error: 'Voucher not found.' });
+  const data = {};
+  if (req.body.badgeTier !== undefined) {
+    const badgeTier = String(req.body.badgeTier).trim();
+    if (!badgeTier) return res.status(400).json({ error: 'Badge tier cannot be empty.' });
+    data.badgeTier = badgeTier;
+  }
+  if (req.body.code !== undefined) data.code = String(req.body.code).trim().toUpperCase();
+  if (req.body.maxUses !== undefined) {
+    const maxUses = Number(req.body.maxUses);
+    if (!Number.isInteger(maxUses) || maxUses < voucher.usedCount)
+      return res.status(400).json({ error: `Max uses cannot be below the ${voucher.usedCount} already used.` });
+    data.maxUses = maxUses;
+  }
+  try {
+    const updated = await prisma.voucherCode.update({ where: { id: voucher.id }, data });
+    await audit(req.user.id, 'voucher.update', voucher.id, data);
+    res.json({ ...updated, remaining: Math.max(updated.maxUses - updated.usedCount, 0) });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That code is already in use.' });
+    throw e;
+  }
+});
+
+adminRouter.delete('/vouchers/:id', async (req, res) => {
+  const voucher = await prisma.voucherCode.findUnique({ where: { id: req.params.id } });
+  if (!voucher) return res.status(404).json({ error: 'Voucher not found.' });
+  await prisma.voucherCode.delete({ where: { id: voucher.id } });
+  await audit(req.user.id, 'voucher.delete', voucher.id, { code: voucher.code });
   res.json({ ok: true });
 });
 
@@ -387,7 +506,8 @@ adminRouter.put('/settings', async (req, res) => {
 });
 
 adminRouter.get('/audit', async (_req, res) => {
-  res.json(await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } }));
+  const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
+  res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
 });
 
 const csv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;

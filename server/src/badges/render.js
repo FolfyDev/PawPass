@@ -26,7 +26,8 @@ export function contextForRegistration(reg, event, settings, publicUrl) {
     '{{badge_line}}': reg.status === 'WAITLIST' ? 'Waitlist' : 'Attendee',
     '{{qr_payload}}': `${publicUrl}/t/${reg.secret}`,
     '{{accent}}': accent,
-    '{{tier_name}}': reg.tier === 'DONATION' ? (event?.donationTierName || 'Supporter') : 'Free',
+    '{{tier_name}}': reg.badgeTier || (reg.tier === 'DONATION' ? (event?.donationTierName || 'Supporter') : 'Free'),
+    '{{badge_tier}}': reg.badgeTier || '',
     '{{badge_number}}': reg.badgeNumber != null ? String(reg.badgeNumber) : '',
     ...Object.fromEntries(
       Object.entries(reg.answers || {}).map(([k, v]) => [`{{${k}}}`, v]),

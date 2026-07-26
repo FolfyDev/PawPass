@@ -81,7 +81,7 @@ publicRouter.post('/events/:slug/register', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
-  const { legalName, fursonaName, email, answers, acceptedTos, tier } = req.body || {};
+  const { legalName, fursonaName, email, answers, acceptedTos, tier, voucherCode } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your full legal name.' });
@@ -89,7 +89,7 @@ publicRouter.post('/events/:slug/register', requireUser, async (req, res) => {
   try {
     const reg = await createRegistration({
       event, user: req.user,
-      legalName, fursonaName, email, answers, tier,
+      legalName, fursonaName, email, answers, tier, voucherCode,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });
@@ -181,7 +181,8 @@ export function shapeReg(r) {
     email: r.email, answers: r.answers, checkedInAt: r.checkedInAt, createdAt: r.createdAt,
     qrUrl: `${env.publicUrl}/t/${r.secret}`,
     tier: r.tier, badgeNumber: r.badgeNumber, rsvp: r.rsvp,
-    paymentMethod: r.paymentMethod, paymentNote: r.paymentNote,
+    paymentMethod: r.paymentMethod, paymentAmount: r.paymentAmount, paymentNote: r.paymentNote,
+    badgeTier: r.badgeTier,
   };
 }
 

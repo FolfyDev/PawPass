@@ -4,7 +4,7 @@ import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, PaymentButtons } from '../../components/Bits.jsx';
 
-const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', paymentMethod: '', paymentNote: '', tosAccepted: false };
+const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', paymentMethod: '', paymentAmount: '', paymentNote: '', tosAccepted: false };
 
 /// Onsite registration desk: staff type in a walk-in's info, optionally note
 /// how a donation was paid, then the screen resets for the next person.
@@ -33,6 +33,7 @@ export default function Kiosk() {
     for (const f of fields) if (f.required && !form.answers[f.key]) return setError(`${f.label} is required.`);
     if (!form.tosAccepted) return setError('Confirm the attendee has agreed to the terms.');
     if (form.tier === 'DONATION' && !form.paymentMethod) return setError('Select how the payment was received.');
+    if (form.tier === 'DONATION' && !(Number(form.paymentAmount) > 0)) return setError('Enter the amount received.');
 
     setBusy(true);
     try {
@@ -44,6 +45,7 @@ export default function Kiosk() {
         answers: form.answers,
         tier: form.tier,
         paymentMethod: form.tier === 'DONATION' ? form.paymentMethod : undefined,
+        paymentAmount: form.tier === 'DONATION' ? Number(form.paymentAmount) : undefined,
         paymentNote: form.tier === 'DONATION' ? form.paymentNote : undefined,
       });
       setResult(reg);
@@ -82,7 +84,8 @@ export default function Kiosk() {
             </p>
             {result.tier === 'DONATION' && (
               <p className="small muted" style={{ margin: 0 }}>
-                Paid via {result.paymentMethod || 'unrecorded method'}{result.paymentNote ? ` — ${result.paymentNote}` : ''}
+                Paid {result.paymentAmount != null ? `$${Number(result.paymentAmount).toFixed(2)} ` : ''}
+                via {result.paymentMethod || 'unrecorded method'}{result.paymentNote ? ` — ${result.paymentNote}` : ''}
               </p>
             )}
             {printMsg && <p className="note">{printMsg}</p>}
@@ -151,7 +154,11 @@ export default function Kiosk() {
                 <Field label="Payment received via">
                   <PaymentButtons value={form.paymentMethod} onChange={(v) => setForm({ ...form, paymentMethod: v })} />
                 </Field>
-                <Field label="Payment note" help="Optional — amount, change given, etc.">
+                <Field label="Amount received ($)">
+                  <input type="number" step="0.01" min="0" value={form.paymentAmount}
+                    onChange={(e) => setForm({ ...form, paymentAmount: e.target.value })} />
+                </Field>
+                <Field label="Payment note" help="Optional — change given, etc.">
                   <input value={form.paymentNote} onChange={(e) => setForm({ ...form, paymentNote: e.target.value })} />
                 </Field>
               </>

@@ -49,7 +49,7 @@ export default function Attendees() {
       {!!rows?.length && (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
           <table>
-            <thead><tr><th>Code</th><th>Badge #</th><th>Badge name</th><th>Legal name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Printed</th><th /></tr></thead>
+            <thead><tr><th>Code</th><th>Badge #</th><th>Badge name</th><th>Legal name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Badge tier</th><th>Payment</th><th>Printed</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.code}>
@@ -60,6 +60,12 @@ export default function Attendees() {
                   <td className="small muted">{r.telegram ? `@${r.telegram}` : ''}{r.email ? <><br />{r.email}</> : ''}</td>
                   <td><StatusPill status={r.status} checkedInAt={r.checkedInAt} /></td>
                   <td>{r.tier === 'DONATION' ? <Pill tone="go">Donation</Pill> : <Pill>Free</Pill>}</td>
+                  <td className="small muted">{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '—'}</td>
+                  <td className="small muted">
+                    {r.tier !== 'DONATION' ? '—' : r.paymentMethod
+                      ? <>{r.paymentMethod}{r.paymentAmount != null ? ` · $${Number(r.paymentAmount).toFixed(2)}` : ''}{r.paymentNote ? <><br />{r.paymentNote}</> : ''}</>
+                      : <Pill tone="wait">Unrecorded</Pill>}
+                  </td>
                   <td className="small muted">{r.printCount ? `${r.printCount}×` : '—'}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}

@@ -12,10 +12,13 @@ import AdminEventEdit from './pages/admin/EventEdit.jsx';
 import AdminAttendees from './pages/admin/Attendees.jsx';
 import AdminKiosk from './pages/admin/Kiosk.jsx';
 import AdminMerch from './pages/admin/Merch.jsx';
+import AdminReconciliation from './pages/admin/Reconciliation.jsx';
+import AdminVouchers from './pages/admin/Vouchers.jsx';
 import AdminScanner from './pages/admin/Scanner.jsx';
 import AdminBadges from './pages/admin/Badges.jsx';
 import AdminEmail from './pages/admin/Email.jsx';
 import AdminStaff from './pages/admin/Staff.jsx';
+import AdminAuditLog from './pages/admin/AuditLog.jsx';
 import AdminSettings from './pages/admin/Settings.jsx';
 
 export default function App() {
@@ -61,10 +64,13 @@ export default function App() {
             <Route path="events/:id/attendees" element={<AdminAttendees />} />
             <Route path="events/:id/kiosk" element={<AdminKiosk />} />
             <Route path="events/:id/merch" element={<AdminMerch />} />
+            <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
+            <Route path="events/:id/vouchers" element={<AdminVouchers />} />
             <Route path="scan" element={<AdminScanner />} />
             <Route path="badges" element={<AdminBadges />} />
             <Route path="email" element={<AdminEmail />} />
             <Route path="staff" element={<AdminStaff />} />
+            <Route path="audit" element={<AdminAuditLog />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
           <Route path="*" element={<p style={{ paddingTop: 40 }}>That page does not exist. <Link to="/">Back to events</Link>.</p>} />
