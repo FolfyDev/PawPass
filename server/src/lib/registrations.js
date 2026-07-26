@@ -118,6 +118,26 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
   });
 }
 
+/// Creates the User a registration needs when there's no signed-in account to
+/// attach it to — a staff walk-up at the door, or a guest checking out on the
+/// web with no Telegram. There's no telegramId to dedupe on in either case,
+/// so this checks for a same-event registration under the same name/email
+/// instead, to catch someone accidentally registering twice.
+export async function findOrCreateHeadlessUser({ eventId, legalName, fursonaName, email }) {
+  const dup = await prisma.registration.findFirst({
+    where: {
+      eventId,
+      status: { not: 'CANCELLED' },
+      OR: [
+        { legalName: { equals: legalName, mode: 'insensitive' } },
+        ...(email ? [{ email: { equals: email, mode: 'insensitive' } }] : []),
+      ],
+    },
+  });
+  if (dup) throw new RegistrationError(`${dup.legalName} already has a registration for this event (code ${dup.code}).`);
+  return prisma.user.create({ data: { displayName: legalName, legalName, fursonaName } });
+}
+
 /// Promotes the longest-waiting person when a confirmed spot frees up.
 export async function promoteFromWaitlist(eventId) {
   const event = await prisma.event.findUnique({ where: { id: eventId } });

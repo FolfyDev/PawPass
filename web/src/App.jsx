@@ -5,6 +5,7 @@ import Home from './pages/Home.jsx';
 import EventPage from './pages/EventPage.jsx';
 import Tickets from './pages/Tickets.jsx';
 import Login from './pages/Login.jsx';
+import StaffLogin from './pages/StaffLogin.jsx';
 import Account from './pages/Account.jsx';
 import AdminLayout from './pages/admin/AdminLayout.jsx';
 import AdminEvents from './pages/admin/Events.jsx';
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="/tickets" element={user ? <Tickets /> : <Navigate to="/login" />} />
           <Route path="/account" element={user ? <Account /> : <Navigate to="/login" />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/staff" element={<StaffLogin />} />
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminEvents />} />
             <Route path="events/:id" element={<AdminEventEdit />} />

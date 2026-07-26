@@ -1,11 +1,13 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
 import { Field } from '../components/Bits.jsx';
 
 export default function Account() {
-  const { user, config, refresh, isStaff } = useSession();
+  const { user, config, refresh } = useSession();
+  const [params] = useSearchParams();
   const [pw, setPw] = useState({ email: user.email || '', password: '' });
   const [msg, setMsg] = useState('');
 
@@ -32,18 +34,20 @@ export default function Account() {
         )}
       </div>
 
-      {isStaff && (
-        <form className="card stack" onSubmit={save}>
-          <h2 style={{ margin: 0 }}>Password sign-in</h2>
-          <p className="small muted">Staff can hold a password as a fallback when Telegram is unavailable.</p>
-          <Field label="Email"><input type="email" value={pw.email} onChange={(e) => setPw({ ...pw, email: e.target.value })} /></Field>
-          <Field label="New password" help="At least 10 characters">
-            <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
-          </Field>
-          {msg && <p className="note">{msg}</p>}
-          <button className="btn primary">Save password</button>
-        </form>
+      {params.get('justRegistered') === '1' && (
+        <p className="note good" style={{ marginBottom: 20 }}>You're registered! Add a password below so you can sign back in later — Telegram isn't required.</p>
       )}
+
+      <form className="card stack" onSubmit={save}>
+        <h2 style={{ margin: 0 }}>Password sign-in</h2>
+        <p className="small muted">Add a password so you can sign in even without Telegram.</p>
+        <Field label="Email"><input type="email" value={pw.email} onChange={(e) => setPw({ ...pw, email: e.target.value })} /></Field>
+        <Field label="New password" help="At least 10 characters">
+          <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
+        </Field>
+        {msg && <p className="note">{msg}</p>}
+        <button className="btn primary">Save password</button>
+      </form>
     </div>
   );
 }

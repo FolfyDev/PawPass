@@ -7,7 +7,7 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
-import { promoteFromWaitlist, createRegistration, RegistrationError } from '../lib/registrations.js';
+import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser } from '../lib/registrations.js';
 import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
@@ -111,29 +111,14 @@ adminRouter.post('/registrations', async (req, res) => {
   // Walk-up registration typed in by staff at the door.
   const event = await prisma.event.findUnique({ where: { id: req.body.eventId } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
-  let user = req.body.telegramId
-    ? await prisma.user.findUnique({ where: { telegramId: String(req.body.telegramId) } })
-    : null;
-  if (!user) {
-    // No Telegram ID to match on, so this would otherwise always create a
-    // brand-new person — catch the common case of someone who preregistered
-    // online walking up and getting entered as a second, separate attendee.
-    const dup = await prisma.registration.findFirst({
-      where: {
-        eventId: req.body.eventId,
-        status: { not: 'CANCELLED' },
-        OR: [
-          { legalName: { equals: req.body.legalName, mode: 'insensitive' } },
-          ...(req.body.email ? [{ email: { equals: req.body.email, mode: 'insensitive' } }] : []),
-        ],
-      },
-    });
-    if (dup) return res.status(409).json({ error: `${dup.legalName} already has a registration for this event (code ${dup.code}). Look them up in Attendees instead of creating a new one.` });
-    user = await prisma.user.create({
-      data: { displayName: req.body.legalName, legalName: req.body.legalName, fursonaName: req.body.fursonaName },
-    });
-  }
   try {
+    // No Telegram ID to match on for a bare walk-up, so findOrCreateHeadlessUser
+    // catches the common case of someone who preregistered online walking up
+    // and getting entered as a second, separate attendee.
+    let user = req.body.telegramId
+      ? await prisma.user.findUnique({ where: { telegramId: String(req.body.telegramId) } })
+      : null;
+    if (!user) user = await findOrCreateHeadlessUser({ eventId: req.body.eventId, legalName: req.body.legalName, fursonaName: req.body.fursonaName, email: req.body.email });
     const reg = await createRegistration({ event, user, ...req.body, source: 'admin' });
     await audit(req.user.id, 'registration.create', reg.id, { code: reg.code });
     res.json(shapeReg(reg));

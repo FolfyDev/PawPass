@@ -8,11 +8,12 @@ import { Field, fmtDate, StatusPill, Avatar, RsvpButtons, Pill } from '../compon
 export default function EventPage() {
   const { slug } = useParams();
   const nav = useNavigate();
-  const { user, settings } = useSession();
+  const { user, settings, refresh } = useSession();
   const [event, setEvent] = useState(null);
   const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', voucherCode: '' });
   const [showTos, setShowTos] = useState(false);
   const [showVoucher, setShowVoucher] = useState(false);
+  const [guestMode, setGuestMode] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [going, setGoing] = useState(null);
@@ -55,11 +56,13 @@ export default function EventPage() {
     e.preventDefault();
     setError('');
     if (form.legalName.trim().length < 2) return setError('Enter your full legal name.');
+    if (!user && !/^\S+@\S+\.\S+$/.test(form.email)) return setError('Enter an email address so you can get back into your account later.');
     for (const f of fields) if (f.required && !form.answers[f.key]) return setError(`${f.label} is required.`);
     setShowTos(true);
   };
 
   const accept = async () => {
+    const wasGuest = !user;
     setBusy(true);
     try {
       const reg = await api.post(`/api/events/${slug}/register`, { ...form, acceptedTos: true });
@@ -69,7 +72,15 @@ export default function EventPage() {
       if (reg.tier === 'DONATION' && event.donationPaypalLink) {
         window.open(event.donationPaypalLink, '_blank', 'noopener');
       }
-      nav('/tickets');
+      if (wasGuest) {
+        // The server just created an account and signed it in — pick that
+        // session up, then offer to set a password before anything else,
+        // since a guest has no way back into this account otherwise.
+        await refresh();
+        nav('/account?justRegistered=1');
+      } else {
+        nav('/tickets');
+      }
     } catch (e) {
       setError(e.message);
       setShowTos(false);
@@ -106,16 +117,19 @@ export default function EventPage() {
               </div>
               <Link className="btn primary" to="/tickets" style={{ justifySelf: 'start' }}>Open your ticket</Link>
             </div>
-          ) : !user ? (
+          ) : !user && !guestMode ? (
             <>
               <h2>Register</h2>
-              <p className="muted">Registration uses your Telegram account, so your ticket follows you into chat.</p>
+              <p className="muted">Sign in with Telegram, or register below with just an email — not everyone uses Telegram.</p>
               <Link className="btn primary" to="/login">Continue with Telegram</Link>
               {settings?.telegramBot && (
                 <p className="small muted" style={{ marginTop: 14 }}>
                   Or skip the site entirely: message <a href={`https://t.me/${settings.telegramBot}`}>@{settings.telegramBot}</a> and send <code className="mono">/register</code>.
                 </p>
               )}
+              <button type="button" className="btn ghost" style={{ marginTop: 14, justifySelf: 'start' }} onClick={() => setGuestMode(true)}>
+                Continue without Telegram
+              </button>
             </>
           ) : !event.state.open && !showVoucher ? (
             <>
@@ -143,8 +157,8 @@ export default function EventPage() {
                 </Field>
               )}
 
-              <Field label="Email" help="For event updates — optional">
-                <input type="email" value={form.email} autoComplete="email"
+              <Field label="Email" help={user ? 'For event updates — optional' : 'Required — this is how you\'ll get back into your account'}>
+                <input type="email" value={form.email} autoComplete="email" required={!user}
                   onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </Field>
 

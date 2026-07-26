@@ -3,8 +3,8 @@ import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { requireUser } from '../lib/auth.js';
-import { createRegistration, RegistrationError, registrationWindowState, promoteFromWaitlist } from '../lib/registrations.js';
+import { requireUser, issueToken, setSessionCookie } from '../lib/auth.js';
+import { createRegistration, RegistrationError, registrationWindowState, promoteFromWaitlist, findOrCreateHeadlessUser } from '../lib/registrations.js';
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
 import { notifyUser } from '../bot/index.js';
@@ -78,7 +78,11 @@ publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
   res.json(items.map((i) => ({ id: i.id, name: i.name, price: i.price, remaining: Math.max(i.maxCount - i.soldCount, 0) })));
 });
 
-publicRouter.post('/events/:slug/register', requireUser, async (req, res) => {
+/// No requireUser gate — someone with no Telegram and no account yet can
+/// still register. When there's no signed-in user, this creates one (like
+/// the admin walk-up flow already does) and signs them in immediately, same
+/// as any other login path, so there's no separate "log back in" step.
+publicRouter.post('/events/:slug/register', async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
@@ -87,17 +91,35 @@ publicRouter.post('/events/:slug/register', requireUser, async (req, res) => {
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your full legal name.' });
 
+  let user = req.user;
+  let guest = false;
+  if (!user) {
+    if (!email || !/^\S+@\S+\.\S+$/.test(email))
+      return res.status(400).json({ error: 'Enter an email address so you can get back into your account later.' });
+    const normalized = String(email).trim().toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email: normalized } });
+    if (existing) return res.status(409).json({ error: 'An account already exists with that email. Sign in first.' });
+    try {
+      user = await findOrCreateHeadlessUser({ eventId: event.id, legalName, fursonaName, email: normalized });
+    } catch (e) {
+      if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
+    guest = true;
+  }
+
   try {
     const reg = await createRegistration({
-      event, user: req.user,
+      event, user,
       legalName, fursonaName, email, answers, tier, voucherCode,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });
     await prisma.user.update({
-      where: { id: req.user.id },
+      where: { id: user.id },
       data: { legalName: reg.legalName, fursonaName: reg.fursonaName, email: reg.email ?? undefined },
     });
+    if (guest) setSessionCookie(res, issueToken(user));
     res.json(shapeReg(reg));
   } catch (e) {
     if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
