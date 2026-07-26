@@ -8,6 +8,14 @@ import { getSettings } from '../lib/settings.js';
 import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 
+/// Telegram doesn't reliably auto-link plain URLs (localhost during local
+/// dev never gets linked at all), so any message with a link is sent with
+/// parse_mode: 'HTML' and an explicit <a> tag instead. Anything interpolated
+/// into one of those messages that isn't meant to be a tag — an event title,
+/// a configurable welcome message — has to go through esc() first.
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const link = (url, text) => `<a href="${esc(url)}">${esc(text ?? url)}</a>`;
+
 /// The web Login Widget hands us `photo_url` directly, but that widget only
 /// works over https on a domain registered with BotFather — useless on a
 /// plain-http/localhost instance. Everyone who messages the bot, though, is
@@ -101,9 +109,10 @@ export function createBot() {
 
   bot.command('start', async (ctx) => {
     const settings = await getSettings();
-    await reset(String(ctx.from.id));
+    const { user, telegramId } = await load(ctx);
+    await reset(telegramId);
     await ctx.reply(
-      `${settings.botWelcome}\n\n` +
+      `${esc(settings.botWelcome)}\n\n` +
       '/register — sign up for an event\n' +
       '/mytickets — show your tickets\n' +
       '/rsvp — say whether you\'re going\n' +
@@ -111,12 +120,15 @@ export function createBot() {
       '/merch — see what is for sale\n' +
       '/login — get a code to sign in on the website\n' +
       '/cancel — stop what we are doing\n' +
-      '/help — command list',
+      '/help — command list' +
+      staffCommands(user),
+      { parse_mode: 'HTML' },
     );
   });
 
-  bot.command('help', (ctx) =>
-    ctx.reply(
+  bot.command('help', async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.reply(
       'Commands:\n' +
       '/register — sign up for an event\n' +
       '/mytickets — your tickets and codes\n' +
@@ -126,8 +138,20 @@ export function createBot() {
       '/login — a one-time code for the website\n' +
       '/accept — accept the terms during registration\n' +
       '/skip — skip an optional question\n' +
-      '/cancel — stop what we are doing',
-    ));
+      '/cancel — stop what we are doing' +
+      staffCommands(user),
+      { parse_mode: 'HTML' },
+    );
+  });
+
+  /// Appended to /start and /help for admins/owners only — kept in one place
+  /// so the two stay in sync as staff-only bot commands are added.
+  const staffCommands = (user) =>
+    isStaff(user) ?
+    '\n\nStaff:' +
+    `\nWeb access the admin panel: ${link(`${env.webUrl}/staff`)}` +
+    '\n/broadcast — message everyone registered for an event'
+    : '';
 
   bot.command('cancel', async (ctx) => {
     await reset(String(ctx.from.id));
@@ -218,11 +242,12 @@ export function createBot() {
       });
       await reset(telegramId);
       await ctx.reply(
-        `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${event.title}.\n\n` +
+        `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${esc(event.title)}.\n\n` +
         `Badge code: ${reg.code}\n` +
-        `Ticket and wallet pass: ${env.webUrl}/tickets\n\n` +
+        `Ticket and wallet pass: ${link(`${env.webUrl}/tickets`)}\n\n` +
         'Bring the QR from that page to check-in. Send /rsvp any time to update whether you\'re going.' +
-        (reg.tier === 'DONATION' ? `\n\nComplete your ${event.donationTierName.toLowerCase()} contribution: ${event.donationPaypalLink}` : ''),
+        (reg.tier === 'DONATION' ? `\n\nComplete your ${esc(event.donationTierName.toLowerCase())} contribution: ${link(event.donationPaypalLink)}` : ''),
+        { parse_mode: 'HTML' },
       );
     } catch (e) {
       await reset(telegramId);
@@ -244,7 +269,8 @@ export function createBot() {
     });
     await ctx.reply(
       `Your sign-in code is:\n\n${code}\n\n` +
-      `Enter it at ${env.webUrl}/login — it works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
+      `Enter it at ${link(`${env.webUrl}/login`)} — it works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
+      { parse_mode: 'HTML' },
     );
   });
 
@@ -263,10 +289,10 @@ export function createBot() {
     });
     await ctx.reply(
       regs.map((r) =>
-        `${r.event.title}\n${r.status === 'WAITLIST' ? 'Waitlist' : 'Confirmed'} — code ${r.code}` +
+        `${esc(r.event.title)}\n${r.status === 'WAITLIST' ? 'Waitlist' : 'Confirmed'} — code ${r.code}` +
         (r.checkedInAt ? '\nChecked in' : '')).join('\n\n') +
-      `\n\nWallet passes: ${env.webUrl}/tickets`,
-      { reply_markup: kb },
+      `\n\nWallet passes: ${link(`${env.webUrl}/tickets`)}`,
+      { reply_markup: kb, parse_mode: 'HTML' },
     );
   });
 
