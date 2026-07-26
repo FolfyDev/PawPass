@@ -12,6 +12,7 @@ import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg } from './public.js';
 import { sendCampaign } from '../lib/mailer.js';
+import { notifyUser } from '../bot/index.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -128,12 +129,129 @@ adminRouter.post('/registrations', async (req, res) => {
 });
 
 adminRouter.patch('/registrations/:code', async (req, res) => {
-  const allowed = ['legalName','fursonaName','email','status','answers'];
+  const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentNote'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
-  if (data.status === 'CANCELLED') await promoteFromWaitlist(reg.eventId);
+  if (data.status === 'CANCELLED') {
+    const promoted = await promoteFromWaitlist(reg.eventId);
+    if (promoted?.user.telegramId) {
+      await notifyUser(promoted.user.telegramId,
+        `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
+        `Badge code: ${promoted.code}\n` +
+        `Ticket and wallet pass: ${env.webUrl}/tickets`);
+    }
+  }
   await audit(req.user.id, 'registration.update', reg.id, data);
   res.json(shapeReg(reg));
+});
+
+/* ---------------- merch ---------------- */
+
+const PAYMENT_METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
+class MerchError extends Error {}
+
+adminRouter.get('/events/:id/merch', async (req, res) => {
+  const items = await prisma.merchItem.findMany({ where: { eventId: req.params.id }, orderBy: { createdAt: 'asc' } });
+  const sales = await prisma.sale.findMany({
+    where: { item: { eventId: req.params.id } },
+    include: { item: true, processedBy: true },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+  const revenueTotal = sales.reduce((sum, s) => sum + (s.item.price || 0) * s.quantity, 0);
+  res.json({
+    items: items.map((i) => ({ ...i, remaining: Math.max(i.maxCount - i.soldCount, 0) })),
+    sales: sales.map((s) => ({
+      id: s.id, itemId: s.itemId, itemName: s.item.name, quantity: s.quantity,
+      paymentMethod: s.paymentMethod, paymentNote: s.paymentNote,
+      processedByName: s.processedBy.displayName, createdAt: s.createdAt,
+    })),
+    revenueTotal,
+  });
+});
+
+adminRouter.post('/events/:id/merch', async (req, res) => {
+  const { name, price, maxCount } = req.body;
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Give the item a name.' });
+  const max = Number(maxCount);
+  if (!Number.isInteger(max) || max < 0) return res.status(400).json({ error: 'Max count must be a whole number, zero or more.' });
+  const item = await prisma.merchItem.create({
+    data: { eventId: req.params.id, name: String(name).trim(), price: price != null && price !== '' ? Number(price) : null, maxCount: max },
+  });
+  await audit(req.user.id, 'merch.create', item.id, { name: item.name, maxCount: item.maxCount });
+  res.json({ ...item, remaining: item.maxCount });
+});
+
+adminRouter.patch('/merch/:id', async (req, res) => {
+  const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
+  if (!item) return res.status(404).json({ error: 'Item not found.' });
+  const data = {};
+  if (req.body.name !== undefined) data.name = String(req.body.name).trim();
+  if (req.body.price !== undefined) data.price = req.body.price !== '' && req.body.price !== null ? Number(req.body.price) : null;
+  if (req.body.maxCount !== undefined) {
+    const max = Number(req.body.maxCount);
+    if (!Number.isInteger(max) || max < item.soldCount)
+      return res.status(400).json({ error: `Max count cannot be below the ${item.soldCount} already sold.` });
+    data.maxCount = max;
+  }
+  const updated = await prisma.merchItem.update({ where: { id: item.id }, data });
+  await audit(req.user.id, 'merch.update', item.id, data);
+  res.json({ ...updated, remaining: Math.max(updated.maxCount - updated.soldCount, 0) });
+});
+
+adminRouter.delete('/merch/:id', async (req, res) => {
+  const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
+  if (!item) return res.status(404).json({ error: 'Item not found.' });
+  if (item.soldCount > 0) return res.status(400).json({ error: 'This item has recorded sales — cannot delete.' });
+  await prisma.merchItem.delete({ where: { id: item.id } });
+  await audit(req.user.id, 'merch.delete', item.id, { name: item.name });
+  res.json({ ok: true });
+});
+
+/// Compare-and-swap stock check so concurrent sales at the table can never
+/// oversell past maxCount, without needing a serializable transaction.
+adminRouter.post('/merch/:id/sale', async (req, res) => {
+  const quantity = Number(req.body.quantity) || 1;
+  if (!Number.isInteger(quantity) || quantity < 1) return res.status(400).json({ error: 'Quantity must be a positive whole number.' });
+  if (!PAYMENT_METHODS.includes(req.body.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method.' });
+
+  try {
+    const sale = await prisma.$transaction(async (tx) => {
+      const item = await tx.merchItem.findUnique({ where: { id: req.params.id } });
+      if (!item) throw new MerchError('Item not found.');
+      const result = await tx.merchItem.updateMany({
+        where: { id: item.id, soldCount: { lte: item.maxCount - quantity } },
+        data: { soldCount: { increment: quantity } },
+      });
+      if (result.count === 0) throw new MerchError('Not enough stock left.');
+      return tx.sale.create({
+        data: {
+          itemId: item.id, quantity,
+          paymentMethod: req.body.paymentMethod,
+          paymentNote: req.body.paymentNote?.trim() || null,
+          processedById: req.user.id,
+        },
+      });
+    });
+    await audit(req.user.id, 'merch.sale', sale.id, { itemId: sale.itemId, quantity: sale.quantity });
+    res.json(sale);
+  } catch (e) {
+    if (e instanceof MerchError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Undoes a mistaken entry at the table — restocks the item and removes the
+/// sale, mirroring the existing /checkin/:code/undo pattern.
+adminRouter.delete('/merch/sales/:id', async (req, res) => {
+  const sale = await prisma.sale.findUnique({ where: { id: req.params.id } });
+  if (!sale) return res.status(404).json({ error: 'Sale not found.' });
+  await prisma.$transaction([
+    prisma.merchItem.update({ where: { id: sale.itemId }, data: { soldCount: { decrement: sale.quantity } } }),
+    prisma.sale.delete({ where: { id: sale.id } }),
+  ]);
+  await audit(req.user.id, 'merch.sale.undo', sale.id, { itemId: sale.itemId, quantity: sale.quantity });
+  res.json({ ok: true });
 });
 
 /* ---------------- check-in ---------------- */

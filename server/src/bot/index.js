@@ -45,11 +45,35 @@ const S = {
   CUSTOM: 'custom',   // draft.fieldIndex tracks position
   TIER: 'tier',
   TOS: 'tos',
+  BROADCAST_MESSAGE: 'broadcast_message',
+  BROADCAST_CONFIRM: 'broadcast_confirm',
 };
 
+const BROADCAST_AUDIENCE = {
+  all: { status: { in: ['CONFIRMED', 'WAITLIST'] } },
+  confirmed: { status: 'CONFIRMED' },
+  waitlist: { status: 'WAITLIST' },
+};
+
+/// Created eagerly (rather than inside createBot) so other modules — admin
+/// routes sending a broadcast, waitlist promotion — can reach the same
+/// instance via notifyUser without importing createBot and calling
+/// bot.start() a second time.
+export const bot = env.telegram.enabled ? new Bot(env.telegram.token) : null;
+
+/// Best-effort DM. Never throws: a blocked bot or a stale telegramId should
+/// not fail the caller's own request (a check-in, a cancellation, ...).
+export async function notifyUser(telegramId, text) {
+  if (!bot || !telegramId) return;
+  try {
+    await bot.api.sendMessage(telegramId, text);
+  } catch (e) {
+    console.error('telegram notify failed', telegramId, e.message);
+  }
+}
+
 export function createBot() {
-  if (!env.telegram.enabled) return null;
-  const bot = new Bot(env.telegram.token);
+  if (!bot) return null;
 
   const load = async (ctx) => {
     const telegramId = String(ctx.from.id);
@@ -83,6 +107,7 @@ export function createBot() {
       '/register — sign up for an event\n' +
       '/mytickets — show your tickets\n' +
       '/rsvp — say whether you\'re going\n' +
+      '/going — see who else is going\n' +
       '/login — get a code to sign in on the website\n' +
       '/cancel — stop what we are doing\n' +
       '/help — command list',
@@ -95,6 +120,7 @@ export function createBot() {
       '/register — sign up for an event\n' +
       '/mytickets — your tickets and codes\n' +
       '/rsvp — say whether you\'re going, any time\n' +
+      '/going — see who else is going\n' +
       '/login — a one-time code for the website\n' +
       '/accept — accept the terms during registration\n' +
       '/skip — skip an optional question\n' +
@@ -300,6 +326,128 @@ export function createBot() {
     await ctx.reply(`${label} Send /rsvp any time to change it.`);
   });
 
+  bot.command('going', async (ctx) => {
+    const { user } = await load(ctx);
+    const regs = await prisma.registration.findMany({
+      where: { userId: user.id, status: { not: 'CANCELLED' } },
+      include: { event: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
+    if (regs.length === 1) return showGoing(ctx, regs[0].event);
+
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(r.event.title, `goingfor:${r.eventId}`);
+      if (i < regs.length - 1) kb.row();
+    });
+    await ctx.reply('Which event?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^goingfor:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    await showGoing(ctx, event);
+  });
+
+  /// Mirrors the signed-in-only /events/:slug/rsvps route on the web — same
+  /// reasoning applies (surfaces Telegram usernames), but everyone the bot
+  /// has ever talked to already clears that bar via load().
+  async function showGoing(ctx, event) {
+    const regs = await prisma.registration.findMany({
+      where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
+      include: { user: true },
+      orderBy: [{ rsvp: 'asc' }, { fursonaName: 'asc' }],
+    });
+    if (!regs.length) return ctx.reply(`Nobody has RSVPed yes or maybe to ${event.title} yet.`);
+    const lines = regs.map((r) => {
+      const name = r.fursonaName || r.user.displayName;
+      const tag = r.user.telegramUsername ? ` (@${r.user.telegramUsername})` : '';
+      return `${r.rsvp === 'MAYBE' ? '· maybe — ' : '· '}${name}${tag}`;
+    });
+    await ctx.reply(`Going to ${event.title}:\n\n${lines.join('\n')}`);
+  }
+
+  /* ---------------- admin: broadcast ---------------- */
+
+  const isStaff = (user) => user.role === 'ADMIN' || user.role === 'OWNER';
+
+  bot.command('broadcast', async (ctx) => {
+    const { user } = await load(ctx);
+    if (!isStaff(user)) return;
+    const events = await prisma.event.findMany({ orderBy: { startsAt: 'desc' }, take: 20 });
+    if (!events.length) return ctx.reply('There are no events yet.');
+    const kb = new InlineKeyboard();
+    events.forEach((e, i) => {
+      kb.text(e.title, `bcastevent:${e.id}`);
+      if (i < events.length - 1) kb.row();
+    });
+    await ctx.reply('Broadcast to attendees of which event?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^bcastevent:(.+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (!isStaff(user)) return;
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    const kb = new InlineKeyboard()
+      .text('Everyone', `bcastaudience:${event.id}:all`).row()
+      .text('Confirmed only', `bcastaudience:${event.id}:confirmed`).row()
+      .text('Waitlist only', `bcastaudience:${event.id}:waitlist`);
+    await ctx.reply(`Who should receive this for ${event.title}?`, { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^bcastaudience:(.+):(all|confirmed|waitlist)$/, async (ctx) => {
+    const { user, telegramId } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (!isStaff(user)) return;
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    const audience = ctx.match[2];
+    const count = await prisma.registration.count({
+      where: { eventId: event.id, ...BROADCAST_AUDIENCE[audience], user: { telegramId: { not: null } } },
+    });
+    if (!count) return ctx.reply('Nobody in that group has a Telegram account on file.');
+    await save(telegramId, S.BROADCAST_MESSAGE, { eventId: event.id, audience });
+    await ctx.reply(
+      `This will reach ${count} ${count === 1 ? 'person' : 'people'} for ${event.title}. ` +
+      'Send the message now, or /cancel to stop.',
+    );
+  });
+
+  bot.callbackQuery('bcastsend', async (ctx) => {
+    const { session, user, telegramId, draft } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (!isStaff(user)) return;
+    if (session.state !== S.BROADCAST_CONFIRM) return ctx.reply('There is nothing queued. Send /broadcast to start.');
+    await reset(telegramId);
+    const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+    if (!event) return ctx.reply('That event is gone.');
+    const recipients = await prisma.registration.findMany({
+      where: { eventId: event.id, ...BROADCAST_AUDIENCE[draft.audience], user: { telegramId: { not: null } } },
+      include: { user: true },
+    });
+    let sent = 0;
+    for (const reg of recipients) {
+      try {
+        await bot.api.sendMessage(reg.user.telegramId, `📣 ${event.title}\n\n${draft.message}`);
+        sent++;
+      } catch (e) {
+        console.error('broadcast failed', reg.user.telegramId, e.message);
+      }
+    }
+    await ctx.reply(`Sent to ${sent} of ${recipients.length}.`);
+  });
+
+  bot.callbackQuery('bcastcancel', async (ctx) => {
+    const { telegramId } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    await reset(telegramId);
+    await ctx.reply('Broadcast cancelled.');
+  });
+
   bot.command('skip', (ctx) => handleText(ctx, ''));
   bot.on('message:text', (ctx) => handleText(ctx, ctx.message.text.trim()));
 
@@ -332,6 +480,15 @@ export function createBot() {
         if (field.required && !text) return ctx.reply(`${field.label} is required.`);
         if (text) draft.answers[field.key] = text;
         return askCustom(draft.fieldIndex + 1);
+      }
+      case S.BROADCAST_MESSAGE: {
+        if (!text) return ctx.reply('Send some text to broadcast, or /cancel to stop.');
+        const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+        if (!event) { await reset(telegramId); return ctx.reply('That event is gone.'); }
+        draft.message = text;
+        await save(telegramId, S.BROADCAST_CONFIRM, draft);
+        const kb = new InlineKeyboard().text('Send it', 'bcastsend').text('Cancel', 'bcastcancel');
+        return ctx.reply(`Preview:\n\n${text}\n\nSend this to ${event.title}?`, { reply_markup: kb });
       }
       default:
         return ctx.reply('Send /register to sign up, or /mytickets to see your codes.');

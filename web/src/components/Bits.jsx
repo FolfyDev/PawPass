@@ -63,3 +63,22 @@ export function RsvpButtons({ value, onChange }) {
     </div>
   );
 }
+
+const PAYMENT_OPTIONS = [
+  ['CASH', 'Cash'],
+  ['CARD', 'Card'],
+  ['PAYPAL', 'PayPal'],
+  ['OTHER', 'Other'],
+];
+
+export function PaymentButtons({ value, onChange }) {
+  return (
+    <div className="segmented">
+      {PAYMENT_OPTIONS.map(([v, label]) => (
+        <button key={v} type="button" className={v === value ? 'selected' : ''} onClick={() => onChange(v)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}

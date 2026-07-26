@@ -3,6 +3,8 @@ import { ticketCode, ticketSecret } from './codes.js';
 
 export class RegistrationError extends Error {}
 
+const PAYMENT_METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
+
 export function validateAnswers(event, answers = {}) {
   const fields = Array.isArray(event.customFields) ? event.customFields : [];
   const clean = {};
@@ -30,7 +32,7 @@ export function registrationWindowState(event, confirmedCount) {
   return { open: true, waitlist: false };
 }
 
-export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, tier }) {
+export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, tier, paymentMethod, paymentNote }) {
   const confirmedCount = await prisma.registration.count({
     where: { eventId: event.id, status: 'CONFIRMED' },
   });
@@ -58,6 +60,8 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
     source,
     tosAcceptedAt: new Date(),
     tosVersion: tosVersion || null,
+    paymentMethod: chosenTier === 'DONATION' && PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null,
+    paymentNote: chosenTier === 'DONATION' ? (paymentNote?.trim() || null) : null,
   };
 
   if (existing) {
@@ -97,5 +101,9 @@ export async function promoteFromWaitlist(eventId) {
     orderBy: { createdAt: 'asc' },
   });
   if (!next) return null;
-  return prisma.registration.update({ where: { id: next.id }, data: { status: 'CONFIRMED' } });
+  return prisma.registration.update({
+    where: { id: next.id },
+    data: { status: 'CONFIRMED' },
+    include: { user: true, event: true },
+  });
 }

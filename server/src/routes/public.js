@@ -4,9 +4,10 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { requireUser } from '../lib/auth.js';
-import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
+import { createRegistration, RegistrationError, registrationWindowState, promoteFromWaitlist } from '../lib/registrations.js';
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
+import { notifyUser } from '../bot/index.js';
 
 export const publicRouter = Router();
 
@@ -66,6 +67,16 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
   })));
 });
 
+/// Read-only availability for signed-in attendees — same bar as /rsvps above
+/// (anyone who can sign in already clears it). Sales are always recorded by
+/// staff in person; there is no self-checkout here.
+publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
+  res.json(items.map((i) => ({ id: i.id, name: i.name, price: i.price, remaining: Math.max(i.maxCount - i.soldCount, 0) })));
+});
+
 publicRouter.post('/events/:slug/register', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
@@ -116,6 +127,13 @@ publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
   await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
+  const promoted = await promoteFromWaitlist(reg.eventId);
+  if (promoted?.user.telegramId) {
+    await notifyUser(promoted.user.telegramId,
+      `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
+      `Badge code: ${promoted.code}\n` +
+      `Ticket and wallet pass: ${env.webUrl}/tickets`);
+  }
   res.json({ ok: true });
 });
 
@@ -163,6 +181,7 @@ export function shapeReg(r) {
     email: r.email, answers: r.answers, checkedInAt: r.checkedInAt, createdAt: r.createdAt,
     qrUrl: `${env.publicUrl}/t/${r.secret}`,
     tier: r.tier, badgeNumber: r.badgeNumber, rsvp: r.rsvp,
+    paymentMethod: r.paymentMethod, paymentNote: r.paymentNote,
   };
 }
 

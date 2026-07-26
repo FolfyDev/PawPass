@@ -30,6 +30,13 @@ enum RsvpStatus {
   NO
 }
 
+enum PaymentMethod {
+  CASH
+  CARD
+  PAYPAL
+  OTHER
+}
+
 /// A person. Attendees always arrive through Telegram; staff may also hold a password.
 model User {
   id               String         @id @default(cuid())
@@ -47,6 +54,7 @@ model User {
   registrations    Registration[]
   checkIns         Registration[] @relation("CheckedInBy")
   auditEntries     AuditLog[]
+  sales            Sale[]         @relation("SalesProcessedBy")
 }
 
 model Event {
@@ -81,6 +89,7 @@ model Event {
 
   registrations    Registration[]
   campaigns        EmailCampaign[]
+  merchItems       MerchItem[]
 }
 
 model Registration {
@@ -103,6 +112,11 @@ model Registration {
   badgeNumber   Int?
   rsvp          RsvpStatus         @default(YES)
   source        String             @default("web") // web | telegram | admin
+  /// How a DONATION-tier payment was actually received — set by staff, usually
+  /// via the onsite kiosk, since the donation tier is otherwise just a PayPal
+  /// link with no way for us to confirm it was paid.
+  paymentMethod PaymentMethod?
+  paymentNote   String?
 
   tosAcceptedAt DateTime?
   tosVersion    String?
@@ -143,6 +157,41 @@ model EmailCampaign {
   sentAt      DateTime?
   sentCount   Int      @default(0)
   createdAt   DateTime @default(now())
+}
+
+/// A merch/inventory item sold at an event's table, e.g. a shirt or a print.
+/// Scoped per event, like registrations and campaigns.
+model MerchItem {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name      String
+  price     Float?
+  maxCount  Int
+  /// Atomically incremented on each sale via a compare-and-swap update, so
+  /// concurrent sales at the table can never oversell past maxCount.
+  soldCount Int      @default(0)
+  createdAt DateTime @default(now())
+
+  sales     Sale[]
+
+  @@index([eventId])
+}
+
+/// One recorded merch sale. Attributed to the staff member who processed it,
+/// not the buyer — there's no attendee lookup at the merch table.
+model Sale {
+  id            String        @id @default(cuid())
+  itemId        String
+  item          MerchItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  quantity      Int           @default(1)
+  paymentMethod PaymentMethod
+  paymentNote   String?
+  processedById String
+  processedBy   User          @relation("SalesProcessedBy", fields: [processedById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  @@index([itemId])
 }
 
 /// Single-use sign-in codes handed out by the bot. This is how someone signs

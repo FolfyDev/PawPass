@@ -10,6 +10,8 @@ import AdminLayout from './pages/admin/AdminLayout.jsx';
 import AdminEvents from './pages/admin/Events.jsx';
 import AdminEventEdit from './pages/admin/EventEdit.jsx';
 import AdminAttendees from './pages/admin/Attendees.jsx';
+import AdminKiosk from './pages/admin/Kiosk.jsx';
+import AdminMerch from './pages/admin/Merch.jsx';
 import AdminScanner from './pages/admin/Scanner.jsx';
 import AdminBadges from './pages/admin/Badges.jsx';
 import AdminEmail from './pages/admin/Email.jsx';
@@ -57,6 +59,8 @@ export default function App() {
             <Route index element={<AdminEvents />} />
             <Route path="events/:id" element={<AdminEventEdit />} />
             <Route path="events/:id/attendees" element={<AdminAttendees />} />
+            <Route path="events/:id/kiosk" element={<AdminKiosk />} />
+            <Route path="events/:id/merch" element={<AdminMerch />} />
             <Route path="scan" element={<AdminScanner />} />
             <Route path="badges" element={<AdminBadges />} />
             <Route path="email" element={<AdminEmail />} />

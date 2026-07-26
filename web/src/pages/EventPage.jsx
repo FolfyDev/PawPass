@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, fmtDate, StatusPill, Avatar, RsvpButtons } from '../components/Bits.jsx';
+import { Field, fmtDate, StatusPill, Avatar, RsvpButtons, Pill } from '../components/Bits.jsx';
 
 export default function EventPage() {
   const { slug } = useParams();
@@ -15,6 +15,7 @@ export default function EventPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [going, setGoing] = useState(null);
+  const [merch, setMerch] = useState(null);
 
   const load = () => api.get(`/api/events/${slug}`).then((e) => {
     setEvent(e);
@@ -30,6 +31,10 @@ export default function EventPage() {
   useEffect(() => {
     if (!user) { setGoing(null); return; }
     api.get(`/api/events/${slug}/rsvps`).then(setGoing).catch(() => setGoing([]));
+  }, [slug, user]);
+  useEffect(() => {
+    if (!user) { setMerch(null); return; }
+    api.get(`/api/events/${slug}/merch`).then(setMerch).catch(() => setMerch([]));
   }, [slug, user]);
 
   const rsvp = async (value) => {
@@ -189,6 +194,21 @@ export default function EventPage() {
                   {g.telegramUsername && <span className="small muted"> @{g.telegramUsername}</span>}
                   {g.rsvp === 'MAYBE' && <span className="pill" style={{ marginLeft: 6 }}>Maybe</span>}
                 </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {user && merch && merch.length > 0 && (
+        <section style={{ marginTop: 28 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Merch</p>
+          <div className="card" style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            {merch.map((m) => (
+              <div key={m.id} className="stack" style={{ gap: 2, minWidth: 140 }}>
+                <strong>{m.name}</strong>
+                <span className="small muted">{m.price != null ? `$${Number(m.price).toFixed(2)}` : ''}</span>
+                {m.remaining > 0 ? <span className="small muted">{m.remaining} left</span> : <Pill tone="stop">Sold out</Pill>}
               </div>
             ))}
           </div>
