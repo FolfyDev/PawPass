@@ -53,5 +53,6 @@ export const BADGE_TOKENS = {
   '{{qr_payload}}': 'https://example.com/t/sample',
   '{{accent}}': '#FF5B04',
   '{{tier_name}}': 'Supporter',
+  '{{badge_tier}}': 'Organizer',
   '{{badge_number}}': '042',
 };

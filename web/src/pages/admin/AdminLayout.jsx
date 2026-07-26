@@ -17,6 +17,7 @@ export default function AdminLayout() {
         <NavLink to="/admin/email">Email</NavLink>
         <p className="eyebrow" style={{ padding: '14px 12px 6px' }}>Instance</p>
         <NavLink to="/admin/staff">Staff</NavLink>
+        <NavLink to="/admin/audit">Audit log</NavLink>
         <NavLink to="/admin/settings">Settings</NavLink>
       </aside>
       <div><Outlet /></div>

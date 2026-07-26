@@ -16,7 +16,6 @@ authRouter.get('/config', (_req, res) => {
       // Over plain http, or on localhost, the code flow is the way in.
       widgetUsable: env.telegram.enabled && env.publicUrl.startsWith('https'),
     },
-    passwordLoginForStaff: true,
     devAuth: localDevAuthAvailable(),
   });
 });
@@ -40,15 +39,15 @@ authRouter.post('/telegram', async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-/// Staff-only. Attendee accounts have no password hash, so this can never
-/// become a second door into an attendee account.
+/// Email + password sign-in, for any account that has one set — staff and
+/// regular members alike. Members get a password by registering for an event
+/// as a guest (see public.js) or by adding one from the Account page; either
+/// way, an account with no passwordHash simply can't use this door.
 authRouter.post('/password', async (req, res) => {
   const { email, password } = req.body || {};
   const user = await prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
   if (!user?.passwordHash || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
     return res.status(401).json({ error: 'Email or password is incorrect.' });
-  if (user.role === 'USER')
-    return res.status(403).json({ error: 'This account signs in with Telegram.' });
 
   setSessionCookie(res, issueToken(user));
   res.json({ user: publicUser(user) });
@@ -78,18 +77,22 @@ authRouter.post('/link-telegram', requireUser, async (req, res) => {
 });
 
 authRouter.post('/set-password', requireUser, async (req, res) => {
-  if (req.user.role === 'USER') return res.status(403).json({ error: 'Passwords are for staff accounts.' });
   const { email, password } = req.body || {};
   if (!password || String(password).length < 10)
     return res.status(400).json({ error: 'Use at least 10 characters.' });
-  const user = await prisma.user.update({
-    where: { id: req.user.id },
-    data: {
-      email: email ? String(email).toLowerCase() : req.user.email,
-      passwordHash: await bcrypt.hash(String(password), 12),
-    },
-  });
-  res.json({ user: publicUser(user) });
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        email: email ? String(email).toLowerCase() : req.user.email,
+        passwordHash: await bcrypt.hash(String(password), 12),
+      },
+    });
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That email is already in use by another account.' });
+    throw e;
+  }
 });
 
 /// Sign in with a code the bot handed out. Works over plain HTTP and needs no

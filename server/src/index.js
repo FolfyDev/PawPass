@@ -1,3 +1,9 @@
+// Must be imported before any router is created (auth/public/admin/badges
+// below all call Router() at module load time) — it patches Express 4's
+// Router so a throw or rejection inside an `async` handler reaches the error
+// middleware below instead of becoming an unhandled rejection that crashes
+// the whole process.
+import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';

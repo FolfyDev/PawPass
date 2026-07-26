@@ -7,11 +7,13 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
-import { promoteFromWaitlist, createRegistration, RegistrationError } from '../lib/registrations.js';
+import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser } from '../lib/registrations.js';
+import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg } from './public.js';
 import { sendCampaign } from '../lib/mailer.js';
+import { notifyUser } from '../bot/index.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -100,7 +102,7 @@ adminRouter.get('/events/:id/registrations', async (req, res) => {
 
 adminRouter.get('/events/:id/registrations.csv', async (req, res) => {
   const regs = await prisma.registration.findMany({ where: { eventId: req.params.id }, include: { user: true }, orderBy: { createdAt: 'asc' } });
-  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt'];
+  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tier','badgeTier','paymentMethod','paymentAmount','paymentNote'];
   const rows = regs.map((r) => keys.map((k) => csv(k === 'telegram' ? r.user.telegramUsername : r[k])).join(','));
   res.type('text/csv').set('Content-Disposition', 'attachment; filename="registrations.csv"').send([keys.join(','), ...rows].join('\n'));
 });
@@ -109,15 +111,14 @@ adminRouter.post('/registrations', async (req, res) => {
   // Walk-up registration typed in by staff at the door.
   const event = await prisma.event.findUnique({ where: { id: req.body.eventId } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
-  let user = req.body.telegramId
-    ? await prisma.user.findUnique({ where: { telegramId: String(req.body.telegramId) } })
-    : null;
-  if (!user) {
-    user = await prisma.user.create({
-      data: { displayName: req.body.legalName, legalName: req.body.legalName, fursonaName: req.body.fursonaName },
-    });
-  }
   try {
+    // No Telegram ID to match on for a bare walk-up, so findOrCreateHeadlessUser
+    // catches the common case of someone who preregistered online walking up
+    // and getting entered as a second, separate attendee.
+    let user = req.body.telegramId
+      ? await prisma.user.findUnique({ where: { telegramId: String(req.body.telegramId) } })
+      : null;
+    if (!user) user = await findOrCreateHeadlessUser({ eventId: req.body.eventId, legalName: req.body.legalName, fursonaName: req.body.fursonaName, email: req.body.email });
     const reg = await createRegistration({ event, user, ...req.body, source: 'admin' });
     await audit(req.user.id, 'registration.create', reg.id, { code: reg.code });
     res.json(shapeReg(reg));
@@ -128,12 +129,349 @@ adminRouter.post('/registrations', async (req, res) => {
 });
 
 adminRouter.patch('/registrations/:code', async (req, res) => {
-  const allowed = ['legalName','fursonaName','email','status','answers'];
+  const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentAmount','paymentNote'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
-  if (data.status === 'CANCELLED') await promoteFromWaitlist(reg.eventId);
+  if (data.status === 'CANCELLED') {
+    const promoted = await promoteFromWaitlist(reg.eventId);
+    if (promoted?.user.telegramId) {
+      await notifyUser(promoted.user.telegramId,
+        `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
+        `Badge code: ${promoted.code}\n` +
+        `Ticket and wallet pass: ${env.webUrl}/tickets`);
+    }
+  }
   await audit(req.user.id, 'registration.update', reg.id, data);
   res.json(shapeReg(reg));
+});
+
+/* ---------------- merch ---------------- */
+
+const PAYMENT_METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
+class MerchError extends Error {}
+
+adminRouter.get('/events/:id/merch', async (req, res) => {
+  const items = await prisma.merchItem.findMany({ where: { eventId: req.params.id }, orderBy: { createdAt: 'asc' } });
+  const sales = await prisma.sale.findMany({
+    where: { item: { eventId: req.params.id } },
+    include: { item: true, processedBy: true },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+  const donations = await prisma.donation.findMany({
+    where: { eventId: req.params.id },
+    include: { processedBy: true },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+  const revenueTotal = sales.reduce((sum, s) => sum + (s.item.price || 0) * s.quantity, 0);
+  const donationsTotal = donations.reduce((sum, d) => sum + d.amount, 0);
+  res.json({
+    items: items.map((i) => ({ ...i, remaining: Math.max(i.maxCount - i.soldCount, 0) })),
+    sales: sales.map((s) => ({
+      id: s.id, itemId: s.itemId, itemName: s.item.name, quantity: s.quantity,
+      paymentMethod: s.paymentMethod, paymentNote: s.paymentNote,
+      processedByName: s.processedBy.displayName, createdAt: s.createdAt,
+    })),
+    donations: donations.map((d) => ({
+      id: d.id, amount: d.amount, paymentMethod: d.paymentMethod, note: d.note,
+      processedByName: d.processedBy.displayName, createdAt: d.createdAt,
+    })),
+    revenueTotal,
+    donationsTotal,
+  });
+});
+
+/// A donation taken in person at the table, not tied to a merch item or an
+/// event registration — e.g. a walk-up donation box. Rolls into the Cash
+/// reconciliation totals the same as donation-tier registrations do.
+adminRouter.post('/events/:id/donations', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const amount = Number(req.body.amount);
+  if (!(amount > 0)) return res.status(400).json({ error: 'Enter an amount greater than zero.' });
+  if (!PAYMENT_METHODS.includes(req.body.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method.' });
+  const donation = await prisma.donation.create({
+    data: {
+      eventId: event.id, amount, paymentMethod: req.body.paymentMethod,
+      note: req.body.note?.trim() || null, processedById: req.user.id,
+    },
+    include: { processedBy: true },
+  });
+  await audit(req.user.id, 'donation.create', donation.id, { amount, paymentMethod: donation.paymentMethod });
+  res.json({
+    id: donation.id, amount: donation.amount, paymentMethod: donation.paymentMethod,
+    note: donation.note, processedByName: donation.processedBy.displayName, createdAt: donation.createdAt,
+  });
+});
+
+/// Undoes a mistaken entry, mirroring /merch/sales/:id.
+adminRouter.delete('/donations/:id', async (req, res) => {
+  const donation = await prisma.donation.findUnique({ where: { id: req.params.id } });
+  if (!donation) return res.status(404).json({ error: 'Donation not found.' });
+  await prisma.donation.delete({ where: { id: donation.id } });
+  await audit(req.user.id, 'donation.undo', donation.id, { amount: donation.amount });
+  res.json({ ok: true });
+});
+
+adminRouter.post('/events/:id/merch', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const { name, price, maxCount } = req.body;
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Give the item a name.' });
+  const max = Number(maxCount);
+  if (!Number.isInteger(max) || max < 0) return res.status(400).json({ error: 'Max count must be a whole number, zero or more.' });
+  const item = await prisma.merchItem.create({
+    data: { eventId: req.params.id, name: String(name).trim(), price: price != null && price !== '' ? Number(price) : null, maxCount: max },
+  });
+  await audit(req.user.id, 'merch.create', item.id, { name: item.name, maxCount: item.maxCount });
+  res.json({ ...item, remaining: item.maxCount });
+});
+
+adminRouter.patch('/merch/:id', async (req, res) => {
+  const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
+  if (!item) return res.status(404).json({ error: 'Item not found.' });
+  const data = {};
+  if (req.body.name !== undefined) data.name = String(req.body.name).trim();
+  if (req.body.price !== undefined) data.price = req.body.price !== '' && req.body.price !== null ? Number(req.body.price) : null;
+  if (req.body.maxCount !== undefined) {
+    const max = Number(req.body.maxCount);
+    if (!Number.isInteger(max) || max < item.soldCount)
+      return res.status(400).json({ error: `Max count cannot be below the ${item.soldCount} already sold.` });
+    data.maxCount = max;
+  }
+  const updated = await prisma.merchItem.update({ where: { id: item.id }, data });
+  await audit(req.user.id, 'merch.update', item.id, data);
+  res.json({ ...updated, remaining: Math.max(updated.maxCount - updated.soldCount, 0) });
+});
+
+adminRouter.delete('/merch/:id', async (req, res) => {
+  const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
+  if (!item) return res.status(404).json({ error: 'Item not found.' });
+  if (item.soldCount > 0) return res.status(400).json({ error: 'This item has recorded sales — cannot delete.' });
+  await prisma.merchItem.delete({ where: { id: item.id } });
+  await audit(req.user.id, 'merch.delete', item.id, { name: item.name });
+  res.json({ ok: true });
+});
+
+/// Compare-and-swap stock check so concurrent sales at the table can never
+/// oversell past maxCount, without needing a serializable transaction.
+adminRouter.post('/merch/:id/sale', async (req, res) => {
+  const quantity = req.body.quantity === undefined ? 1 : Number(req.body.quantity);
+  if (!Number.isInteger(quantity) || quantity < 1) return res.status(400).json({ error: 'Quantity must be a positive whole number.' });
+  if (!PAYMENT_METHODS.includes(req.body.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method.' });
+
+  try {
+    const sale = await prisma.$transaction(async (tx) => {
+      const item = await tx.merchItem.findUnique({ where: { id: req.params.id } });
+      if (!item) throw new MerchError('Item not found.');
+      const result = await tx.merchItem.updateMany({
+        where: { id: item.id, soldCount: { lte: item.maxCount - quantity } },
+        data: { soldCount: { increment: quantity } },
+      });
+      if (result.count === 0) throw new MerchError('Not enough stock left.');
+      return tx.sale.create({
+        data: {
+          itemId: item.id, quantity,
+          paymentMethod: req.body.paymentMethod,
+          paymentNote: req.body.paymentNote?.trim() || null,
+          processedById: req.user.id,
+        },
+      });
+    });
+    await audit(req.user.id, 'merch.sale', sale.id, { itemId: sale.itemId, quantity: sale.quantity });
+    res.json(sale);
+  } catch (e) {
+    if (e instanceof MerchError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Undoes a mistaken entry at the table — restocks the item and removes the
+/// sale, mirroring the existing /checkin/:code/undo pattern.
+adminRouter.delete('/merch/sales/:id', async (req, res) => {
+  const sale = await prisma.sale.findUnique({ where: { id: req.params.id } });
+  if (!sale) return res.status(404).json({ error: 'Sale not found.' });
+  await prisma.$transaction([
+    prisma.merchItem.update({ where: { id: sale.itemId }, data: { soldCount: { decrement: sale.quantity } } }),
+    prisma.sale.delete({ where: { id: sale.id } }),
+  ]);
+  await audit(req.user.id, 'merch.sale.undo', sale.id, { itemId: sale.itemId, quantity: sale.quantity });
+  res.json({ ok: true });
+});
+
+/// Combines the two separate places money gets recorded — donation-tier
+/// registrations and merch sales — into one end-of-shift total, broken out
+/// by payment method. Donation registrations with no paymentMethod recorded
+/// (i.e. nobody at the door confirmed the PayPal payment actually happened)
+/// are called out separately rather than silently counted as zero.
+adminRouter.get('/events/:id/reconciliation', async (req, res) => {
+  const donationRegs = await prisma.registration.findMany({
+    where: { eventId: req.params.id, tier: 'DONATION', status: { not: 'CANCELLED' } },
+  });
+  const sales = await prisma.sale.findMany({
+    where: { item: { eventId: req.params.id } },
+    include: { item: true },
+  });
+  const donationEntries = await prisma.donation.findMany({ where: { eventId: req.params.id } });
+
+  const byMethod = () => Object.fromEntries(PAYMENT_METHODS.map((m) => [m, { count: 0, total: 0 }]));
+  const sumTotals = (obj) => Object.values(obj).reduce((sum, m) => sum + m.total, 0);
+
+  const donations = byMethod();
+  let unrecordedDonations = 0;
+  for (const r of donationRegs) {
+    if (!r.paymentMethod) { unrecordedDonations++; continue; }
+    donations[r.paymentMethod].count++;
+    donations[r.paymentMethod].total += r.paymentAmount || 0;
+  }
+  for (const d of donationEntries) {
+    donations[d.paymentMethod].count++;
+    donations[d.paymentMethod].total += d.amount;
+  }
+
+  const merch = byMethod();
+  for (const s of sales) {
+    merch[s.paymentMethod].count += s.quantity;
+    merch[s.paymentMethod].total += (s.item.price || 0) * s.quantity;
+  }
+
+  const donationsTotal = sumTotals(donations);
+  const merchTotal = sumTotals(merch);
+  res.json({ donations, merch, unrecordedDonations, donationsTotal, merchTotal, grandTotal: donationsTotal + merchTotal });
+});
+
+/// Full sales log, not just the last 100 shown on screen.
+adminRouter.get('/events/:id/merch.csv', async (req, res) => {
+  const sales = await prisma.sale.findMany({
+    where: { item: { eventId: req.params.id } },
+    include: { item: true, processedBy: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const keys = ['createdAt', 'item', 'quantity', 'total', 'paymentMethod', 'paymentNote', 'processedBy'];
+  const rows = sales.map((s) => keys.map((k) => csv({
+    createdAt: s.createdAt.toISOString(),
+    item: s.item.name,
+    quantity: s.quantity,
+    total: ((s.item.price || 0) * s.quantity).toFixed(2),
+    paymentMethod: s.paymentMethod,
+    paymentNote: s.paymentNote,
+    processedBy: s.processedBy.displayName,
+  }[k])).join(','));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="merch.csv"').send([keys.join(','), ...rows].join('\n'));
+});
+
+/// One combined ledger of every place money got recorded for this event —
+/// donation-tier registrations, merch sales, and in-person donations — for
+/// end-of-event bookkeeping. The on-screen reconciliation view only shows
+/// totals by method; this is the transaction-level detail behind them.
+adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
+  const eventId = req.params.id;
+  const [donationRegs, sales, donationEntries] = await Promise.all([
+    prisma.registration.findMany({ where: { eventId, tier: 'DONATION', status: { not: 'CANCELLED' }, paymentMethod: { not: null } } }),
+    prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true, processedBy: true } }),
+    prisma.donation.findMany({ where: { eventId }, include: { processedBy: true } }),
+  ]);
+
+  const rows = [
+    ...donationRegs.map((r) => ({
+      createdAt: r.createdAt, type: 'Registration', description: `${r.legalName} (${r.code})`,
+      amount: r.paymentAmount || 0, paymentMethod: r.paymentMethod, note: r.paymentNote || '', processedBy: '',
+    })),
+    ...sales.map((s) => ({
+      createdAt: s.createdAt, type: 'Merch', description: `${s.quantity} x ${s.item.name}`,
+      amount: (s.item.price || 0) * s.quantity, paymentMethod: s.paymentMethod, note: s.paymentNote || '', processedBy: s.processedBy.displayName,
+    })),
+    ...donationEntries.map((d) => ({
+      createdAt: d.createdAt, type: 'Donation', description: 'In-person donation',
+      amount: d.amount, paymentMethod: d.paymentMethod, note: d.note || '', processedBy: d.processedBy.displayName,
+    })),
+  ].sort((a, b) => a.createdAt - b.createdAt);
+
+  const keys = ['createdAt', 'type', 'description', 'amount', 'paymentMethod', 'note', 'processedBy'];
+  const csvRows = rows.map((r) => keys.map((k) => csv(k === 'createdAt' ? r.createdAt.toISOString() : k === 'amount' ? r.amount.toFixed(2) : r[k])).join(','));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="cash.csv"').send([keys.join(','), ...csvRows].join('\n'));
+});
+
+/* ---------------- vouchers ---------------- */
+
+adminRouter.get('/events/:id/vouchers', async (req, res) => {
+  const vouchers = await prisma.voucherCode.findMany({
+    where: { eventId: req.params.id },
+    include: { redemptions: { select: { code: true, legalName: true, fursonaName: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(vouchers.map((v) => ({ ...v, remaining: Math.max(v.maxUses - v.usedCount, 0) })));
+});
+
+/// A handout sheet for staff: codes and their badge tier, ready to give to
+/// organizers/photographers ahead of time instead of reading them off a screen.
+adminRouter.get('/events/:id/vouchers.csv', async (req, res) => {
+  const vouchers = await prisma.voucherCode.findMany({
+    where: { eventId: req.params.id },
+    include: { redemptions: { select: { legalName: true, fursonaName: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  const keys = ['code', 'badgeTier', 'maxUses', 'usedCount', 'redeemedBy'];
+  const rows = vouchers.map((v) => keys.map((k) => csv(
+    k === 'redeemedBy' ? v.redemptions.map((r) => r.fursonaName || r.legalName).join('; ') : v[k],
+  )).join(','));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="vouchers.csv"').send([keys.join(','), ...rows].join('\n'));
+});
+
+adminRouter.post('/events/:id/vouchers', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const badgeTier = String(req.body.badgeTier || '').trim();
+  if (!badgeTier) return res.status(400).json({ error: 'Give the voucher a badge tier label, e.g. "Organizer".' });
+  const maxUses = req.body.maxUses === undefined ? 1 : Number(req.body.maxUses);
+  if (!Number.isInteger(maxUses) || maxUses < 1) return res.status(400).json({ error: 'Max uses must be a positive whole number.' });
+  const code = req.body.code ? String(req.body.code).trim().toUpperCase() : ticketCode();
+
+  try {
+    const voucher = await prisma.voucherCode.create({
+      data: { eventId: event.id, code, badgeTier, maxUses },
+    });
+    await audit(req.user.id, 'voucher.create', voucher.id, { code: voucher.code, badgeTier });
+    res.json({ ...voucher, remaining: voucher.maxUses, redemptions: [] });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That code is already in use.' });
+    throw e;
+  }
+});
+
+adminRouter.patch('/vouchers/:id', async (req, res) => {
+  const voucher = await prisma.voucherCode.findUnique({ where: { id: req.params.id } });
+  if (!voucher) return res.status(404).json({ error: 'Voucher not found.' });
+  const data = {};
+  if (req.body.badgeTier !== undefined) {
+    const badgeTier = String(req.body.badgeTier).trim();
+    if (!badgeTier) return res.status(400).json({ error: 'Badge tier cannot be empty.' });
+    data.badgeTier = badgeTier;
+  }
+  if (req.body.code !== undefined) data.code = String(req.body.code).trim().toUpperCase();
+  if (req.body.maxUses !== undefined) {
+    const maxUses = Number(req.body.maxUses);
+    if (!Number.isInteger(maxUses) || maxUses < voucher.usedCount)
+      return res.status(400).json({ error: `Max uses cannot be below the ${voucher.usedCount} already used.` });
+    data.maxUses = maxUses;
+  }
+  try {
+    const updated = await prisma.voucherCode.update({ where: { id: voucher.id }, data });
+    await audit(req.user.id, 'voucher.update', voucher.id, data);
+    res.json({ ...updated, remaining: Math.max(updated.maxUses - updated.usedCount, 0) });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That code is already in use.' });
+    throw e;
+  }
+});
+
+adminRouter.delete('/vouchers/:id', async (req, res) => {
+  const voucher = await prisma.voucherCode.findUnique({ where: { id: req.params.id } });
+  if (!voucher) return res.status(404).json({ error: 'Voucher not found.' });
+  await prisma.voucherCode.delete({ where: { id: voucher.id } });
+  await audit(req.user.id, 'voucher.delete', voucher.id, { code: voucher.code });
+  res.json({ ok: true });
 });
 
 /* ---------------- check-in ---------------- */
@@ -269,7 +607,8 @@ adminRouter.put('/settings', async (req, res) => {
 });
 
 adminRouter.get('/audit', async (_req, res) => {
-  res.json(await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } }));
+  const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
+  res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
 });
 
 const csv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
