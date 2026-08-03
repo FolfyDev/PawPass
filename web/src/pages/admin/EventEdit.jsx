@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Field } from '../../components/Bits.jsx';
+import EventTabs from '../../components/EventTabs.jsx';
 
 // Renders a stored UTC instant as the wall-clock string an
 // <input type="datetime-local"> expects — in the event's own timezone, not
@@ -60,11 +61,9 @@ export default function EventEdit() {
           <p className="eyebrow">Event</p>
           <h1 style={{ margin: 0 }}>{e.title}</h1>
         </div>
-        <div className="row">
-          <Link className="btn" to={`/admin/events/${id}/attendees`}>Attendees</Link>
-          <button className="btn primary" onClick={save}>Save changes</button>
-        </div>
+        <button className="btn primary" onClick={save}>Save changes</button>
       </div>
+      <EventTabs id={id} />
       {msg && <p className="note" style={{ marginBottom: 16 }}>{msg}</p>}
 
       <div className="stack">
@@ -115,6 +114,13 @@ export default function EventEdit() {
               <input type="url" placeholder="https://paypal.me/…" value={e.donationPaypalLink || ''} onChange={(ev) => set('donationPaypalLink', ev.target.value || null)} />
             </Field>
           </div>
+          <label className="row small">
+            <input type="checkbox" checked={!!e.donationRequired} onChange={(ev) => set('donationRequired', ev.target.checked)} />
+            Require payment for this event (hides the free option — for a paid add-on like an after-party)
+          </label>
+          {e.donationRequired && !e.donationPaypalLink && (
+            <p className="note bad" style={{ margin: 0 }}>Add a PayPal link above, or registration will complete with nowhere to send people to pay.</p>
+          )}
         </section>
 
         <section className="card stack">

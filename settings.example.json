@@ -1,0 +1,16 @@
+{
+  "orgName": "Redline FurRide",
+  "tagline": "Registration for community events",
+  "supportEmail": "hello@example.com",
+  "supportTelegram": "@yourhandle",
+  "accentColor": "#FF5B04",
+  "inkColor": "#0E1116",
+  "logoUrl": "",
+  "askFursonaName": true,
+  "fursonaNameLabel": "Fursona name",
+  "legalNameLabel": "Full legal name",
+  "legalNameHelp": "Must match the photo ID you bring to check-in.",
+  "ticketFooter": "Show this code at the door.",
+  "welcomeMessage": "Welcome! Pick an event below to register.",
+  "botWelcome": "Hi! I can get you registered in about thirty seconds. Send /register to start."
+}

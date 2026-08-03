@@ -20,7 +20,7 @@ export default function Login() {
   // silently fails.
   useEffect(() => {
     if (!config) return;
-    setTab(config.telegram?.widgetUsable ? 'widget' : config.telegram?.enabled ? 'code' : 'password');
+    setTab(config.telegram?.widgetUsable ? 'widget' : config.telegram?.enabled ? 'code' : 'email');
   }, [config]);
 
   const done = async () => { await refresh(); nav('/'); };
@@ -36,7 +36,7 @@ export default function Login() {
       <div className="row" style={{ marginBottom: 14 }}>
         {config?.telegram?.widgetUsable && <button className={`btn sm ${tab === 'widget' ? 'primary' : ''}`} onClick={() => setTab('widget')}>Telegram button</button>}
         {config?.telegram?.enabled && <button className={`btn sm ${tab === 'code' ? 'primary' : ''}`} onClick={() => setTab('code')}>Code from the bot</button>}
-        <button className={`btn sm ${tab === 'password' ? 'primary' : ''}`} onClick={() => setTab('password')}>Staff password</button>
+        <button className={`btn sm ${tab === 'email' ? 'primary' : ''}`} onClick={() => setTab('email')}>Sign in with email</button>
         {config?.devAuth && <button className={`btn sm ${tab === 'dev' ? 'primary' : ''}`} onClick={() => setTab('dev')}>Dev</button>}
       </div>
 
@@ -62,9 +62,9 @@ export default function Login() {
         </form>
       )}
 
-      {tab === 'password' && (
+      {tab === 'email' && (
         <form className="card stack" onSubmit={(e) => { e.preventDefault(); run(() => api.post('/api/auth/password', creds)); }}>
-          <p className="muted small">For staff accounts. Attendees sign in with Telegram.</p>
+          <p className="muted small">Sign in with the email and password you set on your account after registering.</p>
           <Field label="Email"><input type="email" autoComplete="username" value={creds.email}
             onChange={(e) => setCreds({ ...creds, email: e.target.value })} /></Field>
           <Field label="Password"><input type="password" autoComplete="current-password" value={creds.password}
@@ -90,7 +90,7 @@ export default function Login() {
 
       {!config?.telegram?.enabled && tab !== 'dev' && (
         <p className="small muted" style={{ marginTop: 14 }}>
-          Telegram sign-in is off because no bot token is set. Attendees cannot register until it is configured.
+          Telegram sign-in is off because no bot token is set. You can still register for events and sign in with just an email and password.
         </p>
       )}
     </div>

@@ -60,7 +60,7 @@ export default function Email() {
       </div>
 
       <h2>Sent</h2>
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card" style={{ padding: 0, overflow: 'auto' }}>
         <table>
           <thead><tr><th>Subject</th><th>Audience</th><th>Sent</th><th>Recipients</th></tr></thead>
           <tbody>

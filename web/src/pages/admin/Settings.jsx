@@ -42,12 +42,53 @@ export default function Settings() {
     } catch (err) { setMsg(err.message); }
   };
 
+  const downloadSettings = () => {
+    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'pawpass-settings.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const uploadSettings = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be picked again later
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      // Only known keys make it in — an uploaded file with junk or unexpected
+      // fields shouldn't create garbage settings rows.
+      const allowed = Object.keys(s);
+      const clean = Object.fromEntries(Object.entries(parsed).filter(([k]) => allowed.includes(k)));
+      setS((cur) => ({ ...cur, ...clean }));
+      setMsg('Loaded — review the fields below, then Save settings to apply.');
+    } catch (err) {
+      setMsg(err instanceof SyntaxError ? 'That file is not valid JSON.' : err.message);
+    }
+  };
+
   return (
     <>
       <p className="eyebrow">Instance</p>
       <h1>Settings</h1>
       <p className="muted">Wording and branding for this deployment. Anything infrastructural — SMTP, printer address, wallet certificates — lives in <code className="mono">.env</code>.</p>
       {msg && <p className="note good">{msg}</p>}
+
+      <div className="card stack" style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: 0 }}>Import / export</h2>
+        <p className="small muted" style={{ margin: 0 }}>
+          Download this instance's settings as JSON, edit the values, and re-upload to configure a new deployment in
+          one shot instead of retyping every field — the same idea as this repo's <code className="mono">.env.example</code>.
+          A starter file with sample values is checked in as <code className="mono">settings.example.json</code>.
+        </p>
+        <div className="row">
+          <button className="btn" onClick={downloadSettings}>Download current settings</button>
+          <label className="btn">
+            Upload settings JSON
+            <input type="file" accept="application/json" onChange={uploadSettings} style={{ display: 'none' }} />
+          </label>
+        </div>
+      </div>
 
       <div className="card stack">
         <Field label="Banner" help="PNG, ~1170×123 — replaces the org name in the nav">

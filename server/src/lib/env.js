@@ -1,4 +1,15 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+/// `dotenv/config` loads `.env` from process.cwd(), but the README's local-dev
+/// flow runs this from inside server/ (`cd server && npm run dev`), where
+/// there is no .env — the real one lives at the repo root. Resolve it
+/// relative to this file instead of trusting the cwd. In Docker, env vars are
+/// already injected via compose's `env_file`, so this is a harmless no-op
+/// there (dotenv never overrides an already-set process.env value).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const bool = (v) => v === 'true' || v === '1';
 
@@ -38,6 +49,11 @@ export const env = {
     host: process.env.ZEBRA_HOST || '',
     port: Number(process.env.ZEBRA_PORT || 9100),
     dpi: Number(process.env.ZEBRA_DPI || 300),
+    /// 'network' pushes raw ZPL straight to host:port (requires the printer
+    /// reachable from wherever this server runs). 'browser' is for a
+    /// USB-attached printer on a different machine than the server — the
+    /// frontend opens the badge image and uses the OS print dialog instead.
+    mode: process.env.ZEBRA_PRINT_MODE === 'browser' ? 'browser' : 'network',
   },
   apple: {
     passTypeId: process.env.APPLE_PASS_TYPE_ID || '',

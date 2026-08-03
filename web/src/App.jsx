@@ -5,16 +5,23 @@ import Home from './pages/Home.jsx';
 import EventPage from './pages/EventPage.jsx';
 import Tickets from './pages/Tickets.jsx';
 import Login from './pages/Login.jsx';
+import StaffLogin from './pages/StaffLogin.jsx';
 import Account from './pages/Account.jsx';
 import AdminLayout from './pages/admin/AdminLayout.jsx';
 import AdminEvents from './pages/admin/Events.jsx';
 import AdminEventEdit from './pages/admin/EventEdit.jsx';
 import AdminAttendees from './pages/admin/Attendees.jsx';
+import AdminKiosk from './pages/admin/Kiosk.jsx';
+import AdminMerch from './pages/admin/Merch.jsx';
+import AdminReconciliation from './pages/admin/Reconciliation.jsx';
+import AdminVouchers from './pages/admin/Vouchers.jsx';
 import AdminScanner from './pages/admin/Scanner.jsx';
 import AdminBadges from './pages/admin/Badges.jsx';
 import AdminEmail from './pages/admin/Email.jsx';
 import AdminStaff from './pages/admin/Staff.jsx';
+import AdminAuditLog from './pages/admin/AuditLog.jsx';
 import AdminSettings from './pages/admin/Settings.jsx';
+import AdminBackup from './pages/admin/Backup.jsx';
 
 export default function App() {
   const { user, settings, isStaff, logout, loading } = useSession();
@@ -33,7 +40,7 @@ export default function App() {
           <NavLink to="/" className="link" end>Events</NavLink>
           {user && <NavLink to="/tickets" className="link">My tickets</NavLink>}
           {isStaff && <NavLink to="/admin" className="link">Admin</NavLink>}
-          <span style={{ flex: 1 }} />
+          <span className="nav-spacer" />
           <button className="btn ghost icon sm" onClick={toggleTheme} aria-label="Toggle dark mode" title="Toggle dark mode">
             {theme === 'dark' ? '☀' : '☾'}
           </button>
@@ -53,15 +60,22 @@ export default function App() {
           <Route path="/tickets" element={user ? <Tickets /> : <Navigate to="/login" />} />
           <Route path="/account" element={user ? <Account /> : <Navigate to="/login" />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/staff" element={<StaffLogin />} />
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminEvents />} />
             <Route path="events/:id" element={<AdminEventEdit />} />
             <Route path="events/:id/attendees" element={<AdminAttendees />} />
+            <Route path="events/:id/kiosk" element={<AdminKiosk />} />
+            <Route path="events/:id/merch" element={<AdminMerch />} />
+            <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
+            <Route path="events/:id/vouchers" element={<AdminVouchers />} />
             <Route path="scan" element={<AdminScanner />} />
             <Route path="badges" element={<AdminBadges />} />
             <Route path="email" element={<AdminEmail />} />
             <Route path="staff" element={<AdminStaff />} />
+            <Route path="audit" element={<AdminAuditLog />} />
             <Route path="settings" element={<AdminSettings />} />
+            <Route path="backup" element={<AdminBackup />} />
           </Route>
           <Route path="*" element={<p style={{ paddingTop: 40 }}>That page does not exist. <Link to="/">Back to events</Link>.</p>} />
         </Routes>

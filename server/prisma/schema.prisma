@@ -30,6 +30,13 @@ enum RsvpStatus {
   NO
 }
 
+enum PaymentMethod {
+  CASH
+  CARD
+  PAYPAL
+  OTHER
+}
+
 /// A person. Attendees always arrive through Telegram; staff may also hold a password.
 model User {
   id               String         @id @default(cuid())
@@ -47,6 +54,8 @@ model User {
   registrations    Registration[]
   checkIns         Registration[] @relation("CheckedInBy")
   auditEntries     AuditLog[]
+  sales            Sale[]         @relation("SalesProcessedBy")
+  donationsProcessed Donation[]   @relation("DonationsProcessedBy")
 }
 
 model Event {
@@ -75,12 +84,19 @@ model Event {
   /// Fixed two-tier model: everyone can register free; this is the paid/optional tier.
   donationTierName String         @default("Supporter")
   donationPaypalLink String?      // null = donation tier is hidden for this event
+  /// When true, the free option is hidden entirely and every registration is
+  /// treated as paid (short of a voucher override) — for a special add-on
+  /// registration that always costs money, e.g. an after-party.
+  donationRequired Boolean        @default(false)
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
 
   registrations    Registration[]
   campaigns        EmailCampaign[]
+  merchItems       MerchItem[]
+  voucherCodes     VoucherCode[]
+  donations        Donation[]
 }
 
 model Registration {
@@ -103,6 +119,18 @@ model Registration {
   badgeNumber   Int?
   rsvp          RsvpStatus         @default(YES)
   source        String             @default("web") // web | telegram | admin
+  /// How a DONATION-tier payment was actually received — set by staff, usually
+  /// via the onsite kiosk, since the donation tier is otherwise just a PayPal
+  /// link with no way for us to confirm it was paid.
+  paymentMethod PaymentMethod?
+  paymentAmount Float?
+  paymentNote   String?
+
+  voucherCodeId String?
+  voucher       VoucherCode?       @relation(fields: [voucherCodeId], references: [id], onDelete: SetNull)
+  /// Denormalized copy of the voucher's badgeTier at redemption time, so the
+  /// badge keeps showing it even if the voucher is later edited or deleted.
+  badgeTier     String?
 
   tosAcceptedAt DateTime?
   tosVersion    String?
@@ -143,6 +171,82 @@ model EmailCampaign {
   sentAt      DateTime?
   sentCount   Int      @default(0)
   createdAt   DateTime @default(now())
+}
+
+/// A merch/inventory item sold at an event's table, e.g. a shirt or a print.
+/// Scoped per event, like registrations and campaigns.
+model MerchItem {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name      String
+  price     Float?
+  maxCount  Int
+  /// Atomically incremented on each sale via a compare-and-swap update, so
+  /// concurrent sales at the table can never oversell past maxCount.
+  soldCount Int      @default(0)
+  createdAt DateTime @default(now())
+
+  sales     Sale[]
+
+  @@index([eventId])
+}
+
+/// One recorded merch sale. Attributed to the staff member who processed it,
+/// not the buyer — there's no attendee lookup at the merch table.
+model Sale {
+  id            String        @id @default(cuid())
+  itemId        String
+  item          MerchItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  quantity      Int           @default(1)
+  paymentMethod PaymentMethod
+  paymentNote   String?
+  processedById String
+  processedBy   User          @relation("SalesProcessedBy", fields: [processedById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  @@index([itemId])
+}
+
+/// A cash/card/etc. donation taken in person at the table — not tied to any
+/// merch item or event registration, e.g. a walk-up donation box. Recorded
+/// from the Merch tab (where staff are already handling in-person payments)
+/// and rolled into the Cash reconciliation totals alongside donation-tier
+/// registrations and merch sales.
+model Donation {
+  id            String        @id @default(cuid())
+  eventId       String
+  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  amount        Float
+  paymentMethod PaymentMethod
+  note          String?
+  processedById String
+  processedBy   User          @relation("DonationsProcessedBy", fields: [processedById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  @@index([eventId])
+}
+
+/// A code that grants a free, guaranteed-confirmed registration tagged with a
+/// custom badge label — e.g. "Organizer", "Photographer" — set by whoever
+/// creates the code, not a fixed list. Redeemable only through the public web
+/// registration form.
+model VoucherCode {
+  id          String         @id @default(cuid())
+  eventId     String
+  event       Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  code        String         @unique
+  badgeTier   String
+  maxUses     Int            @default(1)
+  /// Atomically incremented via a compare-and-swap update on redemption, same
+  /// pattern as MerchItem.soldCount, so a limited-use code can't be
+  /// double-redeemed by two people at once.
+  usedCount   Int            @default(0)
+  createdAt   DateTime       @default(now())
+
+  redemptions Registration[]
+
+  @@index([eventId])
 }
 
 /// Single-use sign-in codes handed out by the bot. This is how someone signs

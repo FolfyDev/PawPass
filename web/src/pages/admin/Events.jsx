@@ -27,7 +27,7 @@ export default function Events() {
 
       {events?.length === 0 && <Empty title="No events yet">Create one, then publish it when you are ready for sign-ups.</Empty>}
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'auto' }}>
         <table>
           <thead><tr><th>Event</th><th>When</th><th>Registered</th><th>Status</th><th /></tr></thead>
           <tbody>

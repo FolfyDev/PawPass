@@ -89,7 +89,9 @@ a { color: var(--platform); text-decoration-thickness: 1px; text-underline-offse
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--rule);
 }
-.nav-inner { max-width: 1080px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 18px; }
+.nav-inner { max-width: 1080px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; row-gap: 8px; }
+.nav-spacer { flex: 1; }
+@media (max-width: 640px) { .nav-spacer { display: none; } }
 .brand { font-family: var(--display); font-weight: 800; letter-spacing: -.03em; font-size: 18px; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 9px; }
 .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--signal); }
 .brand-banner { height: 32px; width: auto; display: block; }
@@ -118,7 +120,9 @@ a { color: var(--platform); text-decoration-thickness: 1px; text-underline-offse
 /* ---- forms ---- */
 label.field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 input, select, textarea {
-  font: 400 15px/1.4 var(--body);
+  /* iOS Safari zooms the page in on focus for any input under 16px — this is
+     the smallest size that avoids it, not a design choice. */
+  font: 400 16px/1.4 var(--body);
   padding: 11px 12px; border-radius: 10px; border: 1px solid var(--rule);
   background: var(--card); color: var(--ink); width: 100%;
 }
@@ -203,10 +207,25 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 
 /* ---- admin frame ---- */
 .admin { display: grid; grid-template-columns: 210px 1fr; gap: 28px; align-items: start; }
-@media (max-width: 860px) { .admin { grid-template-columns: 1fr; } }
 .side { position: sticky; top: 70px; display: grid; gap: 2px; }
 .side a { display: block; padding: 9px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }
 .side a[aria-current='page'] { background: var(--ink); color: var(--paper); }
+/* Below the breakpoint the sidebar sits above the content instead of beside
+   it, so a tall sticky column of links would either eat the screen or hide
+   content as you scroll — turn it into a wrapped row of pills instead,
+   the same pattern already used for the per-event .tabbar below. */
+@media (max-width: 860px) {
+  .admin { grid-template-columns: 1fr; }
+  .side { position: static; display: flex; flex-wrap: wrap; gap: 6px; }
+  .side .eyebrow { display: none; }
+  .side a { padding: 7px 12px; }
+}
+
+/* ---- per-event sub-nav ---- */
+.tabbar { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; flex-wrap: wrap; }
+.tabbar a { padding: 7px 14px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 600; }
+.tabbar a:hover { background: var(--paper); }
+.tabbar a[aria-current='page'] { background: var(--ink); color: var(--paper); }
 
 /* ---- scanner ---- */
 .scanner { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 1; max-width: 460px; }

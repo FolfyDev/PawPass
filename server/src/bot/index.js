@@ -1,11 +1,20 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, InputFile } from 'grammy';
+import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
+
+/// Telegram doesn't reliably auto-link plain URLs (localhost during local
+/// dev never gets linked at all), so any message with a link is sent with
+/// parse_mode: 'HTML' and an explicit <a> tag instead. Anything interpolated
+/// into one of those messages that isn't meant to be a tag — an event title,
+/// a configurable welcome message — has to go through esc() first.
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const link = (url, text) => `<a href="${esc(url)}">${esc(text ?? url)}</a>`;
 
 /// The web Login Widget hands us `photo_url` directly, but that widget only
 /// works over https on a domain registered with BotFather — useless on a
@@ -44,11 +53,35 @@ const S = {
   CUSTOM: 'custom',   // draft.fieldIndex tracks position
   TIER: 'tier',
   TOS: 'tos',
+  BROADCAST_MESSAGE: 'broadcast_message',
+  BROADCAST_CONFIRM: 'broadcast_confirm',
 };
 
+const BROADCAST_AUDIENCE = {
+  all: { status: { in: ['CONFIRMED', 'WAITLIST'] } },
+  confirmed: { status: 'CONFIRMED' },
+  waitlist: { status: 'WAITLIST' },
+};
+
+/// Created eagerly (rather than inside createBot) so other modules — admin
+/// routes sending a broadcast, waitlist promotion — can reach the same
+/// instance via notifyUser without importing createBot and calling
+/// bot.start() a second time.
+export const bot = env.telegram.enabled ? new Bot(env.telegram.token) : null;
+
+/// Best-effort DM. Never throws: a blocked bot or a stale telegramId should
+/// not fail the caller's own request (a check-in, a cancellation, ...).
+export async function notifyUser(telegramId, text) {
+  if (!bot || !telegramId) return;
+  try {
+    await bot.api.sendMessage(telegramId, text);
+  } catch (e) {
+    console.error('telegram notify failed', telegramId, e.message);
+  }
+}
+
 export function createBot() {
-  if (!env.telegram.enabled) return null;
-  const bot = new Bot(env.telegram.token);
+  if (!bot) return null;
 
   const load = async (ctx) => {
     const telegramId = String(ctx.from.id);
@@ -76,29 +109,49 @@ export function createBot() {
 
   bot.command('start', async (ctx) => {
     const settings = await getSettings();
-    await reset(String(ctx.from.id));
+    const { user, telegramId } = await load(ctx);
+    await reset(telegramId);
     await ctx.reply(
-      `${settings.botWelcome}\n\n` +
+      `${esc(settings.botWelcome)}\n\n` +
       '/register — sign up for an event\n' +
       '/mytickets — show your tickets\n' +
       '/rsvp — say whether you\'re going\n' +
+      '/going — see who else is going\n' +
+      '/merch — see what is for sale\n' +
       '/login — get a code to sign in on the website\n' +
       '/cancel — stop what we are doing\n' +
-      '/help — command list',
+      '/help — command list' +
+      staffCommands(user),
+      { parse_mode: 'HTML' },
     );
   });
 
-  bot.command('help', (ctx) =>
-    ctx.reply(
+  bot.command('help', async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.reply(
       'Commands:\n' +
       '/register — sign up for an event\n' +
       '/mytickets — your tickets and codes\n' +
       '/rsvp — say whether you\'re going, any time\n' +
+      '/going — see who else is going\n' +
+      '/merch — see what is for sale\n' +
       '/login — a one-time code for the website\n' +
       '/accept — accept the terms during registration\n' +
       '/skip — skip an optional question\n' +
-      '/cancel — stop what we are doing',
-    ));
+      '/cancel — stop what we are doing' +
+      staffCommands(user),
+      { parse_mode: 'HTML' },
+    );
+  });
+
+  /// Appended to /start and /help for admins/owners only — kept in one place
+  /// so the two stay in sync as staff-only bot commands are added.
+  const staffCommands = (user) =>
+    isStaff(user) ?
+    '\n\nStaff:' +
+    `\nWeb access the admin panel: ${link(`${env.webUrl}/staff`)}` +
+    '\n/broadcast — message everyone registered for an event'
+    : '';
 
   bot.command('cancel', async (ctx) => {
     await reset(String(ctx.from.id));
@@ -189,11 +242,12 @@ export function createBot() {
       });
       await reset(telegramId);
       await ctx.reply(
-        `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${event.title}.\n\n` +
+        `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${esc(event.title)}.\n\n` +
         `Badge code: ${reg.code}\n` +
-        `Ticket and wallet pass: ${env.webUrl}/tickets\n\n` +
+        `Ticket and wallet pass: ${link(`${env.webUrl}/tickets`)}\n\n` +
         'Bring the QR from that page to check-in. Send /rsvp any time to update whether you\'re going.' +
-        (reg.tier === 'DONATION' ? `\n\nComplete your ${event.donationTierName.toLowerCase()} contribution: ${event.donationPaypalLink}` : ''),
+        (reg.tier === 'DONATION' ? `\n\nComplete your ${esc(event.donationTierName.toLowerCase())} contribution: ${link(event.donationPaypalLink)}` : ''),
+        { parse_mode: 'HTML' },
       );
     } catch (e) {
       await reset(telegramId);
@@ -215,7 +269,8 @@ export function createBot() {
     });
     await ctx.reply(
       `Your sign-in code is:\n\n${code}\n\n` +
-      `Enter it at ${env.webUrl}/login — it works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
+      `Enter it at ${link(`${env.webUrl}/login`)} — it works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
+      { parse_mode: 'HTML' },
     );
   });
 
@@ -227,12 +282,31 @@ export function createBot() {
       orderBy: { createdAt: 'desc' },
     });
     if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(`Show QR — ${r.event.title}`, `ticketqr:${r.id}`);
+      if (i < regs.length - 1) kb.row();
+    });
     await ctx.reply(
       regs.map((r) =>
-        `${r.event.title}\n${r.status === 'WAITLIST' ? 'Waitlist' : 'Confirmed'} — code ${r.code}` +
+        `${esc(r.event.title)}\n${r.status === 'WAITLIST' ? 'Waitlist' : 'Confirmed'} — code ${r.code}` +
         (r.checkedInAt ? '\nChecked in' : '')).join('\n\n') +
-      `\n\nWallet passes: ${env.webUrl}/tickets`,
+      `\n\nWallet passes: ${link(`${env.webUrl}/tickets`)}`,
+      { reply_markup: kb, parse_mode: 'HTML' },
     );
+  });
+
+  bot.callbackQuery(/^ticketqr:(.+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    const reg = await prisma.registration.findUnique({ where: { id: ctx.match[1] }, include: { event: true } });
+    if (!reg || reg.userId !== user.id) return ctx.reply('That ticket is not yours.');
+    const png = await QRCode.toBuffer(`${env.publicUrl}/t/${reg.secret}`, { width: 640, margin: 1 });
+    const caption =
+      `${reg.event.title}\n` +
+      `Ticket number: ${reg.badgeNumber != null ? reg.badgeNumber : 'not assigned yet'}\n` +
+      `Registration code: ${reg.code}`;
+    await ctx.replyWithPhoto(new InputFile(png, `${reg.code}.png`), { caption });
   });
 
   bot.command('rsvp', async (ctx) => {
@@ -280,6 +354,164 @@ export function createBot() {
     await ctx.reply(`${label} Send /rsvp any time to change it.`);
   });
 
+  bot.command('going', async (ctx) => {
+    const { user } = await load(ctx);
+    const regs = await prisma.registration.findMany({
+      where: { userId: user.id, status: { not: 'CANCELLED' } },
+      include: { event: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
+    if (regs.length === 1) return showGoing(ctx, regs[0].event);
+
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(r.event.title, `goingfor:${r.eventId}`);
+      if (i < regs.length - 1) kb.row();
+    });
+    await ctx.reply('Which event?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^goingfor:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    await showGoing(ctx, event);
+  });
+
+  /// Mirrors the signed-in-only /events/:slug/rsvps route on the web — same
+  /// reasoning applies (surfaces Telegram usernames), but everyone the bot
+  /// has ever talked to already clears that bar via load().
+  async function showGoing(ctx, event) {
+    const regs = await prisma.registration.findMany({
+      where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
+      include: { user: true },
+      orderBy: [{ rsvp: 'asc' }, { fursonaName: 'asc' }],
+    });
+    if (!regs.length) return ctx.reply(`Nobody has RSVPed yes or maybe to ${event.title} yet.`);
+    const lines = regs.map((r) => {
+      const name = r.fursonaName || r.user.displayName;
+      const tag = r.user.telegramUsername ? ` (@${r.user.telegramUsername})` : '';
+      return `${r.rsvp === 'MAYBE' ? '· maybe — ' : '· '}${name}${tag}`;
+    });
+    await ctx.reply(`Going to ${event.title}:\n\n${lines.join('\n')}`);
+  }
+
+  bot.command('merch', async (ctx) => {
+    const { user } = await load(ctx);
+    const regs = await prisma.registration.findMany({
+      where: { userId: user.id, status: { not: 'CANCELLED' } },
+      include: { event: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
+    if (regs.length === 1) return showMerch(ctx, regs[0].event);
+
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(r.event.title, `merchfor:${r.eventId}`);
+      if (i < regs.length - 1) kb.row();
+    });
+    await ctx.reply('Which event?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^merchfor:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    await showMerch(ctx, event);
+  });
+
+  async function showMerch(ctx, event) {
+    const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
+    if (!items.length) return ctx.reply(`Nothing for sale at ${event.title} yet.`);
+    const lines = items.map((i) => {
+      const remaining = Math.max(i.maxCount - i.soldCount, 0);
+      const price = i.price != null ? ` — $${Number(i.price).toFixed(2)}` : '';
+      return `· ${i.name}${price} (${remaining > 0 ? `${remaining} left` : 'sold out'})`;
+    });
+    await ctx.reply(`Merch at ${event.title}:\n\n${lines.join('\n')}`);
+  }
+
+  /* ---------------- admin: broadcast ---------------- */
+
+  const isStaff = (user) => user.role === 'ADMIN' || user.role === 'OWNER';
+
+  bot.command('broadcast', async (ctx) => {
+    const { user } = await load(ctx);
+    if (!isStaff(user)) return;
+    const events = await prisma.event.findMany({ orderBy: { startsAt: 'desc' }, take: 20 });
+    if (!events.length) return ctx.reply('There are no events yet.');
+    const kb = new InlineKeyboard();
+    events.forEach((e, i) => {
+      kb.text(e.title, `bcastevent:${e.id}`);
+      if (i < events.length - 1) kb.row();
+    });
+    await ctx.reply('Broadcast to attendees of which event?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^bcastevent:(.+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (!isStaff(user)) return;
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    const kb = new InlineKeyboard()
+      .text('Everyone', `bcastaudience:${event.id}:all`).row()
+      .text('Confirmed only', `bcastaudience:${event.id}:confirmed`).row()
+      .text('Waitlist only', `bcastaudience:${event.id}:waitlist`);
+    await ctx.reply(`Who should receive this for ${event.title}?`, { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^bcastaudience:(.+):(all|confirmed|waitlist)$/, async (ctx) => {
+    const { user, telegramId } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (!isStaff(user)) return;
+    const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
+    if (!event) return ctx.reply('That event is gone.');
+    const audience = ctx.match[2];
+    const count = await prisma.registration.count({
+      where: { eventId: event.id, ...BROADCAST_AUDIENCE[audience], user: { telegramId: { not: null } } },
+    });
+    if (!count) return ctx.reply('Nobody in that group has a Telegram account on file.');
+    await save(telegramId, S.BROADCAST_MESSAGE, { eventId: event.id, audience });
+    await ctx.reply(
+      `This will reach ${count} ${count === 1 ? 'person' : 'people'} for ${event.title}. ` +
+      'Send the message now, or /cancel to stop.',
+    );
+  });
+
+  bot.callbackQuery('bcastsend', async (ctx) => {
+    const { session, user, telegramId, draft } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (!isStaff(user)) return;
+    if (session.state !== S.BROADCAST_CONFIRM) return ctx.reply('There is nothing queued. Send /broadcast to start.');
+    await reset(telegramId);
+    const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+    if (!event) return ctx.reply('That event is gone.');
+    const recipients = await prisma.registration.findMany({
+      where: { eventId: event.id, ...BROADCAST_AUDIENCE[draft.audience], user: { telegramId: { not: null } } },
+      include: { user: true },
+    });
+    let sent = 0;
+    for (const reg of recipients) {
+      try {
+        await bot.api.sendMessage(reg.user.telegramId, `📣 ${event.title}\n\n${draft.message}`);
+        sent++;
+      } catch (e) {
+        console.error('broadcast failed', reg.user.telegramId, e.message);
+      }
+    }
+    await ctx.reply(`Sent to ${sent} of ${recipients.length}.`);
+  });
+
+  bot.callbackQuery('bcastcancel', async (ctx) => {
+    const { telegramId } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    await reset(telegramId);
+    await ctx.reply('Broadcast cancelled.');
+  });
+
   bot.command('skip', (ctx) => handleText(ctx, ''));
   bot.on('message:text', (ctx) => handleText(ctx, ctx.message.text.trim()));
 
@@ -312,6 +544,15 @@ export function createBot() {
         if (field.required && !text) return ctx.reply(`${field.label} is required.`);
         if (text) draft.answers[field.key] = text;
         return askCustom(draft.fieldIndex + 1);
+      }
+      case S.BROADCAST_MESSAGE: {
+        if (!text) return ctx.reply('Send some text to broadcast, or /cancel to stop.');
+        const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+        if (!event) { await reset(telegramId); return ctx.reply('That event is gone.'); }
+        draft.message = text;
+        await save(telegramId, S.BROADCAST_CONFIRM, draft);
+        const kb = new InlineKeyboard().text('Send it', 'bcastsend').text('Cancel', 'bcastcancel');
+        return ctx.reply(`Preview:\n\n${text}\n\nSend this to ${event.title}?`, { reply_markup: kb });
       }
       default:
         return ctx.reply('Send /register to sign up, or /mytickets to see your codes.');

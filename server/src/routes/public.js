@@ -3,10 +3,11 @@ import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { requireUser } from '../lib/auth.js';
-import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
+import { requireUser, issueToken, setSessionCookie } from '../lib/auth.js';
+import { createRegistration, RegistrationError, registrationWindowState, promoteFromWaitlist, findOrCreateHeadlessUser } from '../lib/registrations.js';
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
+import { notifyUser } from '../bot/index.js';
 
 export const publicRouter = Router();
 
@@ -16,6 +17,7 @@ publicRouter.get('/settings', async (_req, res) => {
     ...s,
     wallet: { apple: env.apple.enabled, google: env.google.enabled },
     telegramBot: env.telegram.username,
+    printMode: env.zebra.mode,
   });
 });
 
@@ -45,6 +47,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     ...summarize(event), description: event.description, tosTitle: event.tosTitle, tosBody: event.tosBody,
     customFields: event.customFields, state, registration: mine && shapeReg(mine),
     donationTierName: event.donationTierName, donationPaypalLink: event.donationPaypalLink,
+    donationRequired: event.donationRequired,
   });
 });
 
@@ -66,26 +69,58 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
   })));
 });
 
-publicRouter.post('/events/:slug/register', requireUser, async (req, res) => {
+/// Read-only availability for signed-in attendees — same bar as /rsvps above
+/// (anyone who can sign in already clears it). Sales are always recorded by
+/// staff in person; there is no self-checkout here.
+publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
+  res.json(items.map((i) => ({ id: i.id, name: i.name, price: i.price, remaining: Math.max(i.maxCount - i.soldCount, 0) })));
+});
+
+/// No requireUser gate — someone with no Telegram and no account yet can
+/// still register. When there's no signed-in user, this creates one (like
+/// the admin walk-up flow already does) and signs them in immediately, same
+/// as any other login path, so there's no separate "log back in" step.
+publicRouter.post('/events/:slug/register', async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
-  const { legalName, fursonaName, email, answers, acceptedTos, tier } = req.body || {};
+  const { legalName, fursonaName, email, answers, acceptedTos, tier, voucherCode } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your full legal name.' });
 
+  let user = req.user;
+  let guest = false;
+  if (!user) {
+    if (!email || !/^\S+@\S+\.\S+$/.test(email))
+      return res.status(400).json({ error: 'Enter an email address so you can get back into your account later.' });
+    const normalized = String(email).trim().toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email: normalized } });
+    if (existing) return res.status(409).json({ error: 'An account already exists with that email. Sign in first.' });
+    try {
+      user = await findOrCreateHeadlessUser({ eventId: event.id, legalName, fursonaName, email: normalized });
+    } catch (e) {
+      if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
+    guest = true;
+  }
+
   try {
     const reg = await createRegistration({
-      event, user: req.user,
-      legalName, fursonaName, email, answers, tier,
+      event, user,
+      legalName, fursonaName, email, answers, tier, voucherCode,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });
     await prisma.user.update({
-      where: { id: req.user.id },
+      where: { id: user.id },
       data: { legalName: reg.legalName, fursonaName: reg.fursonaName, email: reg.email ?? undefined },
     });
+    if (guest) setSessionCookie(res, issueToken(user));
     res.json(shapeReg(reg));
   } catch (e) {
     if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
@@ -116,6 +151,13 @@ publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
   await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
+  const promoted = await promoteFromWaitlist(reg.eventId);
+  if (promoted?.user.telegramId) {
+    await notifyUser(promoted.user.telegramId,
+      `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
+      `Badge code: ${promoted.code}\n` +
+      `Ticket and wallet pass: ${env.webUrl}/tickets`);
+  }
   res.json({ ok: true });
 });
 
@@ -163,6 +205,8 @@ export function shapeReg(r) {
     email: r.email, answers: r.answers, checkedInAt: r.checkedInAt, createdAt: r.createdAt,
     qrUrl: `${env.publicUrl}/t/${r.secret}`,
     tier: r.tier, badgeNumber: r.badgeNumber, rsvp: r.rsvp,
+    paymentMethod: r.paymentMethod, paymentAmount: r.paymentAmount, paymentNote: r.paymentNote,
+    badgeTier: r.badgeTier,
   };
 }
 
