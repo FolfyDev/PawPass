@@ -2,6 +2,8 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs/promises';
+import AdmZip from 'adm-zip';
 import { nanoid } from 'nanoid';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
@@ -34,7 +36,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationTierName','donationPaypalLink'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationTierName','donationPaypalLink','donationRequired'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -609,6 +611,79 @@ adminRouter.put('/settings', async (req, res) => {
 adminRouter.get('/audit', async (_req, res) => {
   const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
   res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
+});
+
+/* ---------------- backup & restore (owner only) ---------------- */
+
+// Parent-before-child order — this is also the order rows get recreated in on
+// restore. Deletion (on restore, before recreating) runs the reverse of this.
+const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'voucherCode', 'merchItem', 'registration', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_VERSION = 1;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
+
+adminRouter.get('/backup', requireOwner, async (req, res) => {
+  const data = {};
+  for (const key of BACKUP_MODELS) data[key] = await prisma[key].findMany();
+
+  const zip = new AdmZip();
+  zip.addFile('data.json', Buffer.from(JSON.stringify({ meta: { version: BACKUP_VERSION, exportedAt: new Date().toISOString() }, data }, null, 2)));
+
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  try {
+    for (const name of await fs.readdir(uploadsDir)) {
+      const full = path.join(uploadsDir, name);
+      if ((await fs.stat(full)).isFile()) zip.addLocalFile(full, 'uploads');
+    }
+  } catch { /* no uploads directory yet — fine, the backup just has none */ }
+
+  await audit(req.user.id, 'backup.create', null, {});
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.type('application/zip').set('Content-Disposition', `attachment; filename="pawpass-backup-${stamp}.zip"`).send(zip.toBuffer());
+});
+
+const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 300 * 1024 * 1024 } });
+
+/// Replaces every row this app manages with whatever the uploaded backup
+/// contains — genuinely destructive, which is why this route (and the /backup
+/// one above) requires requireOwner on top of the router's own requireAdmin.
+adminRouter.post('/restore', requireOwner, restoreUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No backup file received.' });
+
+  let zip;
+  try { zip = new AdmZip(req.file.buffer); } catch { return res.status(400).json({ error: 'That file is not a valid zip archive.' }); }
+
+  const dataEntry = zip.getEntry('data.json');
+  if (!dataEntry) return res.status(400).json({ error: 'That zip does not look like a PawPass backup — no data.json inside.' });
+
+  let parsed;
+  try { parsed = JSON.parse(dataEntry.getData().toString('utf8'), reviveDates); }
+  catch { return res.status(400).json({ error: 'data.json in that backup is not valid JSON.' }); }
+
+  if (parsed?.meta?.version !== BACKUP_VERSION)
+    return res.status(400).json({ error: `Unsupported backup version (${parsed?.meta?.version ?? 'unknown'}) — expected ${BACKUP_VERSION}.` });
+
+  const counts = {};
+  await prisma.$transaction(async (tx) => {
+    for (const key of [...BACKUP_MODELS].reverse()) await tx[key].deleteMany({});
+    for (const key of BACKUP_MODELS) {
+      const rows = parsed.data[key] || [];
+      if (rows.length) await tx[key].createMany({ data: rows });
+      counts[key] = rows.length;
+    }
+  }, { timeout: 60000 });
+
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  await fs.mkdir(uploadsDir, { recursive: true });
+  const fileEntries = zip.getEntries().filter((en) => en.entryName.startsWith('uploads/') && !en.isDirectory);
+  for (const entry of fileEntries) await fs.writeFile(path.join(uploadsDir, path.basename(entry.entryName)), entry.getData());
+
+  // The signed-in owner's own row may not exist in a backup taken from a
+  // different instance — don't let a failed audit write mask a successful
+  // restore with a confusing 500.
+  try { await audit(req.user.id, 'backup.restore', null, { counts }); } catch { /* actor not in restored data */ }
+
+  res.json({ ok: true, counts, filesRestored: fileEntries.length });
 });
 
 const csv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;

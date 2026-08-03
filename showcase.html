@@ -1,0 +1,317 @@
+<title>PawPass — Registration, Badges & the Door, All in One Ticket</title>
+<meta name="description" content="PawPass turns event registration into a single self-hosted system: Telegram or web sign-up, printed badges with wallet passes, onsite kiosk and merch tracking, and a staff toolkit for the door.">
+<style>
+  :root {
+    --paper: #f7f6f3;
+    --card: #ffffff;
+    --ink: #141b24;
+    --ink-2: #4b5766;
+    --ink-3: #8b96a5;
+    --rule: #dfe3e8;
+    --platform: #1f4fd8;
+    --signal: #ff5b04;
+    --go: #0f7a52;
+
+    --radius: 10px;
+    --notch: 12px;
+    --shadow: 0 1px 0 rgba(20,27,36,.04), 0 1px 3px rgba(20,27,36,.08);
+    --shadow-lift: 0 2px 0 rgba(20,27,36,.05), 0 20px 40px -20px rgba(20,27,36,.35);
+
+    --display: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", "Consolas", monospace;
+    --body: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0b0d10;
+      --card: #14171c;
+      --ink: #f2f4f7;
+      --ink-2: #a7b0bc;
+      --ink-3: #6b7480;
+      --rule: #262b33;
+      --platform: #7c9bff;
+      --go: #35c98d;
+      --shadow: 0 1px 0 rgba(0,0,0,.3), 0 1px 3px rgba(0,0,0,.5);
+      --shadow-lift: 0 2px 0 rgba(0,0,0,.3), 0 24px 48px -20px rgba(0,0,0,.75);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0b0d10; --card: #14171c; --ink: #f2f4f7; --ink-2: #a7b0bc; --ink-3: #6b7480;
+    --rule: #262b33; --platform: #7c9bff; --go: #35c98d;
+    --shadow: 0 1px 0 rgba(0,0,0,.3), 0 1px 3px rgba(0,0,0,.5);
+    --shadow-lift: 0 2px 0 rgba(0,0,0,.3), 0 24px 48px -20px rgba(0,0,0,.75);
+  }
+  :root[data-theme="light"] {
+    --paper: #f7f6f3; --card: #ffffff; --ink: #141b24; --ink-2: #4b5766; --ink-3: #8b96a5;
+    --rule: #dfe3e8; --platform: #1f4fd8; --go: #0f7a52;
+    --shadow: 0 1px 0 rgba(20,27,36,.04), 0 1px 3px rgba(20,27,36,.08);
+    --shadow-lift: 0 2px 0 rgba(20,27,36,.05), 0 20px 40px -20px rgba(20,27,36,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--body); font-size: 16px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  img, svg { max-width: 100%; display: block; }
+  a { color: var(--platform); }
+  :focus-visible { outline: 2px solid var(--platform); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 88px 0; border-bottom: 1px solid var(--rule); }
+  section:last-of-type { border-bottom: none; }
+
+  .eyebrow {
+    font-family: var(--display); font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 14px;
+  }
+  h1, h2, h3 { font-family: var(--body); font-weight: 800; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  h2 { font-size: clamp(26px, 4vw, 36px); margin-bottom: 16px; }
+  p { max-width: 62ch; color: var(--ink-2); }
+  p.lede { font-size: 19px; line-height: 1.65; color: var(--ink-2); }
+  .mono { font-family: var(--display); }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* ---- hero ---- */
+  .hero { padding: 72px 0 64px; border-bottom: 1px solid var(--rule); }
+  .hero-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: center; }
+  @media (max-width: 780px) { .hero-grid { grid-template-columns: 1fr; gap: 44px; } }
+  .wordmark { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
+  .wordmark .mark { width: 26px; height: 26px; border-radius: 7px; background: var(--signal); flex: none; }
+  .wordmark span { font-family: var(--display); font-weight: 700; font-size: 15px; letter-spacing: .04em; }
+  .hero h1 {
+    font-size: clamp(38px, 6vw, 58px); line-height: 1.03; margin-bottom: 22px;
+  }
+  .hero h1 em { font-style: normal; color: var(--signal); }
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 32px; }
+  .btn {
+    font: 700 14px/1 var(--display); letter-spacing: .02em;
+    padding: 14px 22px; border-radius: 8px; border: 1px solid var(--ink);
+    background: var(--ink); color: var(--paper); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: transform .1s ease, opacity .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); opacity: .92; }
+  .btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+  .btn.signal { background: var(--signal); border-color: var(--signal); color: #fff; }
+
+  /* ---- ticket / badge mockup ---- */
+  .ticket {
+    background: var(--ink); color: var(--paper); border-radius: var(--radius);
+    box-shadow: var(--shadow-lift); overflow: hidden; position: relative;
+    transform: rotate(1.2deg);
+  }
+  .ticket-face { padding: 22px 22px 18px; display: grid; gap: 14px; min-height: 190px; }
+  .ticket-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .ticket-no { font-family: var(--display); font-size: 12px; letter-spacing: .08em; opacity: .75; }
+  .ticket-name { font-family: var(--body); font-weight: 800; font-size: 30px; letter-spacing: -.01em; line-height: 1.05; }
+  .ticket-sub { font-family: var(--display); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .6; }
+  .ticket-strip {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 46px; background: var(--signal);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ticket-strip span {
+    font-family: var(--display); font-weight: 700; font-size: 12px; letter-spacing: .3em;
+    color: #fff; transform: rotate(90deg); white-space: nowrap;
+  }
+  .ticket-tear {
+    height: 0; border-top: 2px dashed rgba(247,246,243,.25); margin: 0 22px; position: relative;
+  }
+  .qr-fake { width: 58px; height: 58px; background: #fff; border-radius: 4px; padding: 5px; }
+  .qr-fake svg { width: 100%; height: 100%; }
+
+  /* ---- departures board ---- */
+  .board { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--card); box-shadow: var(--shadow); }
+  .board-row {
+    display: grid; grid-template-columns: 96px 1fr auto; gap: 18px; align-items: center;
+    padding: 18px 20px; border-bottom: 1px solid var(--rule);
+    animation: flap .5s ease backwards;
+  }
+  .board-row:last-child { border-bottom: none; }
+  .board-row:hover { background: color-mix(in srgb, var(--platform) 5%, transparent); }
+  @keyframes flap {
+    from { opacity: 0; transform: scaleY(.4); filter: blur(2px); }
+    to { opacity: 1; transform: scaleY(1); filter: blur(0); }
+  }
+  .board-code { font-family: var(--display); font-weight: 700; font-size: 13px; letter-spacing: .06em; color: var(--signal); }
+  .board-feature { font-weight: 700; font-size: 15.5px; }
+  .board-detail { margin: 3px 0 0; font-size: 13.5px; color: var(--ink-2); max-width: 46ch; }
+  .board-tag {
+    font-family: var(--display); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 5px 9px; border-radius: 5px; border: 1px solid var(--rule); color: var(--ink-2); white-space: nowrap;
+  }
+  .board-tag.on { color: var(--go); border-color: color-mix(in srgb, var(--go) 40%, var(--rule)); }
+  @media (max-width: 620px) {
+    .board-row { grid-template-columns: 1fr; gap: 6px; }
+    .board-code { order: -1; }
+  }
+
+  /* ---- two-column feature pairs ---- */
+  .pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 36px; }
+  @media (max-width: 720px) { .pair-grid { grid-template-columns: 1fr; } }
+  .pane {
+    border: 1px solid var(--rule); border-radius: var(--radius); padding: 26px; background: var(--card);
+  }
+  .pane h3 { font-size: 17px; margin-bottom: 10px; }
+  .pane p { font-size: 14.5px; margin: 0; }
+  .pane .eyebrow { margin-bottom: 10px; }
+
+  /* ---- route line ---- */
+  .route { display: flex; align-items: center; gap: 0; margin: 44px 0 8px; }
+  .route .stop { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--signal); background: var(--paper); }
+  .route .stop.filled { background: var(--signal); }
+  .route .seg { flex: 1; height: 2px; background: repeating-linear-gradient(90deg, var(--rule) 0 6px, transparent 6px 12px); }
+  .route-labels { display: flex; justify-content: space-between; font-family: var(--display); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-top: 8px; }
+
+  /* ---- stat rail ---- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; margin-top: 40px; }
+  @media (max-width: 680px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--card); padding: 24px 18px; }
+  .stat .n { font-family: var(--display); font-weight: 700; font-size: 26px; }
+  .stat .l { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+
+  /* ---- footer ---- */
+  footer { padding: 56px 0 64px; }
+  .stub-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 18px; }
+  .stub-foot p { margin: 0; font-size: 13px; color: var(--ink-3); }
+  .stub-foot .mono { font-size: 12px; }
+</style>
+
+<main class="wrap hero">
+  <div class="hero-grid">
+    <div>
+      <div class="wordmark"><span class="mark"></span><span>PAWPASS</span></div>
+      <h1>One ticket.<br>The whole <em>door.</em></h1>
+      <p class="lede">Registration, printed badges, wallet passes, onsite sales, and the people running the table — one self-hosted system instead of five disconnected tools stitched together for the weekend.</p>
+      <div class="cta-row">
+        <a class="btn signal" href="#board">See what's inside</a>
+        <a class="btn ghost" href="#self-hosted">Run your own</a>
+      </div>
+    </div>
+    <div class="ticket" role="img" aria-label="Sample event badge for Fox Alder, ticket K4M2-9XQ7">
+      <div class="ticket-face">
+        <div class="ticket-top">
+          <span class="ticket-no mono tnum">NO. 042</span>
+          <div class="qr-fake" aria-hidden="true">
+            <svg viewBox="0 0 29 29"><rect width="29" height="29" fill="#fff"/>
+              <rect x="0" y="0" width="7" height="7" fill="#141b24"/><rect x="2" y="2" width="3" height="3" fill="#fff"/>
+              <rect x="22" y="0" width="7" height="7" fill="#141b24"/><rect x="24" y="2" width="3" height="3" fill="#fff"/>
+              <rect x="0" y="22" width="7" height="7" fill="#141b24"/><rect x="2" y="24" width="3" height="3" fill="#fff"/>
+              <rect x="10" y="1" width="2" height="2" fill="#141b24"/><rect x="14" y="1" width="2" height="4" fill="#141b24"/>
+              <rect x="9" y="10" width="4" height="2" fill="#141b24"/><rect x="16" y="9" width="2" height="6" fill="#141b24"/>
+              <rect x="20" y="11" width="3" height="3" fill="#141b24"/><rect x="9" y="16" width="2" height="5" fill="#141b24"/>
+              <rect x="13" y="17" width="5" height="2" fill="#141b24"/><rect x="20" y="18" width="4" height="4" fill="#141b24"/>
+              <rect x="12" y="22" width="3" height="3" fill="#141b24"/><rect x="17" y="23" width="2" height="2" fill="#141b24"/>
+            </svg>
+          </div>
+        </div>
+        <div>
+          <div class="ticket-name">Fox&nbsp;Alder</div>
+          <div class="ticket-sub mono">Alex Kowalski · Organizer</div>
+        </div>
+      </div>
+      <div class="ticket-tear"></div>
+      <div class="ticket-face" style="min-height:auto; padding-top:14px;">
+        <div class="ticket-sub mono">Redline FurRide · Sat 12 Sep</div>
+      </div>
+      <div class="ticket-strip" aria-hidden="true"><span>ORGANIZER</span></div>
+    </div>
+  </div>
+</main>
+
+<section id="board">
+  <div class="wrap">
+    <p class="eyebrow">Departures</p>
+    <h2>Everything that used to be a spreadsheet</h2>
+    <p class="lede" style="margin-bottom:36px;">Six things a con or meetup usually cobbles together from separate tools, running instead as one system that already knows about every attendee.</p>
+    <div class="board">
+      <div class="board-row" style="animation-delay:.02s">
+        <span class="board-code mono">REG</span>
+        <div><div class="board-feature">Registration, two ways in</div><p class="board-detail">Sign up on the website or entirely inside Telegram — same event, same waitlist, same badge on the other end.</p></div>
+        <span class="board-tag on">No account needed</span>
+      </div>
+      <div class="board-row" style="animation-delay:.08s">
+        <span class="board-code mono">BDG</span>
+        <div><div class="board-feature">Badges &amp; wallet passes</div><p class="board-detail">A QR-coded badge rendered from a layout you design, plus Apple/Google Wallet passes attendees add with one tap.</p></div>
+        <span class="board-tag">Print &amp; digital</span>
+      </div>
+      <div class="board-row" style="animation-delay:.14s">
+        <span class="board-code mono">KSK</span>
+        <div><div class="board-feature">Kiosk mode</div><p class="board-detail">A walk-up desk for the day of — take a name, log the cash or card, print the badge, reset for the next person.</p></div>
+        <span class="board-tag">At the door</span>
+      </div>
+      <div class="board-row" style="animation-delay:.2s">
+        <span class="board-code mono">MER</span>
+        <div><div class="board-feature">Merch &amp; donations</div><p class="board-detail">Stock counts that can't oversell, a sales log per item, and a spot to record cash donations that aren't tied to a purchase.</p></div>
+        <span class="board-tag">Table-side</span>
+      </div>
+      <div class="board-row" style="animation-delay:.26s">
+        <span class="board-code mono">VCH</span>
+        <div><div class="board-feature">Voucher codes</div><p class="board-detail">Hand out a code for "Organizer" or "Photographer" — it prints on the badge and skips the line, capacity included.</p></div>
+        <span class="board-tag">Custom badge tiers</span>
+      </div>
+      <div class="board-row" style="animation-delay:.32s">
+        <span class="board-code mono">CSH</span>
+        <div><div class="board-feature">Cash reconciliation</div><p class="board-detail">Door donations and table sales land in one ledger, broken out by payment method, exportable at the end of the night.</p></div>
+        <span class="board-tag on">Reconciled</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">One identity, two doors</p>
+    <h2>Telegram or the web — it's the same ticket</h2>
+    <p class="lede">Most attendees register from chat without ever loading a page. Anyone who'd rather not touch Telegram at all can register straight from the browser instead, no account required up front.</p>
+    <div class="route">
+      <span class="stop filled"></span><span class="seg"></span><span class="stop"></span><span class="seg"></span><span class="stop filled"></span>
+    </div>
+    <div class="route-labels"><span>/register in chat</span><span>or the web form</span><span>one confirmed badge</span></div>
+    <div class="pair-grid">
+      <div class="pane">
+        <p class="eyebrow">Via Telegram</p>
+        <h3>/register, /mytickets, /rsvp</h3>
+        <p>The bot walks through name, custom questions, and terms, then hands back a QR code and a badge number right in the chat — no separate login step.</p>
+      </div>
+      <div class="pane">
+        <p class="eyebrow">Via the web</p>
+        <h3>Guest checkout, real account</h3>
+        <p>Fill out the form, get registered, and set a password afterward if you want back in later. Telegram can still be linked from the account page any time.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Behind the badge</p>
+    <h2>Built for whoever's standing at the door</h2>
+    <p class="lede">A camera-based scanner for check-in and reprints, an audit log of who did what, staff broadcast messages sent straight to Telegram, and role-gated admin access — the parts that matter once the event is actually running.</p>
+    <div class="stats">
+      <div class="stat"><div class="n mono tnum">1</div><div class="l">Camera scan → checked in &amp; printed</div></div>
+      <div class="stat"><div class="n mono tnum">∞</div><div class="l">Custom badge fields per event</div></div>
+      <div class="stat"><div class="n mono tnum">3</div><div class="l">Roles — member, staff, owner</div></div>
+      <div class="stat"><div class="n mono tnum">0</div><div class="l">Spreadsheets required</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="self-hosted">
+  <div class="wrap">
+    <p class="eyebrow">Self-hosted</p>
+    <h2>Your event, your database</h2>
+    <p class="lede">One <span class="mono">docker compose up</span> away: Postgres for the data, a Node API, a React front end, and a Telegram bot, all running on infrastructure you control. No per-attendee fee, no third party holding your registrant list.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="stub-foot">
+      <p class="mono">PawPass · Mobile Event Management</p>
+      <p class="mono">Self-hosted registration for community events</p>
+    </div>
+  </div>
+</footer>

@@ -69,6 +69,12 @@ export default function EventPage() {
       setShowTos(false);
       // Gate on the server's actual result, not the pre-submit form state — a
       // voucher code can override a Donation pick to a free confirmed spot.
+      if (reg.tier === 'DONATION' && event.donationPaypalLink && event.donationRequired) {
+        // Payment isn't optional here — take over the tab instead of opening
+        // a second one the attendee might not notice.
+        window.location.href = event.donationPaypalLink;
+        return;
+      }
       if (reg.tier === 'DONATION' && event.donationPaypalLink) {
         window.open(event.donationPaypalLink, '_blank', 'noopener');
       }
@@ -179,7 +185,9 @@ export default function EventPage() {
                 </Field>
               ))}
 
-              {event.donationPaypalLink && event.state.open && (
+              {event.donationRequired ? (
+                <p className="note">This event requires payment — you'll be sent to complete it right after registering.</p>
+              ) : event.donationPaypalLink && event.state.open && (
                 <Field label="Tier">
                   <div className="tiers">
                     <button type="button" className={`tier${form.tier === 'FREE' ? ' selected' : ''}`}

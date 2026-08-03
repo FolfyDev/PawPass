@@ -61,7 +61,7 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
     });
     const state = registrationWindowState(event, confirmedCount);
     if (!state.open) throw new RegistrationError(state.reason);
-    chosenTier = tier === 'DONATION' ? 'DONATION' : 'FREE';
+    chosenTier = event.donationRequired ? 'DONATION' : tier === 'DONATION' ? 'DONATION' : 'FREE';
     if (chosenTier === 'DONATION' && !event.donationPaypalLink)
       throw new RegistrationError('The donation tier is not available for this event.');
     status = state.waitlist ? 'WAITLIST' : 'CONFIRMED';

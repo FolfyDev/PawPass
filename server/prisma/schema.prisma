@@ -84,6 +84,10 @@ model Event {
   /// Fixed two-tier model: everyone can register free; this is the paid/optional tier.
   donationTierName String         @default("Supporter")
   donationPaypalLink String?      // null = donation tier is hidden for this event
+  /// When true, the free option is hidden entirely and every registration is
+  /// treated as paid (short of a voucher override) — for a special add-on
+  /// registration that always costs money, e.g. an after-party.
+  donationRequired Boolean        @default(false)
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())

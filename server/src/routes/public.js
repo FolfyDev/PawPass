@@ -47,6 +47,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     ...summarize(event), description: event.description, tosTitle: event.tosTitle, tosBody: event.tosBody,
     customFields: event.customFields, state, registration: mine && shapeReg(mine),
     donationTierName: event.donationTierName, donationPaypalLink: event.donationPaypalLink,
+    donationRequired: event.donationRequired,
   });
 });
 

@@ -21,6 +21,7 @@ import AdminEmail from './pages/admin/Email.jsx';
 import AdminStaff from './pages/admin/Staff.jsx';
 import AdminAuditLog from './pages/admin/AuditLog.jsx';
 import AdminSettings from './pages/admin/Settings.jsx';
+import AdminBackup from './pages/admin/Backup.jsx';
 
 export default function App() {
   const { user, settings, isStaff, logout, loading } = useSession();
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="staff" element={<AdminStaff />} />
             <Route path="audit" element={<AdminAuditLog />} />
             <Route path="settings" element={<AdminSettings />} />
+            <Route path="backup" element={<AdminBackup />} />
           </Route>
           <Route path="*" element={<p style={{ paddingTop: 40 }}>That page does not exist. <Link to="/">Back to events</Link>.</p>} />
         </Routes>

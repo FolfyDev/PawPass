@@ -19,6 +19,7 @@ export default function AdminLayout() {
         <NavLink to="/admin/staff">Staff</NavLink>
         <NavLink to="/admin/audit">Audit log</NavLink>
         <NavLink to="/admin/settings">Settings</NavLink>
+        <NavLink to="/admin/backup">Backup &amp; restore</NavLink>
       </aside>
       <div><Outlet /></div>
     </div>

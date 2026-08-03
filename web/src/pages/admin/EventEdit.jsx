@@ -114,6 +114,13 @@ export default function EventEdit() {
               <input type="url" placeholder="https://paypal.me/…" value={e.donationPaypalLink || ''} onChange={(ev) => set('donationPaypalLink', ev.target.value || null)} />
             </Field>
           </div>
+          <label className="row small">
+            <input type="checkbox" checked={!!e.donationRequired} onChange={(ev) => set('donationRequired', ev.target.checked)} />
+            Require payment for this event (hides the free option — for a paid add-on like an after-party)
+          </label>
+          {e.donationRequired && !e.donationPaypalLink && (
+            <p className="note bad" style={{ margin: 0 }}>Add a PayPal link above, or registration will complete with nowhere to send people to pay.</p>
+          )}
         </section>
 
         <section className="card stack">
