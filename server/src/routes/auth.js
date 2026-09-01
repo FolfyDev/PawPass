@@ -1,11 +1,26 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, localDevAuthAvailable } from '../lib/auth.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 
 export const authRouter = Router();
+
+/// Guards the two doors an attacker can actually brute-force offline-style —
+/// a chosen password, or a login code — since neither is HMAC-verified like
+/// the Telegram widget callback is. Keyed by req.ip, which is only meaningful
+/// once nginx forwards the real client IP (see nginx.conf) and trust proxy
+/// is set correctly (index.js) — otherwise every request looks like it comes
+/// from the same upstream proxy and this would throttle everyone at once.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Wait a while and try again.' },
+});
 
 authRouter.get('/config', (_req, res) => {
   res.json({
@@ -43,7 +58,7 @@ authRouter.post('/telegram', async (req, res) => {
 /// regular members alike. Members get a password by registering for an event
 /// as a guest (see public.js) or by adding one from the Account page; either
 /// way, an account with no passwordHash simply can't use this door.
-authRouter.post('/password', async (req, res) => {
+authRouter.post('/password', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   const user = await prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
   if (!user?.passwordHash || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
@@ -98,7 +113,7 @@ authRouter.post('/set-password', requireUser, async (req, res) => {
 /// Sign in with a code the bot handed out. Works over plain HTTP and needs no
 /// registered domain, so this is the local-testing path — and a reasonable
 /// production path for anyone who dislikes the widget's third-party script.
-authRouter.post('/telegram-code', async (req, res) => {
+authRouter.post('/telegram-code', loginLimiter, async (req, res) => {
   const code = String(req.body.code || '').trim().toUpperCase();
   if (!code) return res.status(400).json({ error: 'Enter the code the bot sent you.' });
 

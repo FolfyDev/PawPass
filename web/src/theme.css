@@ -44,8 +44,10 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
+html { overflow-x: hidden; }
 body {
   margin: 0;
+  overflow-x: hidden;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--body);
@@ -54,6 +56,7 @@ body {
   -webkit-font-smoothing: antialiased;
   transition: background-color .15s ease, color .15s ease;
 }
+img { max-width: 100%; height: auto; }
 
 h1, h2, h3 { font-family: var(--display); font-weight: 800; letter-spacing: -.02em; margin: 0 0 .4em; }
 h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.05; }
@@ -76,7 +79,10 @@ a { color: var(--platform); text-decoration-thickness: 1px; text-underline-offse
 .mono { font-family: var(--mono); }
 
 .shell { max-width: 1080px; margin: 0 auto; padding: 0 20px 80px; }
-.stack { display: grid; gap: 16px; }
+/* min-width:0 so a wide child (a table, a long unbroken code string) scrolls
+   inside its own overflow wrapper instead of forcing this grid track past
+   the viewport — see the longer note on .admin-content below. */
+.stack { display: grid; gap: 16px; min-width: 0; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .spread { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .muted { color: var(--ink-2); }
@@ -130,7 +136,8 @@ textarea { min-height: 110px; resize: vertical; }
 input[type='checkbox'] { width: auto; }
 input[type='file'] { border: 1px dashed var(--rule); padding: 9px 10px; font-size: 13px; }
 .help { font-weight: 400; color: var(--ink-3); font-size: 12.5px; }
-.grid-2 { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
+.grid-2 { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; min-width: 0; }
+.grid-2 > * { min-width: 0; }
 @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
 
 /* ---- cards & the signature stub ---- */
@@ -173,7 +180,7 @@ a.stub:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 .segmented button.selected { background: var(--ink); color: var(--paper); }
 
 /* ---- tier picker ---- */
-.tiers { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.tiers { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(160px,100%), 1fr)); }
 .tier {
   text-align: left; cursor: pointer; border-radius: 10px; border: 1px solid var(--rule);
   background: var(--card); padding: 12px 14px; display: grid; gap: 2px;
@@ -207,6 +214,11 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 
 /* ---- admin frame ---- */
 .admin { display: grid; grid-template-columns: 210px 1fr; gap: 28px; align-items: start; }
+/* Grid items default to min-width:auto, which refuses to shrink below the
+   min-content width of whatever's inside — a wide <table> then balloons this
+   column (and everything up to <body>) past the viewport instead of letting
+   the table's own overflow:auto wrapper scroll internally. */
+.admin-content { min-width: 0; }
 .side { position: sticky; top: 70px; display: grid; gap: 2px; }
 .side a { display: block; padding: 9px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }
 .side a[aria-current='page'] { background: var(--ink); color: var(--paper); }

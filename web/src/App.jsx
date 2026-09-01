@@ -7,6 +7,9 @@ import Tickets from './pages/Tickets.jsx';
 import Login from './pages/Login.jsx';
 import StaffLogin from './pages/StaffLogin.jsx';
 import Account from './pages/Account.jsx';
+import Terms from './pages/Terms.jsx';
+import Privacy from './pages/Privacy.jsx';
+import NotFound from './pages/NotFound.jsx';
 import AdminLayout from './pages/admin/AdminLayout.jsx';
 import AdminEvents from './pages/admin/Events.jsx';
 import AdminEventEdit from './pages/admin/EventEdit.jsx';
@@ -19,6 +22,7 @@ import AdminScanner from './pages/admin/Scanner.jsx';
 import AdminBadges from './pages/admin/Badges.jsx';
 import AdminEmail from './pages/admin/Email.jsx';
 import AdminStaff from './pages/admin/Staff.jsx';
+import AdminBans from './pages/admin/Bans.jsx';
 import AdminAuditLog from './pages/admin/AuditLog.jsx';
 import AdminSettings from './pages/admin/Settings.jsx';
 import AdminBackup from './pages/admin/Backup.jsx';
@@ -61,6 +65,8 @@ export default function App() {
           <Route path="/account" element={user ? <Account /> : <Navigate to="/login" />} />
           <Route path="/login" element={<Login />} />
           <Route path="/staff" element={<StaffLogin />} />
+          <Route path="/legal/terms" element={<Terms />} />
+          <Route path="/legal/privacy" element={<Privacy />} />
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminEvents />} />
             <Route path="events/:id" element={<AdminEventEdit />} />
@@ -73,11 +79,12 @@ export default function App() {
             <Route path="badges" element={<AdminBadges />} />
             <Route path="email" element={<AdminEmail />} />
             <Route path="staff" element={<AdminStaff />} />
+            <Route path="bans" element={<AdminBans />} />
             <Route path="audit" element={<AdminAuditLog />} />
             <Route path="settings" element={<AdminSettings />} />
             <Route path="backup" element={<AdminBackup />} />
           </Route>
-          <Route path="*" element={<p style={{ paddingTop: 40 }}>That page does not exist. <Link to="/">Back to events</Link>.</p>} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
 
@@ -85,7 +92,9 @@ export default function App() {
         <div className="hero-rule" />
         <p className="small muted">
           PawPass • Mobile Event Management<br />
-          Beta 2026.0.5.2 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">pawpass.folfy.dev</a>
+          Beta 2026.0.5.2 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
+          <br />
+          <Link to="/legal/terms">Terms of Service</Link> • <Link to="/legal/privacy">Privacy Policy</Link>
         </p>
       </footer>
     </>

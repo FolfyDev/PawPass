@@ -4,12 +4,15 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
 import { Field, fmtDate, StatusPill, Avatar, RsvpButtons, Pill } from '../components/Bits.jsx';
+import { usePageMeta } from '../lib/meta.js';
+import Breadcrumbs from '../components/Breadcrumbs.jsx';
 
 export default function EventPage() {
   const { slug } = useParams();
   const nav = useNavigate();
   const { user, settings, refresh } = useSession();
   const [event, setEvent] = useState(null);
+  usePageMeta({ title: event?.title, description: event?.tagline || event?.description });
   const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', voucherCode: '' });
   const [showTos, setShowTos] = useState(false);
   const [showVoucher, setShowVoucher] = useState(false);
@@ -96,6 +99,7 @@ export default function EventPage() {
   return (
     <>
       <header style={{ padding: '40px 0 24px', maxWidth: 680 }}>
+        <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: event.title }]} />
         <p className="eyebrow">{fmtDate(event.startsAt, event.timezone)} · {event.venue}</p>
         <h1>{event.title}</h1>
         {event.tagline && <p className="muted">{event.tagline}</p>}

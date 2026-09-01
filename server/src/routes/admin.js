@@ -517,6 +517,48 @@ adminRouter.post('/checkin/:code/undo', async (req, res) => {
   res.json(shapeReg(reg));
 });
 
+/* ---------------- bans ---------------- */
+
+adminRouter.get('/bans', async (_req, res) => {
+  const bans = await prisma.ban.findMany({ orderBy: { createdAt: 'desc' }, include: { createdBy: true } });
+  res.json(bans);
+});
+
+/// Attempted registrations blocked by a ban — createRegistration logs these
+/// through the same audit trail as every other staff action (actorId null,
+/// since it's the attendee's attempt, not something staff did). Surfaced
+/// separately here instead of making the Bans page dig through /audit.
+adminRouter.get('/bans/attempts', async (_req, res) => {
+  const rows = await prisma.auditLog.findMany({
+    where: { action: 'ban.blocked_registration' },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+  res.json(rows);
+});
+
+adminRouter.post('/bans', async (req, res) => {
+  const { legalName, email, telegramId, telegramUsername, reason } = req.body || {};
+  const data = {
+    legalName: legalName?.trim() || null,
+    email: email?.trim() || null,
+    telegramId: telegramId?.trim() || null,
+    telegramUsername: telegramUsername?.trim().replace(/^@/, '') || null,
+    reason: reason?.trim() || '',
+  };
+  if (!data.legalName && !data.email && !data.telegramId && !data.telegramUsername)
+    return res.status(400).json({ error: 'Enter at least a legal name, email, or Telegram ID/username to ban.' });
+  const ban = await prisma.ban.create({ data: { ...data, createdById: req.user.id } });
+  await audit(req.user.id, 'ban.create', ban.id, data);
+  res.json(ban);
+});
+
+adminRouter.delete('/bans/:id', async (req, res) => {
+  const ban = await prisma.ban.delete({ where: { id: req.params.id } });
+  await audit(req.user.id, 'ban.delete', req.params.id, { legalName: ban.legalName, email: ban.email });
+  res.json({ ok: true });
+});
+
 /* ---------------- staff ---------------- */
 
 adminRouter.get('/users', async (req, res) => {
@@ -585,13 +627,19 @@ adminRouter.post('/campaigns/:id/send', async (req, res) => {
 
 /* ---------------- uploads ---------------- */
 
+// Raster types only — image/svg+xml is deliberately excluded. An SVG can
+// carry an inline <script>, which browsers do run if the uploaded file's URL
+// is opened directly (not when it's only used as an <img src>, but that URL
+// is public and shareable either way) — a stored-XSS route this app doesn't
+// need to accept just to support banner uploads.
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const upload = multer({
   storage: multer.diskStorage({
     destination: path.join(process.cwd(), 'uploads'),
     filename: (_req, file, cb) => cb(null, `${nanoid(10)}${path.extname(file.originalname) || '.png'}`),
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+  fileFilter: (_req, file, cb) => cb(null, ALLOWED_IMAGE_TYPES.includes(file.mimetype)),
 });
 
 adminRouter.post('/upload', upload.single('file'), (req, res) => {
@@ -617,7 +665,7 @@ adminRouter.get('/audit', async (_req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'voucherCode', 'merchItem', 'registration', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'voucherCode', 'merchItem', 'registration', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const BACKUP_VERSION = 1;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);

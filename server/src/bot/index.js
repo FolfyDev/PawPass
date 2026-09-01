@@ -7,13 +7,13 @@ import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
+import { escapeHtml as esc } from '../lib/html.js';
 
 /// Telegram doesn't reliably auto-link plain URLs (localhost during local
 /// dev never gets linked at all), so any message with a link is sent with
 /// parse_mode: 'HTML' and an explicit <a> tag instead. Anything interpolated
 /// into one of those messages that isn't meant to be a tag — an event title,
 /// a configurable welcome message — has to go through esc() first.
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const link = (url, text) => `<a href="${esc(url)}">${esc(text ?? url)}</a>`;
 
 /// The web Login Widget hands us `photo_url` directly, but that widget only

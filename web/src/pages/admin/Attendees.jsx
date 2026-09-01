@@ -13,6 +13,7 @@ export default function Attendees() {
   const [q, setQ] = useState('');
   const [event, setEvent] = useState(null);
   const [msg, setMsg] = useState('');
+  const [msgOk, setMsgOk] = useState(true);
 
   const load = () => api.get(`/api/admin/events/${id}/registrations?q=${encodeURIComponent(q)}`).then(setRows);
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
@@ -20,8 +21,8 @@ export default function Attendees() {
 
   const print = async (code) => {
     setMsg('');
-    try { const r = await printBadge(code, settings?.printMode); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); }
-    catch (e) { setMsg(e.message); }
+    try { const r = await printBadge(code, settings?.printMode); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); setMsgOk(true); }
+    catch (e) { setMsg(e.message); setMsgOk(false); }
     load();
   };
 
@@ -47,7 +48,7 @@ export default function Attendees() {
         <input placeholder="Search name, fursona, code or email" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 340 }} />
         <span className="small muted">{rows?.length || 0} registered · {checkedIn} checked in</span>
       </div>
-      {msg && <p className="note" style={{ marginBottom: 14 }}>{msg}</p>}
+      {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 14 }}>{msg}</p>}
 
       {rows?.length === 0 && <Empty title="Nobody yet">Share the event link or point people at the Telegram bot.</Empty>}
 

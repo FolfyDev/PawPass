@@ -18,6 +18,8 @@ publicRouter.get('/settings', async (_req, res) => {
     wallet: { apple: env.apple.enabled, google: env.google.enabled },
     telegramBot: env.telegram.username,
     printMode: env.zebra.mode,
+    webUrl: env.webUrl,
+    legal: { entityName: env.legal.entityName, contactEmail: env.legal.contactEmail },
   });
 });
 

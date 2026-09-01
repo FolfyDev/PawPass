@@ -4,9 +4,11 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
 import { Field } from '../components/Bits.jsx';
+import { usePageMeta } from '../lib/meta.js';
 
 export default function Login() {
   const { config, settings, refresh } = useSession();
+  usePageMeta({ title: 'Sign in' });
   const nav = useNavigate();
   const [tab, setTab] = useState(null);
   const [code, setCode] = useState('');

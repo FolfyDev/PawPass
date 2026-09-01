@@ -92,7 +92,7 @@ export default function Settings() {
 
       <div className="card stack">
         <Field label="Banner" help="PNG, ~1170×123 — replaces the org name in the nav">
-          <input type="file" accept="image/png,image/svg+xml,image/webp" onChange={uploadBanner} />
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBanner} />
           {s.logoUrl && <img src={s.logoUrl} alt="Banner preview" style={{ height: 32, marginTop: 10, display: 'block' }} />}
         </Field>
         {TEXT_FIELDS.map(([k, label]) => (

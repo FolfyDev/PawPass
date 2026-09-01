@@ -4,17 +4,20 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
 import { Field } from '../components/Bits.jsx';
+import { usePageMeta } from '../lib/meta.js';
 
 export default function Account() {
   const { user, config, refresh } = useSession();
+  usePageMeta({ title: 'Account', noindex: true });
   const [params] = useSearchParams();
   const [pw, setPw] = useState({ email: user.email || '', password: '' });
   const [msg, setMsg] = useState('');
+  const [msgOk, setMsgOk] = useState(true);
 
   const save = async (e) => {
     e.preventDefault();
-    try { await api.post('/api/auth/set-password', pw); await refresh(); setMsg('Password updated.'); }
-    catch (err) { setMsg(err.message); }
+    try { await api.post('/api/auth/set-password', pw); await refresh(); setMsg('Password updated.'); setMsgOk(true); }
+    catch (err) { setMsg(err.message); setMsgOk(false); }
   };
 
   return (
@@ -45,7 +48,7 @@ export default function Account() {
         <Field label="New password" help="At least 10 characters">
           <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
         </Field>
-        {msg && <p className="note">{msg}</p>}
+        {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
         <button className="btn primary">Save password</button>
       </form>
     </div>

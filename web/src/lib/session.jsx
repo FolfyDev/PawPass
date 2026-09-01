@@ -25,7 +25,6 @@ export function SessionProvider({ children }) {
 
   useEffect(() => {
     if (settings?.accentColor) document.documentElement.style.setProperty('--signal', settings.accentColor);
-    if (settings?.orgName) document.title = settings.orgName;
   }, [settings]);
 
   const logout = async () => { await api.post('/api/auth/logout'); setUser(null); };

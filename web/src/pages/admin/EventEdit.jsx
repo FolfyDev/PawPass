@@ -25,6 +25,7 @@ export default function EventEdit() {
   const [e, setE] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [msg, setMsg] = useState('');
+  const [msgOk, setMsgOk] = useState(true);
 
   useEffect(() => {
     api.get(`/api/admin/events/${id}`).then((ev) => setE({
@@ -42,8 +43,8 @@ export default function EventEdit() {
   const fields = e.customFields || [];
 
   const save = async () => {
-    try { await api.patch(`/api/admin/events/${id}`, e); setMsg('Saved.'); setTimeout(() => setMsg(''), 2000); }
-    catch (err) { setMsg(err.message); }
+    try { await api.patch(`/api/admin/events/${id}`, e); setMsg('Saved.'); setMsgOk(true); setTimeout(() => setMsg(''), 2000); }
+    catch (err) { setMsg(err.message); setMsgOk(false); }
   };
 
   const remove = async () => {
@@ -64,7 +65,7 @@ export default function EventEdit() {
         <button className="btn primary" onClick={save}>Save changes</button>
       </div>
       <EventTabs id={id} />
-      {msg && <p className="note" style={{ marginBottom: 16 }}>{msg}</p>}
+      {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
       <div className="stack">
         <section className="card stack">

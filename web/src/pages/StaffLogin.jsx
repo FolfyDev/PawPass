@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { Field } from '../components/Bits.jsx';
+import { usePageMeta } from '../lib/meta.js';
 
 /// Deliberately not linked from anywhere in the nav or the public sign-in
 /// page — reachable only by whoever has this URL. Hits the same
@@ -10,6 +11,7 @@ import { Field } from '../components/Bits.jsx';
 /// Login.jsx; the split here is presentation only, not a second mechanism.
 export default function StaffLogin() {
   const { refresh } = useSession();
+  usePageMeta({ title: 'Staff sign in', noindex: true });
   const nav = useNavigate();
   const [creds, setCreds] = useState({ email: '', password: '' });
   const [error, setError] = useState('');

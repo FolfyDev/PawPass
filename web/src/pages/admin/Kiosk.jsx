@@ -21,6 +21,7 @@ export default function Kiosk() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [printMsg, setPrintMsg] = useState('');
+  const [printMsgOk, setPrintMsgOk] = useState(true);
 
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
 
@@ -59,8 +60,8 @@ export default function Kiosk() {
 
   const print = async () => {
     setPrintMsg('');
-    try { const r = await printBadge(result.code, settings?.printMode); setPrintMsg(`Sent to the printer (copy ${r.printCount}).`); }
-    catch (e) { setPrintMsg(e.message); }
+    try { const r = await printBadge(result.code, settings?.printMode); setPrintMsg(`Sent to the printer (copy ${r.printCount}).`); setPrintMsgOk(true); }
+    catch (e) { setPrintMsg(e.message); setPrintMsgOk(false); }
   };
 
   const next = () => { setResult(null); setForm(BLANK_FORM); setError(''); setPrintMsg(''); };
@@ -90,7 +91,7 @@ export default function Kiosk() {
                 via {result.paymentMethod || 'unrecorded method'}{result.paymentNote ? ` — ${result.paymentNote}` : ''}
               </p>
             )}
-            {printMsg && <p className="note">{printMsg}</p>}
+            {printMsg && <p className={`note ${printMsgOk ? 'good' : 'bad'}`}>{printMsg}</p>}
             <div className="row">
               <button className="btn" onClick={print}>Print badge</button>
               <button className="btn signal" onClick={next}>Register next person →</button>

@@ -1,5 +1,7 @@
 import { prisma } from './db.js';
 import { ticketCode, ticketSecret } from './codes.js';
+import { findMatchingBan } from './bans.js';
+import { audit } from './auth.js';
 
 export class RegistrationError extends Error {}
 
@@ -33,6 +35,26 @@ export function registrationWindowState(event, confirmedCount) {
 }
 
 export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, tier, paymentMethod, paymentAmount, paymentNote, voucherCode }) {
+  // Checked first, ahead of every other rule (capacity, voucher, registration
+  // window) — a ban blocks a new registration outright, it doesn't just lose
+  // out to those. The message stays deliberately generic so someone probing
+  // for a ban can't confirm it from the response alone.
+  const ban = await findMatchingBan({ legalName, email, telegramId: user.telegramId, telegramUsername: user.telegramUsername });
+  if (ban) {
+    await audit(null, 'ban.blocked_registration', ban.id, {
+      banReason: ban.reason || undefined,
+      eventId: event.id,
+      eventTitle: event.title,
+      legalName: legalName?.trim() || undefined,
+      fursonaName: fursonaName?.trim() || undefined,
+      email: email?.trim() || undefined,
+      telegramId: user.telegramId || undefined,
+      telegramUsername: user.telegramUsername || undefined,
+      source,
+    });
+    throw new RegistrationError('Registration is not available for this account. Contact the organizers if you think this is a mistake.');
+  }
+
   const existing = await prisma.registration.findUnique({
     where: { eventId_userId: { eventId: event.id, userId: user.id } },
   });

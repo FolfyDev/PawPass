@@ -14,6 +14,7 @@ export default function Email() {
   const [sent, setSent] = useState([]);
   const [draft, setDraft] = useState({ eventId: '', subject: '', body: '', audience: 'all' });
   const [msg, setMsg] = useState('');
+  const [msgOk, setMsgOk] = useState(true);
 
   const load = () => api.get('/api/admin/campaigns').then(setSent);
   useEffect(() => { api.get('/api/admin/events').then(setEvents); load(); }, []);
@@ -24,8 +25,9 @@ export default function Email() {
       const c = await api.post('/api/admin/campaigns', draft);
       const r = await api.post(`/api/admin/campaigns/${c.id}/send`, { dryRun });
       setMsg(dryRun ? `${r.recipients} people would receive this.` : `Sent to ${r.sent} of ${r.recipients}.`);
+      setMsgOk(true);
       if (!dryRun) { setDraft({ ...draft, subject: '', body: '' }); load(); }
-    } catch (e) { setMsg(e.message); }
+    } catch (e) { setMsg(e.message); setMsgOk(false); }
   };
 
   return (
@@ -51,7 +53,7 @@ export default function Email() {
         <Field label="Message" help="Tokens: {{fursona_name}} {{legal_name}} {{code}} {{event_title}} {{ticket_url}}">
           <textarea style={{ minHeight: 200 }} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
         </Field>
-        {msg && <p className="note">{msg}</p>}
+        {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
         <div className="row">
           <button className="btn" onClick={() => send(true)}>Count recipients</button>
           <button className="btn signal" disabled={!draft.subject || !draft.body} onClick={() => send(false)}>Send now</button>

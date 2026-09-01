@@ -56,6 +56,7 @@ model User {
   auditEntries     AuditLog[]
   sales            Sale[]         @relation("SalesProcessedBy")
   donationsProcessed Donation[]   @relation("DonationsProcessedBy")
+  bansCreated      Ban[]          @relation("BansCreatedBy")
 }
 
 model Event {
@@ -273,6 +274,27 @@ model BotSession {
 model Setting {
   key   String @id
   value Json
+}
+
+/// A site-wide block on registering for any event. Matched against a
+/// registration attempt by legal name, email, or Telegram identity — any one
+/// field matching is enough, so a ban can target whichever of those the
+/// person is known by. At least one field must be set (see routes/admin.js).
+model Ban {
+  id               String   @id @default(cuid())
+  legalName        String?
+  email            String?
+  telegramId       String?
+  telegramUsername String?
+  reason           String   @default("")
+  createdById      String?
+  createdBy        User?    @relation("BansCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime @default(now())
+
+  @@index([legalName])
+  @@index([email])
+  @@index([telegramId])
+  @@index([telegramUsername])
 }
 
 model AuditLog {

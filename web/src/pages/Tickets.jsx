@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
+import { usePageMeta } from '../lib/meta.js';
 import { Empty, StatusPill, RsvpButtons, fmtDate } from '../components/Bits.jsx';
 
 export default function Tickets() {
   const { settings } = useSession();
+  usePageMeta({ title: 'My tickets', noindex: true });
   const [tickets, setTickets] = useState(null);
   const load = () => api.get('/api/my/tickets').then(setTickets);
   useEffect(() => { load(); }, []);
@@ -30,7 +32,7 @@ export default function Tickets() {
 
       {tickets.length === 0 && <Empty title="No tickets yet">Pick an event from the home page to register.</Empty>}
 
-      <div style={{ display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))' }}>
+      <div style={{ display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' }}>
         {tickets.map((t) => (
           <div key={t.code} className="stub">
             <div className="stub-accent" style={{ background: t.event.accentColor }} />
