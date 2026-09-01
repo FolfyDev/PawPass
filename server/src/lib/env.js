@@ -26,10 +26,6 @@ export const env = {
   /// itself always runs in UTC — this only seeds the per-event `timezone`
   /// field, which is what actually drives date/time interpretation.
   defaultTimezone: process.env.DEFAULT_TIMEZONE || 'America/New_York',
-  /// Fixed legal identity for the Terms of Service / Privacy Policy pages and
-  /// robots.txt/sitemap.xml — deliberately separate from the admin-editable
-  /// `orgName` branding in settings.js, since who is legally responsible for
-  /// an instance shouldn't change just because someone edits its display name.
   legal: {
     entityName: process.env.LEGAL_ENTITY_NAME || '',
     contactEmail: process.env.LEGAL_CONTACT_EMAIL || '',

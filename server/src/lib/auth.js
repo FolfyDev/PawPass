@@ -18,6 +18,24 @@ export function setSessionCookie(res, token) {
   });
 }
 
+export class LoginCodeError extends Error {}
+
+export async function redeemLoginCode(rawCode) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  if (!code) throw new LoginCodeError('Enter the code the bot sent you.');
+
+  const row = await prisma.loginCode.findUnique({ where: { code } });
+  const ageMinutes = row ? (Date.now() - row.createdAt.getTime()) / 60000 : Infinity;
+  if (!row || row.usedAt || ageMinutes > env.loginCodeTtlMinutes)
+    throw new LoginCodeError('That code is not valid any more. Send /login to the bot for a fresh one.');
+
+  await prisma.loginCode.update({ where: { code }, data: { usedAt: new Date() } });
+
+  const user = await prisma.user.findUnique({ where: { telegramId: row.telegramId } });
+  if (!user) throw new LoginCodeError('That Telegram account is not known here. Send /start to the bot first.');
+  return user;
+}
+
 /// Verifies the hash Telegram signs Login Widget payloads with.
 export function verifyTelegramLogin(data) {
   const { hash, ...rest } = data;

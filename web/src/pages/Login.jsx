@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
@@ -10,6 +10,7 @@ export default function Login() {
   const { config, settings, refresh } = useSession();
   usePageMeta({ title: 'Sign in' });
   const nav = useNavigate();
+  const [params] = useSearchParams();
   const [tab, setTab] = useState(null);
   const [code, setCode] = useState('');
   const [creds, setCreds] = useState({ email: '', password: '' });
@@ -34,6 +35,12 @@ export default function Login() {
     <div style={{ maxWidth: 440, margin: '60px auto' }}>
       <p className="eyebrow">Sign in</p>
       <h1>Continue</h1>
+
+      {params.get('expired') === '1' && (
+        <p className="note bad" style={{ marginBottom: 14 }}>
+          That sign-in link already expired or was used. Send <code className="mono">/login</code> to the bot again for a fresh one.
+        </p>
+      )}
 
       <div className="row" style={{ marginBottom: 14 }}>
         {config?.telegram?.widgetUsable && <button className={`btn sm ${tab === 'widget' ? 'primary' : ''}`} onClick={() => setTab('widget')}>Telegram button</button>}

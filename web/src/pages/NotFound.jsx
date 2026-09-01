@@ -7,7 +7,7 @@ export default function NotFound() {
 
   return (
     <div style={{ paddingTop: 40 }}>
-      <Empty title="404 — That page does not exist">
+      <Empty title="404: That page does not exist">
         <p style={{ margin: '0 0 14px' }}>The link may be old, or the page may have moved.</p>
         <Link className="btn sm" to="/">Back to events</Link>
       </Empty>

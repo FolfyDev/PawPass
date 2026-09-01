@@ -9,11 +9,14 @@
     "start": "sh docker-entrypoint.sh",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:reset": "prisma db push --force-reset"
+    "db:reset": "prisma db push --force-reset",
+    "pretest": "prisma db push --skip-generate",
+    "test": "node --test --test-concurrency=1 tests/*.test.js tests/load/*.test.js",
+    "test:load": "node --test tests/load/*.test.js"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -26,13 +29,14 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "nanoid": "^5.0.9",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^9.1.0",
     "passkit-generator": "^3.3.0",
     "qrcode": "^1.5.4",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.4",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "prisma": "^5.22.0"
+    "prisma": "^5.22.0",
+    "supertest": "^7.0.0"
   }
 }

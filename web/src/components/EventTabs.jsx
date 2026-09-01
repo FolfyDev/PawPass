@@ -12,10 +12,6 @@ const TABS = [
   ['vouchers', 'Vouchers'],
 ];
 
-/// Shared sub-nav for every per-event admin page, so Attendees/Kiosk/Merch/
-/// Cash/Vouchers/Details are all one click apart instead of only reachable
-/// from a crowded button row on the Events list. Also carries the breadcrumb
-/// trail for this event, since every page that needs the tabs also needs it.
 export default function EventTabs({ id }) {
   const [title, setTitle] = useState('');
   useEffect(() => { api.get(`/api/admin/events/${id}`).then((e) => setTitle(e.title)).catch(() => {}); }, [id]);

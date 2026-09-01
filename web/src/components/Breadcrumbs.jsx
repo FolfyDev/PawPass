@@ -1,7 +1,5 @@
 import { Link } from 'react-router-dom';
 
-/// `items` is an array of `{ label, to }` — the last item is rendered as
-/// plain text (the current page) even if it has a `to`.
 export default function Breadcrumbs({ items }) {
   return (
     <nav aria-label="Breadcrumb" className="small muted" style={{ marginBottom: 14 }}>

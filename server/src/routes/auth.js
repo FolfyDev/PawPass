@@ -3,18 +3,12 @@ import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, localDevAuthAvailable } from '../lib/auth.js';
+import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, localDevAuthAvailable, redeemLoginCode, LoginCodeError } from '../lib/auth.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 
 export const authRouter = Router();
 
-/// Guards the two doors an attacker can actually brute-force offline-style —
-/// a chosen password, or a login code — since neither is HMAC-verified like
-/// the Telegram widget callback is. Keyed by req.ip, which is only meaningful
-/// once nginx forwards the real client IP (see nginx.conf) and trust proxy
-/// is set correctly (index.js) — otherwise every request looks like it comes
-/// from the same upstream proxy and this would throttle everyone at once.
-const loginLimiter = rateLimit({
+export const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: true,
@@ -114,21 +108,14 @@ authRouter.post('/set-password', requireUser, async (req, res) => {
 /// registered domain, so this is the local-testing path — and a reasonable
 /// production path for anyone who dislikes the widget's third-party script.
 authRouter.post('/telegram-code', loginLimiter, async (req, res) => {
-  const code = String(req.body.code || '').trim().toUpperCase();
-  if (!code) return res.status(400).json({ error: 'Enter the code the bot sent you.' });
-
-  const row = await prisma.loginCode.findUnique({ where: { code } });
-  const ageMinutes = row ? (Date.now() - row.createdAt.getTime()) / 60000 : Infinity;
-  if (!row || row.usedAt || ageMinutes > env.loginCodeTtlMinutes)
-    return res.status(401).json({ error: 'That code is not valid any more. Send /login to the bot for a fresh one.' });
-
-  await prisma.loginCode.update({ where: { code }, data: { usedAt: new Date() } });
-
-  const user = await prisma.user.findUnique({ where: { telegramId: row.telegramId } });
-  if (!user) return res.status(404).json({ error: 'That Telegram account is not known here. Send /start to the bot first.' });
-
-  setSessionCookie(res, issueToken(user));
-  res.json({ user: publicUser(user) });
+  try {
+    const user = await redeemLoginCode(req.body.code);
+    setSessionCookie(res, issueToken(user));
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e instanceof LoginCodeError) return res.status(401).json({ error: e.message });
+    throw e;
+  }
 });
 
 /// Local development only. Creates or reuses a throwaway account so the whole

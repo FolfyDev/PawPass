@@ -268,8 +268,8 @@ export function createBot() {
       data: { usedAt: new Date() },
     });
     await ctx.reply(
-      `Your sign-in code is:\n\n${code}\n\n` +
-      `Enter it at ${link(`${env.webUrl}/login`)} — it works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
+      `Tap to sign in:\n\n${link(`${env.webUrl}/l/${code}`, code)}\n\n` +
+      `Or enter that code by hand at ${link(`${env.webUrl}/login`)}. It works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
       { parse_mode: 'HTML' },
     );
   });

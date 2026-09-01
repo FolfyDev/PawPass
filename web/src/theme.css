@@ -79,9 +79,6 @@ a { color: var(--platform); text-decoration-thickness: 1px; text-underline-offse
 .mono { font-family: var(--mono); }
 
 .shell { max-width: 1080px; margin: 0 auto; padding: 0 20px 80px; }
-/* min-width:0 so a wide child (a table, a long unbroken code string) scrolls
-   inside its own overflow wrapper instead of forcing this grid track past
-   the viewport — see the longer note on .admin-content below. */
 .stack { display: grid; gap: 16px; min-width: 0; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .spread { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
@@ -214,10 +211,6 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 
 /* ---- admin frame ---- */
 .admin { display: grid; grid-template-columns: 210px 1fr; gap: 28px; align-items: start; }
-/* Grid items default to min-width:auto, which refuses to shrink below the
-   min-content width of whatever's inside — a wide <table> then balloons this
-   column (and everything up to <body>) past the viewport instead of letting
-   the table's own overflow:auto wrapper scroll internally. */
 .admin-content { min-width: 0; }
 .side { position: sticky; top: 70px; display: grid; gap: 2px; }
 .side a { display: block; padding: 9px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }

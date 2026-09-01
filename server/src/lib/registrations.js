@@ -35,10 +35,6 @@ export function registrationWindowState(event, confirmedCount) {
 }
 
 export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, tier, paymentMethod, paymentAmount, paymentNote, voucherCode }) {
-  // Checked first, ahead of every other rule (capacity, voucher, registration
-  // window) — a ban blocks a new registration outright, it doesn't just lose
-  // out to those. The message stays deliberately generic so someone probing
-  // for a ban can't confirm it from the response alone.
   const ban = await findMatchingBan({ legalName, email, telegramId: user.telegramId, telegramUsername: user.telegramUsername });
   if (ban) {
     await audit(null, 'ban.blocked_registration', ban.id, {
@@ -73,51 +69,51 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
     if (voucher.usedCount >= voucher.maxUses) throw new RegistrationError('That voucher code has already been used.');
   }
 
-  let chosenTier, status;
-  if (voucher) {
-    chosenTier = 'FREE';
-    status = 'CONFIRMED';
-  } else {
-    const confirmedCount = await prisma.registration.count({
-      where: { eventId: event.id, status: 'CONFIRMED' },
-    });
-    const state = registrationWindowState(event, confirmedCount);
-    if (!state.open) throw new RegistrationError(state.reason);
-    chosenTier = event.donationRequired ? 'DONATION' : tier === 'DONATION' ? 'DONATION' : 'FREE';
-    if (chosenTier === 'DONATION' && !event.donationPaypalLink)
-      throw new RegistrationError('The donation tier is not available for this event.');
-    status = state.waitlist ? 'WAITLIST' : 'CONFIRMED';
-  }
+  const cleanAnswers = validateAnswers(event, answers);
 
-  const data = {
-    legalName: legalName.trim(),
-    fursonaName: (fursonaName || '').trim(),
-    email: email?.trim() || null,
-    answers: validateAnswers(event, answers),
-    status,
-    tier: chosenTier,
-    rsvp: 'YES',
-    source,
-    tosAcceptedAt: new Date(),
-    tosVersion: tosVersion || null,
-    paymentMethod: chosenTier === 'DONATION' && PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null,
-    paymentAmount: chosenTier === 'DONATION' && paymentAmount != null && !isNaN(Number(paymentAmount)) ? Number(paymentAmount) : null,
-    paymentNote: chosenTier === 'DONATION' ? (paymentNote?.trim() || null) : null,
-    voucherCodeId: voucher?.id || null,
-    badgeTier: voucher?.badgeTier || null,
-  };
-
-  // The voucher claim, the badge-number increment, and the registration
-  // write all happen in one transaction — a limited-use voucher redeemed by
-  // two people at once must not both succeed.
   return prisma.$transaction(async (tx) => {
+    let chosenTier, status;
+
     if (voucher) {
       const claimed = await tx.voucherCode.updateMany({
         where: { id: voucher.id, usedCount: { lt: voucher.maxUses } },
         data: { usedCount: { increment: 1 } },
       });
       if (claimed.count === 0) throw new RegistrationError('That voucher code has already been used.');
+      chosenTier = 'FREE';
+      status = 'CONFIRMED';
+    } else {
+      if (event.capacity) {
+        await tx.$queryRaw`SELECT id FROM "Event" WHERE id = ${event.id} FOR UPDATE`;
+      }
+      const confirmedCount = await tx.registration.count({
+        where: { eventId: event.id, status: 'CONFIRMED' },
+      });
+      const state = registrationWindowState(event, confirmedCount);
+      if (!state.open) throw new RegistrationError(state.reason);
+      chosenTier = event.donationRequired ? 'DONATION' : tier === 'DONATION' ? 'DONATION' : 'FREE';
+      if (chosenTier === 'DONATION' && !event.donationPaypalLink)
+        throw new RegistrationError('The donation tier is not available for this event.');
+      status = state.waitlist ? 'WAITLIST' : 'CONFIRMED';
     }
+
+    const data = {
+      legalName: legalName.trim(),
+      fursonaName: (fursonaName || '').trim(),
+      email: email?.trim() || null,
+      answers: cleanAnswers,
+      status,
+      tier: chosenTier,
+      rsvp: 'YES',
+      source,
+      tosAcceptedAt: new Date(),
+      tosVersion: tosVersion || null,
+      paymentMethod: chosenTier === 'DONATION' && PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null,
+      paymentAmount: chosenTier === 'DONATION' && paymentAmount != null && !isNaN(Number(paymentAmount)) ? Number(paymentAmount) : null,
+      paymentNote: chosenTier === 'DONATION' ? (paymentNote?.trim() || null) : null,
+      voucherCodeId: voucher?.id || null,
+      badgeTier: voucher?.badgeTier || null,
+    };
 
     if (existing) {
       return tx.registration.update({ where: { id: existing.id }, data });
@@ -137,7 +133,7 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
         badgeNumber: updatedEvent.nextBadgeNumber - 1,
       },
     });
-  });
+  }, { maxWait: 10000, timeout: 10000 });
 }
 
 /// Creates the User a registration needs when there's no signed-in account to

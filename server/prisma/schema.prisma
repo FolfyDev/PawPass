@@ -276,10 +276,6 @@ model Setting {
   value Json
 }
 
-/// A site-wide block on registering for any event. Matched against a
-/// registration attempt by legal name, email, or Telegram identity — any one
-/// field matching is enough, so a ban can target whichever of those the
-/// person is known by. At least one field must be set (see routes/admin.js).
 model Ban {
   id               String   @id @default(cuid())
   legalName        String?

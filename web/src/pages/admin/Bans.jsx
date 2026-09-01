@@ -40,14 +40,14 @@ export default function Bans() {
       <h1>Bans</h1>
       <p className="muted">
         Block someone from registering for any event, site-wide. A registration attempt is checked against a ban's
-        legal name, email, and Telegram ID/username — a match on any one field is enough to block it.
+        legal name, email, and Telegram ID/username. A match on any one field is enough to block it.
       </p>
 
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
       <div className="card stack" style={{ marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>Add a ban</h2>
-        <p className="small muted" style={{ margin: 0 }}>Fill in whichever identifiers you know — at least one is required.</p>
+        <p className="small muted" style={{ margin: 0 }}>Fill in whichever identifiers you know. At least one is required.</p>
         <div className="grid-2">
           <Field label="Legal name"><input value={draft.legalName} onChange={(e) => setDraft({ ...draft, legalName: e.target.value })} /></Field>
           <Field label="Email"><input type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} /></Field>
@@ -69,16 +69,16 @@ export default function Bans() {
             <tbody>
               {bans.map((b) => (
                 <tr key={b.id}>
-                  <td>{b.legalName || '—'}</td>
-                  <td className="small muted">{b.email || '—'}</td>
+                  <td>{b.legalName || '-'}</td>
+                  <td className="small muted">{b.email || '-'}</td>
                   <td className="small muted">
                     {b.telegramId || b.telegramUsername
                       ? <>{b.telegramUsername ? `@${b.telegramUsername}` : ''}{b.telegramId ? <><br />id {b.telegramId}</> : ''}</>
-                      : '—'}
+                      : '-'}
                   </td>
-                  <td className="small muted">{b.reason || '—'}</td>
+                  <td className="small muted">{b.reason || '-'}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>
-                    {new Date(b.createdAt).toLocaleDateString()}{b.createdBy ? ` · ${b.createdBy.displayName}` : ''}
+                    {new Date(b.createdAt).toLocaleDateString()}{b.createdBy ? ` - ${b.createdBy.displayName}` : ''}
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <button className="btn sm danger" onClick={() => remove(b)}>Remove</button>
@@ -91,7 +91,7 @@ export default function Bans() {
       )}
 
       <h2>Attempted registrations</h2>
-      <p className="small muted" style={{ marginTop: -8 }}>Every time a banned identity tries to register, it's logged here — even after the ban is removed.</p>
+      <p className="small muted" style={{ marginTop: -8 }}>Every time a banned identity tries to register, it's logged here, even after the ban is removed.</p>
       {attempts.length === 0 && <Empty title="No blocked attempts yet">If a banned person tries to register, it'll show up here.</Empty>}
       {attempts.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
@@ -101,13 +101,13 @@ export default function Bans() {
               {attempts.map((a) => (
                 <tr key={a.id}>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{new Date(a.createdAt).toLocaleString()}</td>
-                  <td>{a.meta?.fursonaName || a.meta?.legalName || '—'}</td>
+                  <td>{a.meta?.fursonaName || a.meta?.legalName || '-'}</td>
                   <td className="small muted">
                     {a.meta?.email || ''}
                     {a.meta?.telegramUsername ? <><br />@{a.meta.telegramUsername}</> : ''}
                   </td>
-                  <td className="small muted">{a.meta?.eventTitle || '—'}</td>
-                  <td className="small muted">{a.meta?.source || '—'}</td>
+                  <td className="small muted">{a.meta?.eventTitle || '-'}</td>
+                  <td className="small muted">{a.meta?.source || '-'}</td>
                 </tr>
               ))}
             </tbody>

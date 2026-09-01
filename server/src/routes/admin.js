@@ -517,17 +517,11 @@ adminRouter.post('/checkin/:code/undo', async (req, res) => {
   res.json(shapeReg(reg));
 });
 
-/* ---------------- bans ---------------- */
-
 adminRouter.get('/bans', async (_req, res) => {
   const bans = await prisma.ban.findMany({ orderBy: { createdAt: 'desc' }, include: { createdBy: true } });
   res.json(bans);
 });
 
-/// Attempted registrations blocked by a ban — createRegistration logs these
-/// through the same audit trail as every other staff action (actorId null,
-/// since it's the attendee's attempt, not something staff did). Surfaced
-/// separately here instead of making the Bans page dig through /audit.
 adminRouter.get('/bans/attempts', async (_req, res) => {
   const rows = await prisma.auditLog.findMany({
     where: { action: 'ban.blocked_registration' },
@@ -627,11 +621,6 @@ adminRouter.post('/campaigns/:id/send', async (req, res) => {
 
 /* ---------------- uploads ---------------- */
 
-// Raster types only — image/svg+xml is deliberately excluded. An SVG can
-// carry an inline <script>, which browsers do run if the uploaded file's URL
-// is opened directly (not when it's only used as an <img src>, but that URL
-// is public and shareable either way) — a stored-XSS route this app doesn't
-// need to accept just to support banner uploads.
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const upload = multer({
   storage: multer.diskStorage({

@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-pawpass}
     volumes:
       - db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pawpass}"]
       interval: 5s
@@ -30,14 +32,6 @@ services:
       - "${SERVER_PORT:-4000}:4000"
 
   web:
-    # No VITE_API_BASE build arg — it defaults to "" (see web/Dockerfile),
-    # meaning the frontend calls /api/... as a path relative to whatever
-    # origin the page was loaded from. nginx (nginx.conf) already proxies
-    # /api/ straight through to the server container, so this always works
-    # regardless of the host/IP/domain/port the app is actually reached at.
-    # Pointing this at PUBLIC_URL instead breaks the moment PUBLIC_URL uses a
-    # different port than WEB_URL and that port isn't opened to the network
-    # the browser is on (e.g. a phone that can reach :8080 but not :4000).
     build:
       context: ./web
     restart: unless-stopped

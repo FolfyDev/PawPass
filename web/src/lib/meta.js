@@ -8,11 +8,6 @@ function setMeta(selector, attr, value, content) {
   el.setAttribute('content', content);
 }
 
-/// Per-page <title>, meta description, and Open Graph/Twitter tags. Only
-/// meaningfully reaches crawlers that execute JS (Googlebot does; link
-/// unfurlers like Discord/Slack/Twitter do not) — this is a client-rendered
-/// SPA with no server-side rendering, so those still see index.html's static
-/// defaults. Call once per route component, after `loading` is settled.
 export function usePageMeta({ title, description, noindex = false }) {
   const { settings } = useSession();
 
