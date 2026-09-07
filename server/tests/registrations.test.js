@@ -2,7 +2,7 @@ import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
 import { app } from '../src/app.js';
-import { resetDb, closeDb, createEvent, createVoucher, nextEmail } from './helpers/db.js';
+import { resetDb, closeDb, createEvent, createVoucher, createStaff, nextEmail } from './helpers/db.js';
 
 describe('registrations', () => {
   beforeEach(async () => {
@@ -131,5 +131,22 @@ describe('registrations', () => {
       .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true, tier: 'FREE' });
     assert.equal(res.status, 200);
     assert.equal(res.body.tier, 'DONATION');
+  });
+
+  test('admin search finds an attendee by a partial, case-insensitive name match, even though the field is encrypted at rest', async () => {
+    const event = await createEvent();
+    await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Zelda Zephyrhawk', email: nextEmail(), acceptedTos: true });
+    await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Someone Else', email: nextEmail(), acceptedTos: true });
+
+    const { user, password } = await createStaff({ role: 'ADMIN' });
+    const agent = request.agent(app);
+    await agent.post('/api/auth/password').send({ email: user.email, password });
+
+    const res = await agent.get(`/api/admin/events/${event.id}/registrations?q=zephyr`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.length, 1);
+    assert.equal(res.body[0].legalName, 'Zelda Zephyrhawk');
   });
 });

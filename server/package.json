@@ -10,7 +10,7 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:reset": "prisma db push --force-reset",
-    "pretest": "prisma db push --skip-generate",
+    "pretest": "prisma db push --skip-generate --accept-data-loss",
     "test": "node --test --test-concurrency=1 tests/*.test.js tests/load/*.test.js",
     "test:load": "node --test tests/load/*.test.js"
   },

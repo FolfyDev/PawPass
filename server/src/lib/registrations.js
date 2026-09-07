@@ -2,6 +2,7 @@ import { prisma } from './db.js';
 import { ticketCode, ticketSecret } from './codes.js';
 import { findMatchingBan } from './bans.js';
 import { audit } from './auth.js';
+import { blindIndex } from './crypto.js';
 
 export class RegistrationError extends Error {}
 
@@ -147,8 +148,8 @@ export async function findOrCreateHeadlessUser({ eventId, legalName, fursonaName
       eventId,
       status: { not: 'CANCELLED' },
       OR: [
-        { legalName: { equals: legalName, mode: 'insensitive' } },
-        ...(email ? [{ email: { equals: email, mode: 'insensitive' } }] : []),
+        { legalNameIndex: blindIndex(legalName) },
+        ...(email ? [{ emailIndex: blindIndex(email) }] : []),
       ],
     },
   });

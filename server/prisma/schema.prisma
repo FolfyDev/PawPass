@@ -44,9 +44,15 @@ model User {
   telegramUsername String?
   telegramPhotoUrl String?
   displayName      String
+  /// Encrypted at rest (see lib/crypto.js). Never queried directly, so no
+  /// blind index is needed here (compare Registration.legalName below).
   legalName        String?
   fursonaName      String?
-  email            String?        @unique
+  /// Encrypted at rest; emailIndex carries the @unique constraint instead of
+  /// the column itself, since encryption uses a random IV per value and the
+  /// same address never encrypts to the same ciphertext twice.
+  email            String?
+  emailIndex       String?        @unique
   passwordHash     String?        // staff only — attendees never get one
   role             Role           @default(USER)
   createdAt        DateTime       @default(now())
@@ -111,10 +117,21 @@ model Registration {
   userId        String
   user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  /// legalName, fursonaName, email, and answers are all encrypted at rest
+  /// (see lib/crypto.js). legalNameIndex/emailIndex are blind indexes (HMAC
+  /// of the lowercased, trimmed value) that stand in for the encrypted
+  /// column wherever the app needs an exact-match lookup, e.g. the
+  /// duplicate-registration check in findOrCreateHeadlessUser — the
+  /// encrypted column itself can't be filtered, sorted, or matched by
+  /// substring at the DB level, since encryption uses a random IV per value.
   legalName     String
+  legalNameIndex String?
   fursonaName   String
   email         String?
-  answers       Json               @default("{}")
+  emailIndex    String?
+  /// Encrypted JSON (stringified before encryption, parsed back on read) —
+  /// custom-question answers are free text and can contain anything.
+  answers       String             @default("")
   status        RegistrationStatus @default(CONFIRMED)
   tier          RegistrationTier   @default(FREE)
   badgeNumber   Int?
@@ -144,6 +161,8 @@ model Registration {
 
   @@unique([eventId, userId])
   @@index([eventId, status])
+  @@index([legalNameIndex])
+  @@index([emailIndex])
 }
 
 /// Everything about how a badge looks lives here as data, so it is editable in the UI.
@@ -260,6 +279,19 @@ model LoginCode {
   usedAt     DateTime?
 
   @@index([telegramId])
+}
+
+/// Single-use sign-in codes emailed to attendees who don't use Telegram —
+/// the only other way an end user signs in, now that end users can't set a
+/// password. emailIndex is a blind index (see lib/crypto.js); the email
+/// address itself isn't stored here at all, so there's nothing to encrypt.
+model EmailLoginCode {
+  code       String   @id
+  emailIndex String
+  createdAt  DateTime @default(now())
+  usedAt     DateTime?
+
+  @@index([emailIndex])
 }
 
 /// Conversation state for the registration bot.

@@ -7,16 +7,23 @@ import { Field } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 
 export default function Account() {
-  const { user, config, refresh } = useSession();
+  const { user, config, isStaff, refresh } = useSession();
   usePageMeta({ title: 'Account', noindex: true });
   const [params] = useSearchParams();
   const [pw, setPw] = useState({ email: user.email || '', password: '' });
+  const [email, setEmail] = useState(user.email || '');
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
 
-  const save = async (e) => {
+  const savePassword = async (e) => {
     e.preventDefault();
     try { await api.post('/api/auth/set-password', pw); await refresh(); setMsg('Password updated.'); setMsgOk(true); }
+    catch (err) { setMsg(err.message); setMsgOk(false); }
+  };
+
+  const saveEmail = async (e) => {
+    e.preventDefault();
+    try { await api.post('/api/auth/email', { email }); await refresh(); setMsg('Email updated.'); setMsgOk(true); }
     catch (err) { setMsg(err.message); setMsgOk(false); }
   };
 
@@ -38,19 +45,32 @@ export default function Account() {
       </div>
 
       {params.get('justRegistered') === '1' && (
-        <p className="note good" style={{ marginBottom: 20 }}>You're registered! Add a password below so you can sign back in later — Telegram isn't required.</p>
+        <p className="note good" style={{ marginBottom: 20 }}>
+          You're registered! Your email works to sign back in any time — we'll send a one-time code, no password needed.
+          {!user.telegramId && ' You can also link Telegram above for one-tap sign-in.'}
+        </p>
       )}
 
-      <form className="card stack" onSubmit={save}>
-        <h2 style={{ margin: 0 }}>Password sign-in</h2>
-        <p className="small muted">Add a password so you can sign in even without Telegram.</p>
-        <Field label="Email"><input type="email" value={pw.email} onChange={(e) => setPw({ ...pw, email: e.target.value })} /></Field>
-        <Field label="New password" help="At least 10 characters">
-          <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
-        </Field>
-        {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
-        <button className="btn primary">Save password</button>
-      </form>
+      {isStaff ? (
+        <form className="card stack" onSubmit={savePassword}>
+          <h2 style={{ margin: 0 }}>Password sign-in</h2>
+          <p className="small muted">Staff can sign in with a password as a Telegram-independent fallback.</p>
+          <Field label="Email"><input type="email" value={pw.email} onChange={(e) => setPw({ ...pw, email: e.target.value })} /></Field>
+          <Field label="New password" help="At least 10 characters">
+            <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
+          </Field>
+          {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
+          <button className="btn primary">Save password</button>
+        </form>
+      ) : (
+        <form className="card stack" onSubmit={saveEmail}>
+          <h2 style={{ margin: 0 }}>Email</h2>
+          <p className="small muted">This is where a sign-in code goes if you use the "Email code" option on the sign-in page.</p>
+          <Field label="Email"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
+          {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
+          <button className="btn primary">Save email</button>
+        </form>
+      )}
     </div>
   );
 }

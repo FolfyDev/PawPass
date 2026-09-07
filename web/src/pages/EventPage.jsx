@@ -83,8 +83,8 @@ export default function EventPage() {
       }
       if (wasGuest) {
         // The server just created an account and signed it in — pick that
-        // session up, then offer to set a password before anything else,
-        // since a guest has no way back into this account otherwise.
+        // session up, then point out the email code is how they get back
+        // in, since a guest has no password to fall back on otherwise.
         await refresh();
         nav('/account?justRegistered=1');
       } else {

@@ -3,6 +3,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { printBadge } from '../../lib/print.js';
+import { playCheckinSuccess, playCheckinError } from '../../lib/sound.js';
 import { StatusPill } from '../../components/Bits.jsx';
 
 const MODES = {
@@ -39,6 +40,7 @@ export default function Scanner() {
         const r = await api.post('/api/admin/checkin', { value, eventId: eventId || undefined });
         reg = r.registration;
         setResult({ ...r, note: r.already ? 'Already checked in earlier.' : MODES[mode].verb });
+        playCheckinSuccess();
       }
       if (mode !== 'checkin') {
         const p = await printBadge(value, settings?.printMode);
@@ -48,6 +50,7 @@ export default function Scanner() {
       if (navigator.vibrate) navigator.vibrate(40);
     } catch (e) {
       setError(e.message);
+      playCheckinError();
       setLog((l) => [{ at: new Date(), text: e.message, ok: false }, ...l].slice(0, 12));
     } finally {
       setTimeout(() => { busy.current = false; }, 1200);

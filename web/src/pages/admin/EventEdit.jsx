@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 
@@ -21,6 +22,8 @@ const localInZone = (d, tz) => {
 
 export default function EventEdit() {
   const { id } = useParams();
+  const { user } = useSession();
+  const isOwner = user.role === 'OWNER';
   const nav = useNavigate();
   const [e, setE] = useState(null);
   const [templates, setTemplates] = useState([]);
@@ -62,11 +65,12 @@ export default function EventEdit() {
           <p className="eyebrow">Event</p>
           <h1 style={{ margin: 0 }}>{e.title}</h1>
         </div>
-        <button className="btn primary" onClick={save}>Save changes</button>
+        {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
       </div>
       <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
+      <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
       <div className="stack">
         <section className="card stack">
           <h2 style={{ margin: 0 }}>Basics</h2>
@@ -164,6 +168,7 @@ export default function EventEdit() {
           <button className="btn primary" onClick={save}>Save changes</button>
         </div>
       </div>
+      </fieldset>
     </>
   );
 }

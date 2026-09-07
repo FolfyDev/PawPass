@@ -5,10 +5,6 @@ import { useSession } from '../lib/session.jsx';
 import { Field } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 
-/// Deliberately not linked from anywhere in the nav or the public sign-in
-/// page — reachable only by whoever has this URL. Hits the same
-/// POST /api/auth/password as the public "Sign in with email" tab on
-/// Login.jsx; the split here is presentation only, not a second mechanism.
 export default function StaffLogin() {
   const { refresh } = useSession();
   usePageMeta({ title: 'Staff sign in', noindex: true });

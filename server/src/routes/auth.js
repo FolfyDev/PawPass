@@ -3,8 +3,10 @@ import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, localDevAuthAvailable, redeemLoginCode, LoginCodeError } from '../lib/auth.js';
+import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, requireAdmin, localDevAuthAvailable, redeemLoginCode, redeemEmailCode, LoginCodeError } from '../lib/auth.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
+import { blindIndex } from '../lib/crypto.js';
+import { sendOtpEmail } from '../lib/mailer.js';
 
 export const authRouter = Router();
 
@@ -25,6 +27,7 @@ authRouter.get('/config', (_req, res) => {
       // Over plain http, or on localhost, the code flow is the way in.
       widgetUsable: env.telegram.enabled && env.publicUrl.startsWith('https'),
     },
+    emailCodeEnabled: env.smtp.enabled,
     devAuth: localDevAuthAvailable(),
   });
 });
@@ -54,8 +57,8 @@ authRouter.post('/telegram', async (req, res) => {
 /// way, an account with no passwordHash simply can't use this door.
 authRouter.post('/password', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
-  const user = await prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
-  if (!user?.passwordHash || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
+  const user = await prisma.user.findUnique({ where: { emailIndex: blindIndex(email) } });
+  if (!user?.passwordHash || user.role === 'USER' || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
     return res.status(401).json({ error: 'Email or password is incorrect.' });
 
   setSessionCookie(res, issueToken(user));
@@ -85,7 +88,9 @@ authRouter.post('/link-telegram', requireUser, async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-authRouter.post('/set-password', requireUser, async (req, res) => {
+/// Staff only — end users sign in with an email code or Telegram, never a
+/// password (see /password above and /email-code below).
+authRouter.post('/set-password', requireAdmin, async (req, res) => {
   const { email, password } = req.body || {};
   if (!password || String(password).length < 10)
     return res.status(400).json({ error: 'Use at least 10 characters.' });
@@ -100,6 +105,49 @@ authRouter.post('/set-password', requireUser, async (req, res) => {
     res.json({ user: publicUser(user) });
   } catch (e) {
     if (e.code === 'P2002') return res.status(400).json({ error: 'That email is already in use by another account.' });
+    throw e;
+  }
+});
+
+/// Any signed-in user can update the email their account uses for guest
+/// registration lookups and sign-in codes — this is the end-user equivalent
+/// of /set-password, minus the password.
+authRouter.post('/email', requireUser, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  try {
+    const user = await prisma.user.update({ where: { id: req.user.id }, data: { email } });
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That email is already in use by another account.' });
+    throw e;
+  }
+});
+
+authRouter.post('/email-code/request', loginLimiter, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  const emailIndex = blindIndex(email);
+  const user = await prisma.user.findUnique({ where: { emailIndex } });
+  if (user) {
+    const code = makeLoginCode();
+    await prisma.emailLoginCode.create({ data: { code, emailIndex } });
+    await prisma.emailLoginCode.updateMany({
+      where: { emailIndex, usedAt: null, code: { not: code } },
+      data: { usedAt: new Date() },
+    });
+    await sendOtpEmail(email, code).catch((e) => console.error('otp email failed', email, e.message));
+  }
+  res.json({ ok: true });
+});
+
+authRouter.post('/email-code/verify', loginLimiter, async (req, res) => {
+  try {
+    const user = await redeemEmailCode(req.body?.email, req.body?.code);
+    setSessionCookie(res, issueToken(user));
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e instanceof LoginCodeError) return res.status(401).json({ error: e.message });
     throw e;
   }
 });

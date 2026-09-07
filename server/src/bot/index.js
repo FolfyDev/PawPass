@@ -161,7 +161,7 @@ export function createBot() {
   bot.command('register', async (ctx) => {
     const { telegramId } = await load(ctx);
     const events = await prisma.event.findMany({
-      where: { published: true, endsAt: { gte: new Date() } },
+      where: { published: true, OR: [{ closesAt: null }, { closesAt: { gte: new Date() } }] },
       orderBy: { startsAt: 'asc' },
       take: 20,
     });
@@ -386,8 +386,9 @@ export function createBot() {
     const regs = await prisma.registration.findMany({
       where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
       include: { user: true },
-      orderBy: [{ rsvp: 'asc' }, { fursonaName: 'asc' }],
+      orderBy: { rsvp: 'asc' },
     });
+    regs.sort((a, b) => (a.rsvp === b.rsvp ? (a.fursonaName || a.user.displayName).localeCompare(b.fursonaName || b.user.displayName) : 0));
     if (!regs.length) return ctx.reply(`Nobody has RSVPed yes or maybe to ${event.title} yet.`);
     const lines = regs.map((r) => {
       const name = r.fursonaName || r.user.displayName;

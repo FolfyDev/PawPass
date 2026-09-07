@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import { useSession } from '../../lib/session.jsx';
 import { Empty, Pill, fmtDate } from '../../components/Bits.jsx';
 
 export default function Events() {
+  const { user } = useSession();
+  const isOwner = user.role === 'OWNER';
   const [events, setEvents] = useState(null);
   const nav = useNavigate();
 
@@ -22,7 +25,7 @@ export default function Events() {
     <>
       <div className="spread" style={{ marginBottom: 20 }}>
         <h1 style={{ margin: 0 }}>Events</h1>
-        <button className="btn primary" onClick={create}>New event</button>
+        {isOwner && <button className="btn primary" onClick={create}>New event</button>}
       </div>
 
       {events?.length === 0 && <Empty title="No events yet">Create one, then publish it when you are ready for sign-ups.</Empty>}

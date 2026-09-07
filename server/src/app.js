@@ -27,6 +27,10 @@ if (env.jwtSecret === 'dev-secret-change-me' && !isLocalDev()) {
   console.error('Refusing to start: JWT_SECRET is still the default. Set a long random value in .env before deploying.');
   process.exit(1);
 }
+if (env.encryptionKey === 'insecure-dev-encryption-key-change-me' && !isLocalDev()) {
+  console.error('Refusing to start: ENCRYPTION_KEY is still the default. Set a long random value in .env before deploying.');
+  process.exit(1);
+}
 if ((env.owner.password || 'change-me-now') === 'change-me-now' && !isLocalDev()) {
   console.warn('Warning: OWNER_PASSWORD is unset or default. Change it from the Account page immediately after first sign-in.');
 }

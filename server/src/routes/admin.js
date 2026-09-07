@@ -53,7 +53,7 @@ function eventPayload(body, timeZone) {
   return data;
 }
 
-adminRouter.post('/events', async (req, res) => {
+adminRouter.post('/events', requireOwner, async (req, res) => {
   const timeZone = req.body.timezone || env.defaultTimezone;
   const data = eventPayload(req.body, timeZone);
   if (!data.slug || !data.title) return res.status(400).json({ error: 'A title and URL slug are required.' });
@@ -62,14 +62,14 @@ adminRouter.post('/events', async (req, res) => {
   res.json(event);
 });
 
-adminRouter.patch('/events/:id', async (req, res) => {
+adminRouter.patch('/events/:id', requireOwner, async (req, res) => {
   const timeZone = req.body.timezone || (await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true } }))?.timezone || env.defaultTimezone;
   const event = await prisma.event.update({ where: { id: req.params.id }, data: eventPayload(req.body, timeZone) });
   await audit(req.user.id, 'event.update', event.id, {});
   res.json(event);
 });
 
-adminRouter.delete('/events/:id', async (req, res) => {
+adminRouter.delete('/events/:id', requireOwner, async (req, res) => {
   await prisma.event.delete({ where: { id: req.params.id } });
   await audit(req.user.id, 'event.delete', req.params.id, {});
   res.json({ ok: true });
@@ -77,25 +77,21 @@ adminRouter.delete('/events/:id', async (req, res) => {
 
 /* ---------------- registrations ---------------- */
 
+// legalName/fursonaName/email are encrypted at rest, so a substring search
+// across them can't happen in the database query — it's filtered here
+// instead, after Prisma has already decrypted the fetched rows.
 adminRouter.get('/events/:id/registrations', async (req, res) => {
   const { q, status } = req.query;
   const regs = await prisma.registration.findMany({
-    where: {
-      eventId: req.params.id,
-      ...(status ? { status } : {}),
-      ...(q ? {
-        OR: [
-          { legalName: { contains: String(q), mode: 'insensitive' } },
-          { fursonaName: { contains: String(q), mode: 'insensitive' } },
-          { code: { contains: String(q).toUpperCase() } },
-          { email: { contains: String(q), mode: 'insensitive' } },
-        ],
-      } : {}),
-    },
+    where: { eventId: req.params.id, ...(status ? { status } : {}) },
     include: { user: true },
     orderBy: { createdAt: 'asc' },
   });
-  res.json(regs.map((r) => ({
+  const needle = q ? String(q).toLowerCase() : '';
+  const filtered = needle
+    ? regs.filter((r) => [r.legalName, r.fursonaName, r.code, r.email].some((v) => v && v.toLowerCase().includes(needle)))
+    : regs;
+  res.json(filtered.map((r) => ({
     id: r.id, ...shapeReg(r),
     printCount: r.printCount, badgePrintedAt: r.badgePrintedAt, source: r.source,
     telegram: r.user.telegramUsername,
@@ -531,7 +527,7 @@ adminRouter.get('/bans/attempts', async (_req, res) => {
   res.json(rows);
 });
 
-adminRouter.post('/bans', async (req, res) => {
+adminRouter.post('/bans', requireOwner, async (req, res) => {
   const { legalName, email, telegramId, telegramUsername, reason } = req.body || {};
   const data = {
     legalName: legalName?.trim() || null,
@@ -547,7 +543,7 @@ adminRouter.post('/bans', async (req, res) => {
   res.json(ban);
 });
 
-adminRouter.delete('/bans/:id', async (req, res) => {
+adminRouter.delete('/bans/:id', requireOwner, async (req, res) => {
   const ban = await prisma.ban.delete({ where: { id: req.params.id } });
   await audit(req.user.id, 'ban.delete', req.params.id, { legalName: ban.legalName, email: ban.email });
   res.json({ ok: true });
@@ -555,19 +551,22 @@ adminRouter.delete('/bans/:id', async (req, res) => {
 
 /* ---------------- staff ---------------- */
 
+// email is encrypted at rest, so matching it against a typed-in search term
+// can't happen in the database query — see the same note above on the
+// attendee search. displayName/telegramUsername aren't encrypted and could
+// still be matched in the query, but it's simplest to filter all three the
+// same way once the (already-decrypted) rows are in hand.
 adminRouter.get('/users', async (req, res) => {
+  const q = req.query.q ? String(req.query.q).toLowerCase() : '';
   const users = await prisma.user.findMany({
-    where: req.query.q ? {
-      OR: [
-        { displayName: { contains: String(req.query.q), mode: 'insensitive' } },
-        { telegramUsername: { contains: String(req.query.q), mode: 'insensitive' } },
-        { email: { contains: String(req.query.q), mode: 'insensitive' } },
-      ],
-    } : { role: { in: ['ADMIN', 'OWNER'] } },
+    where: q ? {} : { role: { in: ['ADMIN', 'OWNER'] } },
     orderBy: { createdAt: 'asc' },
-    take: 100,
+    take: q ? undefined : 100,
   });
-  res.json(users.map(publicUser));
+  const filtered = q
+    ? users.filter((u) => [u.displayName, u.telegramUsername, u.email].some((v) => v && v.toLowerCase().includes(q))).slice(0, 100)
+    : users;
+  res.json(filtered.map(publicUser));
 });
 
 adminRouter.post('/users/:id/role', requireOwner, async (req, res) => {
@@ -582,6 +581,9 @@ adminRouter.post('/users/:id/role', requireOwner, async (req, res) => {
 adminRouter.post('/users/:id/password', requireOwner, async (req, res) => {
   const { email, password } = req.body || {};
   if (!password || password.length < 10) return res.status(400).json({ error: 'Use at least 10 characters.' });
+  const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.role === 'USER') return res.status(400).json({ error: 'End users sign in with an email code or Telegram, not a password. Promote them to staff first if they need one.' });
   const user = await prisma.user.update({
     where: { id: req.params.id },
     data: { email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12) },
@@ -638,8 +640,8 @@ adminRouter.post('/upload', upload.single('file'), (req, res) => {
 
 /* ---------------- settings ---------------- */
 
-adminRouter.get('/settings', async (_req, res) => res.json(await getSettings()));
-adminRouter.put('/settings', async (req, res) => {
+adminRouter.get('/settings', requireOwner, async (_req, res) => res.json(await getSettings()));
+adminRouter.put('/settings', requireOwner, async (req, res) => {
   const s = await setSettings(req.body || {});
   await audit(req.user.id, 'settings.update', null, {});
   res.json(s);

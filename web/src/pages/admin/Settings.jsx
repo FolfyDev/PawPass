@@ -17,11 +17,13 @@ const TEXT_FIELDS = [
 ];
 
 export default function Settings() {
-  const { refresh } = useSession();
+  const { user, refresh } = useSession();
+  const isOwner = user.role === 'OWNER';
   const [s, setS] = useState(null);
   const [msg, setMsg] = useState('');
 
-  useEffect(() => { api.get('/api/admin/settings').then(setS); }, []);
+  useEffect(() => { if (isOwner) api.get('/api/admin/settings').then(setS); }, [isOwner]);
+  if (!isOwner) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
   if (!s) return <p className="muted">Loading…</p>;
 
   const save = async () => {

@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { env } from './env.js';
 import { prisma } from './db.js';
+import { blindIndex } from './crypto.js';
 
 export const COOKIE = 'pawpass_session';
+const SESSION_MS = 24 * 3600 * 1000;
 
 export function issueToken(user) {
-  return jwt.sign({ sub: user.id, role: user.role }, env.jwtSecret, { expiresIn: '30d' });
+  return jwt.sign({ sub: user.id, role: user.role }, env.jwtSecret, { expiresIn: '1d' });
 }
 
 export function setSessionCookie(res, token) {
@@ -14,7 +16,7 @@ export function setSessionCookie(res, token) {
     httpOnly: true,
     sameSite: 'lax',
     secure: env.publicUrl.startsWith('https'),
-    maxAge: 30 * 24 * 3600 * 1000,
+    maxAge: SESSION_MS,
   });
 }
 
@@ -33,6 +35,23 @@ export async function redeemLoginCode(rawCode) {
 
   const user = await prisma.user.findUnique({ where: { telegramId: row.telegramId } });
   if (!user) throw new LoginCodeError('That Telegram account is not known here. Send /start to the bot first.');
+  return user;
+}
+
+export async function redeemEmailCode(rawEmail, rawCode) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  const emailIndex = blindIndex(rawEmail);
+  if (!code || !emailIndex) throw new LoginCodeError('Enter the code we emailed you.');
+
+  const row = await prisma.emailLoginCode.findUnique({ where: { code } });
+  const ageMinutes = row ? (Date.now() - row.createdAt.getTime()) / 60000 : Infinity;
+  if (!row || row.usedAt || row.emailIndex !== emailIndex || ageMinutes > env.loginCodeTtlMinutes)
+    throw new LoginCodeError('That code is not valid any more. Request a fresh one.');
+
+  await prisma.emailLoginCode.update({ where: { code }, data: { usedAt: new Date() } });
+
+  const user = await prisma.user.findUnique({ where: { emailIndex } });
+  if (!user) throw new LoginCodeError('That email is not known here.');
   return user;
 }
 

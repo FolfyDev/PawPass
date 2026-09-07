@@ -149,8 +149,8 @@ badgeRouter.post('/print-batch', async (req, res) => {
       ...(req.body.onlyUnprinted ? { badgePrintedAt: null } : {}),
       ...(req.body.onlyCheckedIn ? { checkedInAt: { not: null } } : {}),
     },
-    orderBy: { legalName: 'asc' },
   });
+  regs.sort((a, b) => a.legalName.localeCompare(b.legalName));
   const results = [];
   for (const reg of regs) {
     const r = await resolve(reg.code);

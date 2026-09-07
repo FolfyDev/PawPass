@@ -13,23 +13,35 @@ export default function Login() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState(null);
   const [code, setCode] = useState('');
-  const [creds, setCreds] = useState({ email: '', password: '' });
+  const [emailStep, setEmailStep] = useState('enter');
+  const [email, setEmail] = useState('');
+  const [emailCode, setEmailCode] = useState('');
   const [devName, setDevName] = useState('Dev User');
   const [devRole, setDevRole] = useState('OWNER');
   const [error, setError] = useState('');
 
-  // The widget needs an https domain registered with BotFather. When that is
-  // not the case, lead with the code flow instead of showing a button that
-  // silently fails.
   useEffect(() => {
     if (!config) return;
-    setTab(config.telegram?.widgetUsable ? 'widget' : config.telegram?.enabled ? 'code' : 'email');
+    setTab(
+      config.telegram?.widgetUsable ? 'widget'
+      : config.telegram?.enabled ? 'code'
+      : config.emailCodeEnabled ? 'email'
+      : config.devAuth ? 'dev'
+      : null,
+    );
   }, [config]);
 
   const done = async () => { await refresh(); nav('/'); };
   const run = async (fn) => { setError(''); try { await fn(); await done(); } catch (e) { setError(e.message); } };
 
   const bot = settings?.telegramBot || config?.telegram?.botUsername;
+
+  const requestEmailCode = async (e) => {
+    e.preventDefault();
+    setError('');
+    try { await api.post('/api/auth/email-code/request', { email }); setEmailStep('sent'); }
+    catch (e) { setError(e.message); }
+  };
 
   return (
     <div style={{ maxWidth: 440, margin: '60px auto' }}>
@@ -45,9 +57,15 @@ export default function Login() {
       <div className="row" style={{ marginBottom: 14 }}>
         {config?.telegram?.widgetUsable && <button className={`btn sm ${tab === 'widget' ? 'primary' : ''}`} onClick={() => setTab('widget')}>Telegram button</button>}
         {config?.telegram?.enabled && <button className={`btn sm ${tab === 'code' ? 'primary' : ''}`} onClick={() => setTab('code')}>Code from the bot</button>}
-        <button className={`btn sm ${tab === 'email' ? 'primary' : ''}`} onClick={() => setTab('email')}>Sign in with email</button>
+        {config?.emailCodeEnabled && <button className={`btn sm ${tab === 'email' ? 'primary' : ''}`} onClick={() => setTab('email')}>Email code</button>}
         {config?.devAuth && <button className={`btn sm ${tab === 'dev' ? 'primary' : ''}`} onClick={() => setTab('dev')}>Dev</button>}
       </div>
+
+      {tab === null && config && (
+        <p className="note bad">
+          No sign-in method is configured on this instance. Set a Telegram bot token, SMTP credentials, or ask an organizer for access.
+        </p>
+      )}
 
       {tab === 'widget' && (
         <div className="card stack">
@@ -71,15 +89,26 @@ export default function Login() {
         </form>
       )}
 
-      {tab === 'email' && (
-        <form className="card stack" onSubmit={(e) => { e.preventDefault(); run(() => api.post('/api/auth/password', creds)); }}>
-          <p className="muted small">Sign in with the email and password you set on your account after registering.</p>
-          <Field label="Email"><input type="email" autoComplete="username" value={creds.email}
-            onChange={(e) => setCreds({ ...creds, email: e.target.value })} /></Field>
-          <Field label="Password"><input type="password" autoComplete="current-password" value={creds.password}
-            onChange={(e) => setCreds({ ...creds, password: e.target.value })} /></Field>
+      {tab === 'email' && emailStep === 'enter' && (
+        <form className="card stack" onSubmit={requestEmailCode}>
+          <p className="muted small">We'll email you a one-time code — no password to remember.</p>
+          <Field label="Email"><input type="email" autoComplete="username" autoFocus value={email}
+            onChange={(e) => setEmail(e.target.value)} /></Field>
+          {error && <p className="note bad">{error}</p>}
+          <button className="btn primary">Send code</button>
+        </form>
+      )}
+
+      {tab === 'email' && emailStep === 'sent' && (
+        <form className="card stack" onSubmit={(e) => { e.preventDefault(); run(() => api.post('/api/auth/email-code/verify', { email, code: emailCode })); }}>
+          <p className="muted small">If an account uses {email}, a code just landed in that inbox.</p>
+          <Field label="Sign-in code">
+            <input className="mono" autoFocus placeholder="XXXX-XXXX" value={emailCode}
+              onChange={(e) => setEmailCode(e.target.value.toUpperCase())} style={{ letterSpacing: '.12em' }} />
+          </Field>
           {error && <p className="note bad">{error}</p>}
           <button className="btn primary">Sign in</button>
+          <button type="button" className="btn ghost sm" onClick={() => { setEmailStep('enter'); setError(''); }}>Use a different email</button>
         </form>
       )}
 
@@ -97,9 +126,9 @@ export default function Login() {
         </form>
       )}
 
-      {!config?.telegram?.enabled && tab !== 'dev' && (
+      {!config?.telegram?.enabled && config?.emailCodeEnabled && tab !== 'dev' && (
         <p className="small muted" style={{ marginTop: 14 }}>
-          Telegram sign-in is off because no bot token is set. You can still register for events and sign in with just an email and password.
+          Telegram sign-in is off because no bot token is set. You can still register for events and sign in with an emailed code.
         </p>
       )}
     </div>

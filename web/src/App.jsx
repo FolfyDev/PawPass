@@ -83,6 +83,7 @@ export default function App() {
             <Route path="audit" element={<AdminAuditLog />} />
             <Route path="settings" element={<AdminSettings />} />
             <Route path="backup" element={<AdminBackup />} />
+            <Route path="*" element={<NotFound />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -8,6 +8,7 @@ import { createRegistration, RegistrationError, registrationWindowState, promote
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
 import { notifyUser } from '../bot/index.js';
+import { blindIndex } from '../lib/crypto.js';
 
 export const publicRouter = Router();
 
@@ -61,8 +62,9 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
   const regs = await prisma.registration.findMany({
     where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
     include: { user: true },
-    orderBy: [{ rsvp: 'asc' }, { fursonaName: 'asc' }],
+    orderBy: { rsvp: 'asc' },
   });
+  regs.sort((a, b) => (a.rsvp === b.rsvp ? (a.fursonaName || a.user.displayName).localeCompare(b.fursonaName || b.user.displayName) : 0));
   res.json(regs.map((r) => ({
     name: r.fursonaName || r.user.displayName,
     telegramUsername: r.user.telegramUsername,
@@ -100,7 +102,7 @@ publicRouter.post('/events/:slug/register', async (req, res) => {
     if (!email || !/^\S+@\S+\.\S+$/.test(email))
       return res.status(400).json({ error: 'Enter an email address so you can get back into your account later.' });
     const normalized = String(email).trim().toLowerCase();
-    const existing = await prisma.user.findUnique({ where: { email: normalized } });
+    const existing = await prisma.user.findUnique({ where: { emailIndex: blindIndex(normalized) } });
     if (existing) return res.status(409).json({ error: 'An account already exists with that email. Sign in first.' });
     try {
       user = await findOrCreateHeadlessUser({ eventId: event.id, legalName, fursonaName, email: normalized });

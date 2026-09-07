@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../../src/lib/db.js';
+import { blindIndex } from '../../src/lib/crypto.js';
 
 function assertTestDatabase() {
   const url = process.env.DATABASE_URL || '';
@@ -31,6 +32,7 @@ const CLEAR_ORDER = [
   'voucherCode',
   'emailCampaign',
   'loginCode',
+  'emailLoginCode',
   'botSession',
   'event',
   'badgeTemplate',
@@ -118,4 +120,15 @@ export function createLoginCode(overrides = {}) {
 
 export function nextEmail() {
   return `attendee${next()}-${Date.now()}@test.pawpass`;
+}
+
+export function createEmailLoginCode(email, overrides = {}) {
+  const n = next();
+  return prisma.emailLoginCode.create({
+    data: {
+      code: `TEST${n}MAIL`,
+      emailIndex: blindIndex(email),
+      ...overrides,
+    },
+  });
 }

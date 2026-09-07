@@ -8,6 +8,7 @@ export default function AdminLayout() {
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
   if (!isStaff) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
+  const isOwner = user.role === 'OWNER';
 
   return (
     <div className="admin" style={{ paddingTop: 32 }}>
@@ -21,8 +22,8 @@ export default function AdminLayout() {
         <NavLink to="/admin/staff">Staff</NavLink>
         <NavLink to="/admin/bans">Bans</NavLink>
         <NavLink to="/admin/audit">Audit log</NavLink>
-        <NavLink to="/admin/settings">Settings</NavLink>
-        <NavLink to="/admin/backup">Backup &amp; restore</NavLink>
+        {isOwner && <NavLink to="/admin/settings">Settings</NavLink>}
+        {isOwner && <NavLink to="/admin/backup">Backup &amp; restore</NavLink>}
       </aside>
       <div className="admin-content"><Outlet /></div>
     </div>
