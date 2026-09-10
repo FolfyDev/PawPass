@@ -1,5 +1,16 @@
 import { api } from './api.js';
 
+/// Every popup window below is built with document.write() string
+/// concatenation, and some of what gets concatenated in (a scanned QR/Aztec
+/// payload, a typed badge code) is attacker-influenced — a malicious code
+/// handed to a staff member at check-in could otherwise break out of the
+/// `<title>` text or an `<img src="...">` attribute and inject script into
+/// the admin's own session. Escaping quotes too (not just &/</>) makes this
+/// safe in both contexts.
+const esc = (s) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 /// Opens the badge image in a new tab and fires the browser's own print
 /// dialog — for a printer that's USB-attached to whichever computer staff
 /// are actually using, not reachable on the network from the server. The
@@ -10,9 +21,9 @@ function openPrintWindow(tail) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
     if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
-    win.document.write(`<!doctype html><title>${tail}</title>
+    win.document.write(`<!doctype html><title>${esc(tail)}</title>
 <style>@page{size:auto;margin:0} html,body{margin:0;padding:0;height:100%} img{width:100%;height:100%;object-fit:contain;display:block}</style>
-<img id="badge" src="${api.base}/api/badges/registration/${tail}.png">`);
+<img id="badge" src="${esc(`${api.base}/api/badges/registration/${tail}.png`)}">`);
     win.document.close();
     win.onafterprint = () => win.close();
     const img = win.document.getElementById('badge');
@@ -48,7 +59,7 @@ function openPrintWindowMulti(tails) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
     if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
-    const imgs = tails.map((t) => `<img class="badge" src="${api.base}/api/badges/registration/${t}.png">`).join('');
+    const imgs = tails.map((t) => `<img class="badge" src="${esc(`${api.base}/api/badges/registration/${t}.png`)}">`).join('');
     win.document.write(`<!doctype html><title>${tails.length} badges</title>
 <style>@page{size:auto;margin:0} html,body{margin:0;padding:0}
 .badge{display:block;width:100%;page-break-after:always;object-fit:contain}
@@ -100,7 +111,6 @@ export function printAttendeeList(rows, eventTitle) {
     if (key === 'paymentAmount') return r.paymentAmount != null ? `$${Number(r.paymentAmount).toFixed(2)}` : '';
     return r[key] ?? '';
   };
-  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const head = cols.map(([, label]) => `<th>${esc(label)}</th>`).join('');
   const body = rows.map((r) => `<tr>${cols.map(([key]) => `<td>${esc(cell(r, key))}</td>`).join('')}</tr>`).join('');

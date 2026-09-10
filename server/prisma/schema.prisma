@@ -55,6 +55,11 @@ model User {
   emailIndex       String?        @unique
   passwordHash     String?        // staff only — attendees never get one
   role             Role           @default(USER)
+  /// Bumped on logout or password change; a JWT's embedded `ver` claim must
+  /// match this or loadUser() treats the request as signed out. Lets a
+  /// logout invalidate the token everywhere, not just clear this browser's
+  /// cookie — see issueToken()/loadUser() in lib/auth.js.
+  tokenVersion     Int            @default(0)
   createdAt        DateTime       @default(now())
 
   registrations    Registration[]

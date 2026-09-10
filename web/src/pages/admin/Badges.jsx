@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { useSession } from '../../lib/session.jsx';
 import { Field, Empty } from '../../components/Bits.jsx';
 
 const NEW_ELEMENT = {
@@ -15,6 +16,7 @@ const NEW_ELEMENT = {
 /// the server renders the same JSON to PNG and to ZPL, so what you drag here is
 /// what the ZD500 prints.
 export default function Badges() {
+  const { user } = useSession();
   const [templates, setTemplates] = useState([]);
   const [t, setT] = useState(null);
   const [sel, setSel] = useState(null);
@@ -91,6 +93,9 @@ export default function Badges() {
   const create = async () => { const n = await api.post('/api/badges/templates', { name: 'New badge' }); await load(); setT(n); };
   const duplicate = async () => { await api.post(`/api/badges/templates/${t.id}/duplicate`); load(); };
   const remove = async () => { if (confirm(`Delete "${t.name}"?`)) { await api.del(`/api/badges/templates/${t.id}`); setT(null); load(); } };
+
+  if (user.role !== 'OWNER')
+    return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
 
   if (!t) return (
     <>

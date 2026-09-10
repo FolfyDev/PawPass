@@ -1,7 +1,12 @@
 import { prisma } from './db.js';
 
-const norm = (s) => (s || '').trim();
-const normHandle = (s) => norm(s).replace(/^@/, '');
+// NFKC folds visually-identical Unicode variants (e.g. a combining accent vs
+// its precomposed character) to the same form, and collapsing internal
+// whitespace closes the "Jane  Doe" double-space bypass — both are cheap for
+// a banned person to hit by accident, let alone deliberately, if matching
+// only trims.
+export const norm = (s) => (s || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+export const normHandle = (s) => norm(s).replace(/^@/, '');
 
 export async function findMatchingBan({ legalName, email, telegramId, telegramUsername }) {
   const or = [];

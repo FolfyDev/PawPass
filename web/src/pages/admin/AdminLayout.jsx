@@ -16,12 +16,12 @@ export default function AdminLayout() {
         <p className="eyebrow" style={{ padding: '0 12px 6px' }}>Operations</p>
         <NavLink to="/admin" end>Events</NavLink>
         <NavLink to="/admin/scan">Check in &amp; print</NavLink>
-        <NavLink to="/admin/badges">Badge designer</NavLink>
+        {isOwner && <NavLink to="/admin/badges">Badge designer</NavLink>}
         <NavLink to="/admin/email">Email</NavLink>
         <p className="eyebrow" style={{ padding: '14px 12px 6px' }}>Instance</p>
-        <NavLink to="/admin/staff">Staff</NavLink>
+        {isOwner && <NavLink to="/admin/staff">Staff</NavLink>}
         <NavLink to="/admin/bans">Bans</NavLink>
-        <NavLink to="/admin/audit">Audit log</NavLink>
+        {isOwner && <NavLink to="/admin/audit">Audit log</NavLink>}
         {isOwner && <NavLink to="/admin/settings">Settings</NavLink>}
         {isOwner && <NavLink to="/admin/backup">Backup &amp; restore</NavLink>}
       </aside>

@@ -4,12 +4,14 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
 import AdmZip from 'adm-zip';
+import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers } from '../lib/registrations.js';
+import { norm, normHandle } from '../lib/bans.js';
 import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
@@ -541,11 +543,14 @@ adminRouter.get('/bans/attempts', async (_req, res) => {
 
 adminRouter.post('/bans', requireOwner, async (req, res) => {
   const { legalName, email, telegramId, telegramUsername, reason } = req.body || {};
+  // Normalized the same way findMatchingBan() reads incoming registrations,
+  // so an inconsistently-spaced/accented ban record can't silently fail to
+  // match later.
   const data = {
-    legalName: legalName?.trim() || null,
-    email: email?.trim() || null,
-    telegramId: telegramId?.trim() || null,
-    telegramUsername: telegramUsername?.trim().replace(/^@/, '') || null,
+    legalName: norm(legalName) || null,
+    email: norm(email) || null,
+    telegramId: norm(telegramId) || null,
+    telegramUsername: normHandle(telegramUsername) || null,
     reason: reason?.trim() || '',
   };
   if (!data.legalName && !data.email && !data.telegramId && !data.telegramUsername)
@@ -568,7 +573,7 @@ adminRouter.delete('/bans/:id', requireOwner, async (req, res) => {
 // attendee search. displayName/telegramUsername aren't encrypted and could
 // still be matched in the query, but it's simplest to filter all three the
 // same way once the (already-decrypted) rows are in hand.
-adminRouter.get('/users', async (req, res) => {
+adminRouter.get('/users', requireOwner, async (req, res) => {
   const q = req.query.q ? String(req.query.q).toLowerCase() : '';
   const users = await prisma.user.findMany({
     where: q ? {} : { role: { in: ['ADMIN', 'OWNER'] } },
@@ -598,7 +603,7 @@ adminRouter.post('/users/:id/password', requireOwner, async (req, res) => {
   if (target.role === 'USER') return res.status(400).json({ error: 'End users sign in with an email code or Telegram, not a password. Promote them to staff first if they need one.' });
   const user = await prisma.user.update({
     where: { id: req.params.id },
-    data: { email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12) },
+    data: { email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12), tokenVersion: { increment: 1 } },
   });
   await audit(req.user.id, 'user.password', user.id, {});
   res.json(publicUser(user));
@@ -622,7 +627,7 @@ adminRouter.post('/campaigns', async (req, res) => {
   res.json(c);
 });
 
-adminRouter.post('/campaigns/:id/send', async (req, res) => {
+adminRouter.post('/campaigns/:id/send', requireOwner, async (req, res) => {
   if (!env.smtp.enabled) return res.status(503).json({ error: 'SMTP is not configured on this instance.' });
   try {
     const result = await sendCampaign(req.params.id, { dryRun: Boolean(req.body.dryRun) });
@@ -635,19 +640,26 @@ adminRouter.post('/campaigns/:id/send', async (req, res) => {
 
 /* ---------------- uploads ---------------- */
 
-const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: path.join(process.cwd(), 'uploads'),
-    filename: (_req, file, cb) => cb(null, `${nanoid(10)}${path.extname(file.originalname) || '.png'}`),
-  }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, ALLOWED_IMAGE_TYPES.includes(file.mimetype)),
-});
+// Memory storage, not disk — the file is only written once its actual bytes
+// have been decoded and verified below. Trusting the client's declared
+// mimetype and original filename (as a `fileFilter` + disk `filename()`
+// would) lets an upload named "x.png" with content-type image/png but actual
+// content of, say, an SVG with an embedded <script> land on disk as
+// whatever extension the client chose, then get served back same-origin —
+// a stored-XSS path into an admin session.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const EXT_BY_FORMAT = { png: '.png', jpeg: '.jpg', webp: '.webp', gif: '.gif' };
 
-adminRouter.post('/upload', upload.single('file'), (req, res) => {
+adminRouter.post('/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No image received.' });
-  res.json({ url: `${env.publicUrl}/uploads/${req.file.filename}` });
+  let format;
+  try { ({ format } = await sharp(req.file.buffer).metadata()); }
+  catch { return res.status(400).json({ error: 'That file could not be read as an image.' }); }
+  const ext = EXT_BY_FORMAT[format];
+  if (!ext) return res.status(400).json({ error: 'Use a PNG, JPEG, WebP, or GIF image.' });
+  const filename = `${nanoid(10)}${ext}`;
+  await fs.writeFile(path.join(process.cwd(), 'uploads', filename), req.file.buffer);
+  res.json({ url: `${env.publicUrl}/uploads/${filename}` });
 });
 
 /* ---------------- settings ---------------- */
@@ -659,7 +671,7 @@ adminRouter.put('/settings', requireOwner, async (req, res) => {
   res.json(s);
 });
 
-adminRouter.get('/audit', async (_req, res) => {
+adminRouter.get('/audit', requireOwner, async (_req, res) => {
   const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
   res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
 });

@@ -8,7 +8,7 @@ export const COOKIE = 'pawpass_session';
 const SESSION_MS = 24 * 3600 * 1000;
 
 export function issueToken(user) {
-  return jwt.sign({ sub: user.id, role: user.role }, env.jwtSecret, { expiresIn: '1d' });
+  return jwt.sign({ sub: user.id, role: user.role, ver: user.tokenVersion }, env.jwtSecret, { expiresIn: '1d', algorithm: 'HS256' });
 }
 
 export function setSessionCookie(res, token) {
@@ -74,8 +74,11 @@ export async function loadUser(req, _res, next) {
   const token = req.cookies?.[COOKIE] || (req.headers.authorization || '').replace(/^Bearer /, '');
   if (token) {
     try {
-      const payload = jwt.verify(token, env.jwtSecret);
-      req.user = await prisma.user.findUnique({ where: { id: payload.sub } });
+      const payload = jwt.verify(token, env.jwtSecret, { algorithms: ['HS256'] });
+      const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+      // A token issued before the user's last logout/password-change carries
+      // a stale `ver` — treat it the same as no session at all.
+      req.user = user && user.tokenVersion === payload.ver ? user : null;
     } catch {
       req.user = null;
     }

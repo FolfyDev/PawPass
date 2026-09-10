@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { requireAdmin, audit } from '../lib/auth.js';
+import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings } from '../lib/settings.js';
 import { STARTER_TEMPLATE, BADGE_TOKENS, LABEL_PRESETS } from '../badges/template.js';
 import { renderBadgePNG, renderSampleSVG, renderBadgeSVG, contextForRegistration } from '../badges/render.js';
@@ -10,8 +10,12 @@ import { badgeToZPL, sendToPrinter } from '../badges/zebra.js';
 export const badgeRouter = Router();
 badgeRouter.use(requireAdmin);
 
-badgeRouter.get('/tokens', (_req, res) => res.json(BADGE_TOKENS));
-badgeRouter.get('/presets', (_req, res) => res.json(LABEL_PRESETS));
+// Everything below that's specific to the designer UI itself (editing
+// templates, not just rendering/printing them) is owner-only. `GET
+// /templates` stays plain requireAdmin — EventEdit.jsx's read-only template
+// picker needs it for every staff member viewing an event, not just owners.
+badgeRouter.get('/tokens', requireOwner, (_req, res) => res.json(BADGE_TOKENS));
+badgeRouter.get('/presets', requireOwner, (_req, res) => res.json(LABEL_PRESETS));
 
 badgeRouter.get('/templates', async (_req, res) => {
   res.json(await prisma.badgeTemplate.findMany({ orderBy: { createdAt: 'asc' } }));
@@ -20,14 +24,14 @@ badgeRouter.get('/templates', async (_req, res) => {
 /// New templates start as a blank canvas — the operator builds the layout
 /// from scratch. The seeded "Default badge" (STARTER_TEMPLATE) is the only
 /// one that ships pre-built; see bootstrap() in index.js.
-badgeRouter.post('/templates', async (req, res) => {
+badgeRouter.post('/templates', requireOwner, async (req, res) => {
   const t = await prisma.badgeTemplate.create({
     data: { elements: [], ...req.body, name: req.body.name || 'Untitled badge' },
   });
   res.json(t);
 });
 
-badgeRouter.patch('/templates/:id', async (req, res) => {
+badgeRouter.patch('/templates/:id', requireOwner, async (req, res) => {
   const { name, widthMm, heightMm, dpi, background, elements, isDefault } = req.body;
   if (isDefault) await prisma.badgeTemplate.updateMany({ data: { isDefault: false } });
   const t = await prisma.badgeTemplate.update({
@@ -37,12 +41,12 @@ badgeRouter.patch('/templates/:id', async (req, res) => {
   res.json(t);
 });
 
-badgeRouter.delete('/templates/:id', async (req, res) => {
+badgeRouter.delete('/templates/:id', requireOwner, async (req, res) => {
   await prisma.badgeTemplate.delete({ where: { id: req.params.id } });
   res.json({ ok: true });
 });
 
-badgeRouter.post('/templates/:id/duplicate', async (req, res) => {
+badgeRouter.post('/templates/:id/duplicate', requireOwner, async (req, res) => {
   const src = await prisma.badgeTemplate.findUnique({ where: { id: req.params.id } });
   if (!src) return res.status(404).json({ error: 'Template not found.' });
   const { id, createdAt, isDefault, ...rest } = src;
@@ -51,7 +55,7 @@ badgeRouter.post('/templates/:id/duplicate', async (req, res) => {
 
 /// Live preview for the designer. Accepts an unsaved template body so the
 /// canvas can update as the operator drags things around.
-badgeRouter.post('/preview.svg', async (req, res) => {
+badgeRouter.post('/preview.svg', requireOwner, async (req, res) => {
   const svg = await renderSampleSVG(req.body.template || STARTER_TEMPLATE, req.body.overrides);
   res.type('image/svg+xml').send(svg);
 });
@@ -176,5 +180,5 @@ badgeRouter.post('/print-batch', async (req, res) => {
   res.json({ printed: results.filter((r) => r.ok).length, results });
 });
 
-badgeRouter.get('/printer', (_req, res) =>
+badgeRouter.get('/printer', requireOwner, (_req, res) =>
   res.json({ host: env.zebra.host, port: env.zebra.port, dpi: env.zebra.dpi }));

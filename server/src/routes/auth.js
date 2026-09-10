@@ -65,7 +65,11 @@ authRouter.post('/password', loginLimiter, async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-authRouter.post('/logout', (_req, res) => {
+authRouter.post('/logout', async (req, res) => {
+  // Bumping tokenVersion invalidates this account's token everywhere, not
+  // just this browser — clearing the cookie alone wouldn't stop a copy of
+  // the token being reused elsewhere until it naturally expired.
+  if (req.user) await prisma.user.update({ where: { id: req.user.id }, data: { tokenVersion: { increment: 1 } } });
   res.clearCookie(COOKIE);
   res.json({ ok: true });
 });
@@ -100,8 +104,13 @@ authRouter.post('/set-password', requireAdmin, async (req, res) => {
       data: {
         email: email ? String(email).toLowerCase() : req.user.email,
         passwordHash: await bcrypt.hash(String(password), 12),
+        tokenVersion: { increment: 1 },
       },
     });
+    // Re-issue so this browser's own session survives the bump above — only
+    // a token from *before* this change (e.g. on another device) is meant
+    // to stop working.
+    setSessionCookie(res, issueToken(user));
     res.json({ user: publicUser(user) });
   } catch (e) {
     if (e.code === 'P2002') return res.status(400).json({ error: 'That email is already in use by another account.' });
