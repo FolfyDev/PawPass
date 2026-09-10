@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { printBadge } from '../../lib/print.js';
@@ -24,11 +24,23 @@ export default function Scanner() {
   const [error, setError] = useState('');
   const [manual, setManual] = useState('');
   const [log, setLog] = useState([]);
+  const [q, setQ] = useState('');
+  const [matches, setMatches] = useState([]);
   const readerRef = useRef(null);
   const busy = useRef(false);
 
   useEffect(() => { api.get('/api/admin/events').then(setEvents); }, []);
   useEffect(() => () => { readerRef.current?.stop().catch(() => {}); }, []);
+
+  // Name search needs one event to search within — same per-event
+  // registrations endpoint Attendees.jsx uses.
+  useEffect(() => {
+    if (!eventId || !q.trim()) { setMatches([]); return; }
+    const t = setTimeout(() => {
+      api.get(`/api/admin/events/${eventId}/registrations?q=${encodeURIComponent(q)}`).then((rows) => setMatches(rows.slice(0, 8)));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [q, eventId]);
 
   const handle = async (value) => {
     if (busy.current) return;
@@ -62,7 +74,14 @@ export default function Scanner() {
     const reader = new Html5Qrcode('reader');
     readerRef.current = reader;
     try {
-      await reader.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 240, height: 240 } }, handle, () => {});
+      await reader.start({ facingMode: 'environment' }, {
+        fps: 10,
+        qrbox: { width: 240, height: 240 },
+        // Badges print an Aztec code now (see STARTER_TEMPLATE in
+        // template.js); QR stays supported for wallet-pass barcodes and any
+        // badge printed from an older/custom template.
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.AZTEC],
+      }, handle, () => {});
       setScanning(true);
     } catch (e) {
       setError(`Camera unavailable: ${e.message}. Type the badge code instead.`);
@@ -97,6 +116,25 @@ export default function Scanner() {
             <input className="mono" placeholder="Type a badge code" value={manual} onChange={(e) => setManual(e.target.value)} style={{ maxWidth: 220 }} />
             <button className="btn">Look up</button>
           </form>
+
+          <div className="stack" style={{ gap: 6 }}>
+            <input placeholder={eventId ? 'Search attendees by name' : 'Pick an event above to search by name'}
+              value={q} disabled={!eventId} onChange={(e) => setQ(e.target.value)} />
+            {matches.length > 0 && (
+              <div className="card" style={{ padding: 0 }}>
+                {matches.map((r) => (
+                  <div key={r.code} className="spread small" style={{ padding: '8px 10px', borderBottom: '1px solid var(--rule)' }}>
+                    <span>
+                      <strong>{r.fursonaName || r.legalName}</strong>{' '}
+                      <span className="mono muted">{r.code}</span>{' '}
+                      <StatusPill status={r.status} checkedInAt={r.checkedInAt} />
+                    </span>
+                    <button className="btn sm" onClick={() => { handle(r.code); setQ(''); setMatches([]); }}>Check in</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="stack">

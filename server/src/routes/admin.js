@@ -9,7 +9,7 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
-import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser } from '../lib/registrations.js';
+import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers } from '../lib/registrations.js';
 import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
@@ -129,6 +129,16 @@ adminRouter.post('/registrations', async (req, res) => {
 adminRouter.patch('/registrations/:code', async (req, res) => {
   const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentAmount','paymentNote'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+  if (data.answers) {
+    const existing = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
+    if (!existing) return res.status(404).json({ error: 'Registration not found.' });
+    // Only checked for required-field violations here, not reassigned —
+    // validateAnswers()'s return value drops any key no longer in the
+    // event's current customFields, which would silently erase an answer to
+    // a question that has since been removed from the event.
+    try { validateAnswers(existing.event, data.answers); }
+    catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
+  }
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
   if (data.status === 'CANCELLED') {
     const promoted = await promoteFromWaitlist(reg.eventId);
@@ -475,12 +485,14 @@ adminRouter.delete('/vouchers/:id', async (req, res) => {
 /* ---------------- check-in ---------------- */
 
 /// The scanner posts whatever the camera read: a full ticket URL, a bare
-/// secret, or a typed badge code. All three resolve here.
+/// secret, a typed badge code, or an Aztec badge payload (`CODE|TIER|NAME`,
+/// see `{{badge_payload}}` in render.js — only the leading code matters here).
 adminRouter.post('/checkin', async (req, res) => {
   const raw = String(req.body.value || '').trim();
-  const secret = raw.split('/').pop();
+  const primary = raw.split('|')[0].trim();
+  const secret = primary.split('/').pop();
   const reg = await prisma.registration.findFirst({
-    where: { OR: [{ secret }, { code: raw.toUpperCase() }] },
+    where: { OR: [{ secret }, { code: primary.toUpperCase() }] },
     include: { event: true, user: true },
   });
   if (!reg) return res.status(404).json({ error: 'No ticket matches that code.' });

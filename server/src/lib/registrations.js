@@ -13,7 +13,7 @@ export function validateAnswers(event, answers = {}) {
   const clean = {};
   for (const f of fields) {
     const value = answers[f.key];
-    const empty = value === undefined || value === null || value === '';
+    const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
     if (f.required && empty) throw new RegistrationError(`${f.label} is required.`);
     if (!empty) clean[f.key] = value;
   }

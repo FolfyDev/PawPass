@@ -60,7 +60,10 @@ export default function EventPage() {
     setError('');
     if (form.legalName.trim().length < 2) return setError('Enter your full legal name.');
     if (!user && !/^\S+@\S+\.\S+$/.test(form.email)) return setError('Enter an email address so you can get back into your account later.');
-    for (const f of fields) if (f.required && !form.answers[f.key]) return setError(`${f.label} is required.`);
+    for (const f of fields) {
+      const v = form.answers[f.key];
+      if (f.required && (Array.isArray(v) ? v.length === 0 : !v)) return setError(`${f.label} is required.`);
+    }
     setShowTos(true);
   };
 
@@ -182,6 +185,18 @@ export default function EventPage() {
                   ) : f.type === 'checkbox' ? (
                     <span className="row"><input type="checkbox" checked={!!form.answers[f.key]}
                       onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.checked } })} /> {f.help}</span>
+                  ) : f.type === 'qualifier' ? (
+                    <div className="stack" style={{ gap: 4 }}>
+                      {(f.options || []).map((o) => {
+                        const picked = Array.isArray(form.answers[f.key]) ? form.answers[f.key] : [];
+                        return (
+                          <label key={o} className="row small">
+                            <input type="checkbox" checked={picked.includes(o)}
+                              onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.checked ? [...picked, o] : picked.filter((x) => x !== o) } })} /> {o}
+                          </label>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <input type={f.type === 'number' ? 'number' : 'text'} value={form.answers[f.key] || ''}
                       onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.value } })} />

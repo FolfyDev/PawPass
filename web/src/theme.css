@@ -189,8 +189,12 @@ a.stub:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 .tier .tier-help { font-size: 12px; color: var(--ink-3); }
 
 /* ---- tables ---- */
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+/* auto width + min-width:100% lets columns size to their content (growing
+   the container's own overflow-x scroll if the total exceeds it) instead of
+   forcing every column to squeeze/stretch to fill a fixed 100% width, which
+   is what was wrapping header labels and status pills onto two lines. */
+table { width: auto; min-width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); padding: 10px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 td { padding: 11px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
 tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 

@@ -5,6 +5,7 @@ import { Field, Empty } from '../../components/Bits.jsx';
 const NEW_ELEMENT = {
   text: { type: 'text', x: 4, y: 4, w: 26, h: 7, text: 'New text', font: 'DejaVu Sans', size: 4, weight: 600, color: '#000000', align: 'left', fit: true },
   qr:   { type: 'qr', x: 2.2, y: 4.4, w: 23, h: 23, value: '{{code}}', dark: '#000000', light: '#FFFFFF' },
+  aztec:{ type: 'aztec', x: 2.2, y: 4.4, w: 23, h: 23, value: '{{badge_payload}}', dark: '#000000', light: '#FFFFFF' },
   rect: { type: 'rect', x: 2, y: 2, w: 20, h: 4, fill: '#000000', radius: 0 },
   line: { type: 'line', x: 2, y: 16, w: 30, h: 0.3, fill: '#000000' },
   image:{ type: 'image', x: 2, y: 2, w: 14, h: 14, href: 'https://example.com/logo.png' },
@@ -233,14 +234,22 @@ export default function Badges() {
                   </>
                 )}
 
-                {selected.type === 'qr' && (
+                {(selected.type === 'qr' || selected.type === 'aztec') && (
                   <div className="grid-2">
-                    <Field label="Encodes"><input value={selected.value} onChange={(e) => patch(sel, { value: e.target.value })} /></Field>
-                    <Field label="Error correction">
-                      <select value={selected.ecc || 'M'} onChange={(e) => patch(sel, { ecc: e.target.value })}>
-                        {['L', 'M', 'Q', 'H'].map((x) => <option key={x}>{x}</option>)}
-                      </select>
+                    <Field label="Encodes" help={selected.type === 'aztec' ? '{{badge_payload}} includes the code, tier, and name' : undefined}>
+                      <input value={selected.value} onChange={(e) => patch(sel, { value: e.target.value })} />
                     </Field>
+                    {selected.type === 'qr' ? (
+                      <Field label="Error correction">
+                        <select value={selected.ecc || 'M'} onChange={(e) => patch(sel, { ecc: e.target.value })}>
+                          {['L', 'M', 'Q', 'H'].map((x) => <option key={x}>{x}</option>)}
+                        </select>
+                      </Field>
+                    ) : (
+                      <Field label="Compact" help="Smaller symbol, for shorter payloads">
+                        <label className="row small"><input type="checkbox" checked={!!selected.compact} onChange={(e) => patch(sel, { compact: e.target.checked })} /> Use compact Aztec</label>
+                      </Field>
+                    )}
                     <Field label="Dark"><input type="color" value={selected.dark} onChange={(e) => patch(sel, { dark: e.target.value })} style={{ width: 70, padding: 4 }} /></Field>
                     <Field label="Light"><input type="color" value={selected.light} onChange={(e) => patch(sel, { light: e.target.value })} style={{ width: 70, padding: 4 }} /></Field>
                   </div>

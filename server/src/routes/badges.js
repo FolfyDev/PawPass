@@ -57,13 +57,15 @@ badgeRouter.post('/preview.svg', async (req, res) => {
 });
 
 /// Accepts either a clean badge code or a raw scanned value — a QR payload
-/// is the full `.../t/<secret>` URL, not the code — same flexible match
-/// /print already does, so any caller (browser-print included) can hand
-/// this whatever a camera or a manual code entry produced.
+/// is the full `.../t/<secret>` URL, not the code; an Aztec badge payload is
+/// `CODE|TIER|NAME` (see `{{badge_payload}}` in render.js) — same flexible
+/// match /print already does, so any caller (browser-print included) can
+/// hand this whatever a camera or a manual code entry produced.
 async function resolve(raw) {
-  const secret = raw.split('/').pop();
+  const primary = String(raw).split('|')[0].trim();
+  const secret = primary.split('/').pop();
   const reg = await prisma.registration.findFirst({
-    where: { OR: [{ secret }, { code: raw.toUpperCase() }] },
+    where: { OR: [{ secret }, { code: primary.toUpperCase() }] },
     include: { event: { include: { badgeTemplate: true } } },
   });
   if (!reg) return null;
@@ -113,8 +115,9 @@ badgeRouter.post('/registration/:code/printed', async (req, res) => {
 /// straight to the ZD500 over port 9100.
 badgeRouter.post('/print', async (req, res) => {
   const raw = String(req.body.value || req.body.code || '').trim();
-  const secret = raw.split('/').pop();
-  const found = await prisma.registration.findFirst({ where: { OR: [{ secret }, { code: raw.toUpperCase() }] } });
+  const primary = raw.split('|')[0].trim();
+  const secret = primary.split('/').pop();
+  const found = await prisma.registration.findFirst({ where: { OR: [{ secret }, { code: primary.toUpperCase() }] } });
   if (!found) return res.status(404).json({ error: 'No ticket matches that code.' });
 
   const r = await resolve(found.code);
@@ -140,15 +143,19 @@ badgeRouter.post('/print', async (req, res) => {
   res.json({ ok: true, code: updated.code, printCount: updated.printCount });
 });
 
-/// Batch print, e.g. everyone checked in but not yet badged.
+/// Batch print, e.g. everyone checked in but not yet badged — or, when the
+/// caller hands over an explicit `codes` list (the attendee portal's
+/// select-with-checkboxes flow), exactly that set instead of an event-wide filter.
 badgeRouter.post('/print-batch', async (req, res) => {
   const regs = await prisma.registration.findMany({
-    where: {
-      eventId: req.body.eventId,
-      status: 'CONFIRMED',
-      ...(req.body.onlyUnprinted ? { badgePrintedAt: null } : {}),
-      ...(req.body.onlyCheckedIn ? { checkedInAt: { not: null } } : {}),
-    },
+    where: req.body.codes?.length
+      ? { code: { in: req.body.codes.map((c) => String(c).toUpperCase()) } }
+      : {
+          eventId: req.body.eventId,
+          status: 'CONFIRMED',
+          ...(req.body.onlyUnprinted ? { badgePrintedAt: null } : {}),
+          ...(req.body.onlyCheckedIn ? { checkedInAt: { not: null } } : {}),
+        },
   });
   regs.sort((a, b) => a.legalName.localeCompare(b.legalName));
   const results = [];
@@ -165,7 +172,7 @@ badgeRouter.post('/print-batch', async (req, res) => {
       results.push({ code: reg.code, ok: false, error: e.message });
     }
   }
-  await audit(req.user.id, 'badge.print_batch', req.body.eventId, { count: results.length });
+  await audit(req.user.id, 'badge.print_batch', req.body.eventId || 'selection', { count: results.length });
   res.json({ printed: results.filter((r) => r.ok).length, results });
 });
 

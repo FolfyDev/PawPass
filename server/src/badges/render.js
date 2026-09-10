@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 import QRCode from 'qrcode';
+import bwipjs from 'bwip-js';
 import { BADGE_TOKENS } from './template.js';
 
 const MM_PER_INCH = 25.4;
@@ -14,10 +15,25 @@ export function fillTokens(str, ctx) {
   });
 }
 
+/// The "special qualifier" is a ranked, multi-select custom field (type
+/// `qualifier`, at most one per event): an attendee can pick more than one
+/// option, and whichever pick sits first in the field's configured order
+/// (its priority rank) is the one that goes on the badge.
+function specialQualifier(reg, event) {
+  const fields = Array.isArray(event?.customFields) ? event.customFields : [];
+  const field = fields.find((f) => f.type === 'qualifier');
+  if (!field) return '';
+  const chosen = reg.answers?.[field.key];
+  const picked = Array.isArray(chosen) ? chosen : (chosen ? [chosen] : []);
+  return (field.options || []).find((o) => picked.includes(o)) || '';
+}
+
 export function contextForRegistration(reg, event, settings, publicUrl) {
   const accent = event?.accentColor || settings.accentColor;
+  const fursonaName = reg.fursonaName || reg.legalName;
+  const tierName = reg.badgeTier || (reg.tier === 'DONATION' ? (event?.donationTierName || 'Supporter') : 'Attendee');
   return {
-    '{{fursona_name}}': reg.fursonaName || reg.legalName,
+    '{{fursona_name}}': fursonaName,
     '{{legal_name}}': reg.legalName,
     '{{code}}': reg.code,
     '{{event_title}}': event?.title || settings.orgName,
@@ -26,12 +42,22 @@ export function contextForRegistration(reg, event, settings, publicUrl) {
     '{{badge_line}}': reg.status === 'WAITLIST' ? 'Waitlist' : 'Attendee',
     '{{qr_payload}}': `${publicUrl}/t/${reg.secret}`,
     '{{accent}}': accent,
-    '{{tier_name}}': reg.badgeTier || (reg.tier === 'DONATION' ? (event?.donationTierName || 'Supporter') : 'Attendee'),
+    '{{tier_name}}': tierName,
     '{{badge_tier}}': reg.badgeTier || '',
     '{{badge_number}}': reg.badgeNumber != null ? String(reg.badgeNumber) : '',
     ...Object.fromEntries(
       Object.entries(reg.answers || {}).map(([k, v]) => [`{{${k}}}`, v]),
     ),
+    // Computed after the answers spread so a custom field key can never
+    // clobber the resolved value (e.g. a qualifier field literally keyed
+    // "special_qualifier" would otherwise overwrite this with its raw array).
+    '{{special_qualifier}}': specialQualifier(reg, event),
+    // Scanned at check-in: the leading `reg.code` is what resolve() matches
+    // on (see badges.js/admin.js, which strip everything from the first "|"
+    // before looking a registration up), tier and name ride along after it
+    // purely so the payload is self-describing if read by hand or by
+    // something other than this app.
+    '{{badge_payload}}': `${reg.code}|${tierName}|${fursonaName}`,
   };
 }
 
@@ -98,6 +124,17 @@ async function fitText(text, el, px) {
   return { size: floorSize, text: `${str.slice(0, keep - 1).trimEnd()}\u2026` };
 }
 
+/// Both the `qr` and `aztec` element types render through a barcode library
+/// that hands back a self-contained `<svg viewBox="0 0 N N">...</svg>` square
+/// — this drops the wrapper and re-embeds the inner markup scaled to the
+/// element's box.
+function embedSquareSvg(svg, x, y, w) {
+  const inner = svg.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
+  const vb = /viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/.exec(svg);
+  const side = vb ? Number(vb[1]) : 33;
+  return `<g transform="translate(${x},${y}) scale(${w / side})">${inner}</g>`;
+}
+
 export async function renderBadgeSVG(template, ctx) {
   const dpi = template.dpi || 300;
   const px = (mm) => (mm / MM_PER_INCH) * dpi;
@@ -136,10 +173,17 @@ export async function renderBadgeSVG(template, ctx) {
         errorCorrectionLevel: el.ecc || 'M',
         color: { dark: fillTokens(el.dark, ctx) || '#000000', light: fillTokens(el.light, ctx) || '#FFFFFF' },
       });
-      const inner = svg.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
-      const vb = /viewBox="0 0 (\d+) (\d+)"/.exec(svg);
-      const side = vb ? Number(vb[1]) : 33;
-      parts.push(`<g transform="translate(${x},${y}) scale(${w / side})">${inner}</g>`);
+      parts.push(embedSquareSvg(svg, x, y, w));
+    } else if (el.type === 'aztec') {
+      const value = fillTokens(el.value, ctx) || ' ';
+      const svg = bwipjs.toSVG({
+        bcid: el.compact ? 'azteccodecompact' : 'azteccode',
+        text: value,
+        scale: 1,
+        barcolor: (fillTokens(el.dark, ctx) || '#000000').replace('#', ''),
+        backgroundcolor: (fillTokens(el.light, ctx) || '#FFFFFF').replace('#', ''),
+      });
+      parts.push(embedSquareSvg(svg, x, y, w));
     } else if (el.type === 'image' && el.href) {
       parts.push(
         `<image x="${x}" y="${y}" width="${w}" height="${h}" href="${esc(fillTokens(el.href, ctx))}" preserveAspectRatio="${el.fitMode || 'xMidYMid meet'}"/>`,

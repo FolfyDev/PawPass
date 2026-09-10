@@ -542,6 +542,16 @@ export function createBot() {
         const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
         const fields = event.customFields || [];
         const field = fields[draft.fieldIndex];
+        if (field.type === 'qualifier') {
+          const options = field.options || [];
+          const picked = text
+            ? text.split(',').map((s) => s.trim()).filter(Boolean)
+                .map((s) => options.find((o) => o.toLowerCase() === s.toLowerCase())).filter(Boolean)
+            : [];
+          if (field.required && picked.length === 0) return ctx.reply(`${field.label} is required — reply with one or more, comma separated (e.g. ${options.slice(0, 2).join(', ')}).`);
+          if (picked.length) draft.answers[field.key] = picked;
+          return askCustom(draft.fieldIndex + 1);
+        }
         if (field.required && !text) return ctx.reply(`${field.label} is required.`);
         if (text) draft.answers[field.key] = text;
         return askCustom(draft.fieldIndex + 1);
@@ -572,7 +582,8 @@ export function createBot() {
       draft.fieldIndex = index;
       await save(telegramId, S.CUSTOM, draft);
       const opts = field.options?.length ? `\nOptions: ${field.options.join(', ')}` : '';
-      return ctx.reply(`${field.label}${field.required ? '' : ' (optional — /skip)'}${opts}`);
+      const hint = field.type === 'qualifier' ? '\nReply with one or more, comma separated.' : '';
+      return ctx.reply(`${field.label}${field.required ? '' : ' (optional — /skip)'}${opts}${hint}`);
     }
 
     async function askTier(event) {

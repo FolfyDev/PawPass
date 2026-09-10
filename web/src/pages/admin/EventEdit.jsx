@@ -149,12 +149,20 @@ export default function EventEdit() {
                 <Field label="Type">
                   <select value={f.type} onChange={(ev) => setField(i, { type: ev.target.value })}>
                     {['text', 'select', 'checkbox', 'number'].map((t) => <option key={t}>{t}</option>)}
+                    {(f.type === 'qualifier' || !fields.some((x) => x.type === 'qualifier')) && <option>qualifier</option>}
                   </select>
                 </Field>
-                <Field label="Options" help="Comma separated, for select">
+                <Field label="Options" help={f.type === 'qualifier'
+                  ? 'Comma separated, in priority order — the highest one an attendee picks is what prints on the badge'
+                  : 'Comma separated, for select'}>
                   <input value={(f.options || []).join(', ')} onChange={(ev) => setField(i, { options: ev.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
               </div>
+              {f.type === 'qualifier' && (
+                <p className="small muted" style={{ marginTop: 6 }}>
+                  Attendees can pick more than one of these. Only one "Special qualifier" field is used per event — the badge shows whichever picked option is listed first above.
+                </p>
+              )}
               <div className="spread" style={{ marginTop: 10 }}>
                 <label className="row small"><input type="checkbox" checked={!!f.required} onChange={(ev) => setField(i, { required: ev.target.checked })} /> Required</label>
                 <button className="btn sm danger" onClick={() => set('customFields', fields.filter((_, n) => n !== i))}>Remove</button>
