@@ -73,6 +73,18 @@ services:
       retries: 3
       start_period: 10s
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?required}
+    networks: [frontend]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 128m
+
 networks:
   frontend:
   backend:
