@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 
@@ -21,10 +22,13 @@ const localInZone = (d, tz) => {
 
 export default function EventEdit() {
   const { id } = useParams();
+  const { user } = useSession();
+  const isOwner = user.role === 'OWNER';
   const nav = useNavigate();
   const [e, setE] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [msg, setMsg] = useState('');
+  const [msgOk, setMsgOk] = useState(true);
 
   useEffect(() => {
     api.get(`/api/admin/events/${id}`).then((ev) => setE({
@@ -42,8 +46,8 @@ export default function EventEdit() {
   const fields = e.customFields || [];
 
   const save = async () => {
-    try { await api.patch(`/api/admin/events/${id}`, e); setMsg('Saved.'); setTimeout(() => setMsg(''), 2000); }
-    catch (err) { setMsg(err.message); }
+    try { await api.patch(`/api/admin/events/${id}`, e); setMsg('Saved.'); setMsgOk(true); setTimeout(() => setMsg(''), 2000); }
+    catch (err) { setMsg(err.message); setMsgOk(false); }
   };
 
   const remove = async () => {
@@ -61,11 +65,12 @@ export default function EventEdit() {
           <p className="eyebrow">Event</p>
           <h1 style={{ margin: 0 }}>{e.title}</h1>
         </div>
-        <button className="btn primary" onClick={save}>Save changes</button>
+        {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
       </div>
       <EventTabs id={id} />
-      {msg && <p className="note" style={{ marginBottom: 16 }}>{msg}</p>}
+      {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
+      <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
       <div className="stack">
         <section className="card stack">
           <h2 style={{ margin: 0 }}>Basics</h2>
@@ -144,12 +149,20 @@ export default function EventEdit() {
                 <Field label="Type">
                   <select value={f.type} onChange={(ev) => setField(i, { type: ev.target.value })}>
                     {['text', 'select', 'checkbox', 'number'].map((t) => <option key={t}>{t}</option>)}
+                    {(f.type === 'qualifier' || !fields.some((x) => x.type === 'qualifier')) && <option>qualifier</option>}
                   </select>
                 </Field>
-                <Field label="Options" help="Comma separated, for select">
+                <Field label="Options" help={f.type === 'qualifier'
+                  ? 'Comma separated, in priority order — the highest one an attendee picks is what prints on the badge'
+                  : 'Comma separated, for select'}>
                   <input value={(f.options || []).join(', ')} onChange={(ev) => setField(i, { options: ev.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
               </div>
+              {f.type === 'qualifier' && (
+                <p className="small muted" style={{ marginTop: 6 }}>
+                  Attendees can pick more than one of these. Only one "Special qualifier" field is used per event — the badge shows whichever picked option is listed first above.
+                </p>
+              )}
               <div className="spread" style={{ marginTop: 10 }}>
                 <label className="row small"><input type="checkbox" checked={!!f.required} onChange={(ev) => setField(i, { required: ev.target.checked })} /> Required</label>
                 <button className="btn sm danger" onClick={() => set('customFields', fields.filter((_, n) => n !== i))}>Remove</button>
@@ -163,6 +176,7 @@ export default function EventEdit() {
           <button className="btn primary" onClick={save}>Save changes</button>
         </div>
       </div>
+      </fieldset>
     </>
   );
 }

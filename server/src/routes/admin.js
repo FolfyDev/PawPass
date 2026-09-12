@@ -4,12 +4,14 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
 import AdmZip from 'adm-zip';
+import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
-import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser } from '../lib/registrations.js';
+import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers } from '../lib/registrations.js';
+import { norm, normHandle } from '../lib/bans.js';
 import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
@@ -53,7 +55,7 @@ function eventPayload(body, timeZone) {
   return data;
 }
 
-adminRouter.post('/events', async (req, res) => {
+adminRouter.post('/events', requireOwner, async (req, res) => {
   const timeZone = req.body.timezone || env.defaultTimezone;
   const data = eventPayload(req.body, timeZone);
   if (!data.slug || !data.title) return res.status(400).json({ error: 'A title and URL slug are required.' });
@@ -62,14 +64,14 @@ adminRouter.post('/events', async (req, res) => {
   res.json(event);
 });
 
-adminRouter.patch('/events/:id', async (req, res) => {
+adminRouter.patch('/events/:id', requireOwner, async (req, res) => {
   const timeZone = req.body.timezone || (await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true } }))?.timezone || env.defaultTimezone;
   const event = await prisma.event.update({ where: { id: req.params.id }, data: eventPayload(req.body, timeZone) });
   await audit(req.user.id, 'event.update', event.id, {});
   res.json(event);
 });
 
-adminRouter.delete('/events/:id', async (req, res) => {
+adminRouter.delete('/events/:id', requireOwner, async (req, res) => {
   await prisma.event.delete({ where: { id: req.params.id } });
   await audit(req.user.id, 'event.delete', req.params.id, {});
   res.json({ ok: true });
@@ -77,25 +79,21 @@ adminRouter.delete('/events/:id', async (req, res) => {
 
 /* ---------------- registrations ---------------- */
 
+// legalName/fursonaName/email are encrypted at rest, so a substring search
+// across them can't happen in the database query — it's filtered here
+// instead, after Prisma has already decrypted the fetched rows.
 adminRouter.get('/events/:id/registrations', async (req, res) => {
   const { q, status } = req.query;
   const regs = await prisma.registration.findMany({
-    where: {
-      eventId: req.params.id,
-      ...(status ? { status } : {}),
-      ...(q ? {
-        OR: [
-          { legalName: { contains: String(q), mode: 'insensitive' } },
-          { fursonaName: { contains: String(q), mode: 'insensitive' } },
-          { code: { contains: String(q).toUpperCase() } },
-          { email: { contains: String(q), mode: 'insensitive' } },
-        ],
-      } : {}),
-    },
+    where: { eventId: req.params.id, ...(status ? { status } : {}) },
     include: { user: true },
     orderBy: { createdAt: 'asc' },
   });
-  res.json(regs.map((r) => ({
+  const needle = q ? String(q).toLowerCase() : '';
+  const filtered = needle
+    ? regs.filter((r) => [r.legalName, r.fursonaName, r.code, r.email].some((v) => v && v.toLowerCase().includes(needle)))
+    : regs;
+  res.json(filtered.map((r) => ({
     id: r.id, ...shapeReg(r),
     printCount: r.printCount, badgePrintedAt: r.badgePrintedAt, source: r.source,
     telegram: r.user.telegramUsername,
@@ -133,6 +131,16 @@ adminRouter.post('/registrations', async (req, res) => {
 adminRouter.patch('/registrations/:code', async (req, res) => {
   const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentAmount','paymentNote'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+  if (data.answers) {
+    const existing = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
+    if (!existing) return res.status(404).json({ error: 'Registration not found.' });
+    // Only checked for required-field violations here, not reassigned —
+    // validateAnswers()'s return value drops any key no longer in the
+    // event's current customFields, which would silently erase an answer to
+    // a question that has since been removed from the event.
+    try { validateAnswers(existing.event, data.answers); }
+    catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
+  }
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
   if (data.status === 'CANCELLED') {
     const promoted = await promoteFromWaitlist(reg.eventId);
@@ -479,12 +487,14 @@ adminRouter.delete('/vouchers/:id', async (req, res) => {
 /* ---------------- check-in ---------------- */
 
 /// The scanner posts whatever the camera read: a full ticket URL, a bare
-/// secret, or a typed badge code. All three resolve here.
+/// secret, a typed badge code, or an Aztec badge payload (`CODE|TIER|NAME`,
+/// see `{{badge_payload}}` in render.js — only the leading code matters here).
 adminRouter.post('/checkin', async (req, res) => {
   const raw = String(req.body.value || '').trim();
-  const secret = raw.split('/').pop();
+  const primary = raw.split('|')[0].trim();
+  const secret = primary.split('/').pop();
   const reg = await prisma.registration.findFirst({
-    where: { OR: [{ secret }, { code: raw.toUpperCase() }] },
+    where: { OR: [{ secret }, { code: primary.toUpperCase() }] },
     include: { event: true, user: true },
   });
   if (!reg) return res.status(404).json({ error: 'No ticket matches that code.' });
@@ -517,21 +527,63 @@ adminRouter.post('/checkin/:code/undo', async (req, res) => {
   res.json(shapeReg(reg));
 });
 
+adminRouter.get('/bans', async (_req, res) => {
+  const bans = await prisma.ban.findMany({ orderBy: { createdAt: 'desc' }, include: { createdBy: true } });
+  res.json(bans);
+});
+
+adminRouter.get('/bans/attempts', async (_req, res) => {
+  const rows = await prisma.auditLog.findMany({
+    where: { action: 'ban.blocked_registration' },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+  res.json(rows);
+});
+
+adminRouter.post('/bans', requireOwner, async (req, res) => {
+  const { legalName, email, telegramId, telegramUsername, reason } = req.body || {};
+  // Normalized the same way findMatchingBan() reads incoming registrations,
+  // so an inconsistently-spaced/accented ban record can't silently fail to
+  // match later.
+  const data = {
+    legalName: norm(legalName) || null,
+    email: norm(email) || null,
+    telegramId: norm(telegramId) || null,
+    telegramUsername: normHandle(telegramUsername) || null,
+    reason: reason?.trim() || '',
+  };
+  if (!data.legalName && !data.email && !data.telegramId && !data.telegramUsername)
+    return res.status(400).json({ error: 'Enter at least a legal name, email, or Telegram ID/username to ban.' });
+  const ban = await prisma.ban.create({ data: { ...data, createdById: req.user.id } });
+  await audit(req.user.id, 'ban.create', ban.id, data);
+  res.json(ban);
+});
+
+adminRouter.delete('/bans/:id', requireOwner, async (req, res) => {
+  const ban = await prisma.ban.delete({ where: { id: req.params.id } });
+  await audit(req.user.id, 'ban.delete', req.params.id, { legalName: ban.legalName, email: ban.email });
+  res.json({ ok: true });
+});
+
 /* ---------------- staff ---------------- */
 
-adminRouter.get('/users', async (req, res) => {
+// email is encrypted at rest, so matching it against a typed-in search term
+// can't happen in the database query — see the same note above on the
+// attendee search. displayName/telegramUsername aren't encrypted and could
+// still be matched in the query, but it's simplest to filter all three the
+// same way once the (already-decrypted) rows are in hand.
+adminRouter.get('/users', requireOwner, async (req, res) => {
+  const q = req.query.q ? String(req.query.q).toLowerCase() : '';
   const users = await prisma.user.findMany({
-    where: req.query.q ? {
-      OR: [
-        { displayName: { contains: String(req.query.q), mode: 'insensitive' } },
-        { telegramUsername: { contains: String(req.query.q), mode: 'insensitive' } },
-        { email: { contains: String(req.query.q), mode: 'insensitive' } },
-      ],
-    } : { role: { in: ['ADMIN', 'OWNER'] } },
+    where: q ? {} : { role: { in: ['ADMIN', 'OWNER'] } },
     orderBy: { createdAt: 'asc' },
-    take: 100,
+    take: q ? undefined : 100,
   });
-  res.json(users.map(publicUser));
+  const filtered = q
+    ? users.filter((u) => [u.displayName, u.telegramUsername, u.email].some((v) => v && v.toLowerCase().includes(q))).slice(0, 100)
+    : users;
+  res.json(filtered.map(publicUser));
 });
 
 adminRouter.post('/users/:id/role', requireOwner, async (req, res) => {
@@ -546,9 +598,12 @@ adminRouter.post('/users/:id/role', requireOwner, async (req, res) => {
 adminRouter.post('/users/:id/password', requireOwner, async (req, res) => {
   const { email, password } = req.body || {};
   if (!password || password.length < 10) return res.status(400).json({ error: 'Use at least 10 characters.' });
+  const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.role === 'USER') return res.status(400).json({ error: 'End users sign in with an email code or Telegram, not a password. Promote them to staff first if they need one.' });
   const user = await prisma.user.update({
     where: { id: req.params.id },
-    data: { email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12) },
+    data: { email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12), tokenVersion: { increment: 1 } },
   });
   await audit(req.user.id, 'user.password', user.id, {});
   res.json(publicUser(user));
@@ -572,7 +627,7 @@ adminRouter.post('/campaigns', async (req, res) => {
   res.json(c);
 });
 
-adminRouter.post('/campaigns/:id/send', async (req, res) => {
+adminRouter.post('/campaigns/:id/send', requireOwner, async (req, res) => {
   if (!env.smtp.enabled) return res.status(503).json({ error: 'SMTP is not configured on this instance.' });
   try {
     const result = await sendCampaign(req.params.id, { dryRun: Boolean(req.body.dryRun) });
@@ -585,30 +640,38 @@ adminRouter.post('/campaigns/:id/send', async (req, res) => {
 
 /* ---------------- uploads ---------------- */
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: path.join(process.cwd(), 'uploads'),
-    filename: (_req, file, cb) => cb(null, `${nanoid(10)}${path.extname(file.originalname) || '.png'}`),
-  }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
-});
+// Memory storage, not disk — the file is only written once its actual bytes
+// have been decoded and verified below. Trusting the client's declared
+// mimetype and original filename (as a `fileFilter` + disk `filename()`
+// would) lets an upload named "x.png" with content-type image/png but actual
+// content of, say, an SVG with an embedded <script> land on disk as
+// whatever extension the client chose, then get served back same-origin —
+// a stored-XSS path into an admin session.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const EXT_BY_FORMAT = { png: '.png', jpeg: '.jpg', webp: '.webp', gif: '.gif' };
 
-adminRouter.post('/upload', upload.single('file'), (req, res) => {
+adminRouter.post('/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No image received.' });
-  res.json({ url: `${env.publicUrl}/uploads/${req.file.filename}` });
+  let format;
+  try { ({ format } = await sharp(req.file.buffer).metadata()); }
+  catch { return res.status(400).json({ error: 'That file could not be read as an image.' }); }
+  const ext = EXT_BY_FORMAT[format];
+  if (!ext) return res.status(400).json({ error: 'Use a PNG, JPEG, WebP, or GIF image.' });
+  const filename = `${nanoid(10)}${ext}`;
+  await fs.writeFile(path.join(process.cwd(), 'uploads', filename), req.file.buffer);
+  res.json({ url: `${env.publicUrl}/uploads/${filename}` });
 });
 
 /* ---------------- settings ---------------- */
 
-adminRouter.get('/settings', async (_req, res) => res.json(await getSettings()));
-adminRouter.put('/settings', async (req, res) => {
+adminRouter.get('/settings', requireOwner, async (_req, res) => res.json(await getSettings()));
+adminRouter.put('/settings', requireOwner, async (req, res) => {
   const s = await setSettings(req.body || {});
   await audit(req.user.id, 'settings.update', null, {});
   res.json(s);
 });
 
-adminRouter.get('/audit', async (_req, res) => {
+adminRouter.get('/audit', requireOwner, async (_req, res) => {
   const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
   res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
 });
@@ -617,7 +680,7 @@ adminRouter.get('/audit', async (_req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'voucherCode', 'merchItem', 'registration', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'voucherCode', 'merchItem', 'registration', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const BACKUP_VERSION = 1;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);

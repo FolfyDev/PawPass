@@ -7,13 +7,13 @@ import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
+import { escapeHtml as esc } from '../lib/html.js';
 
 /// Telegram doesn't reliably auto-link plain URLs (localhost during local
 /// dev never gets linked at all), so any message with a link is sent with
 /// parse_mode: 'HTML' and an explicit <a> tag instead. Anything interpolated
 /// into one of those messages that isn't meant to be a tag — an event title,
 /// a configurable welcome message — has to go through esc() first.
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const link = (url, text) => `<a href="${esc(url)}">${esc(text ?? url)}</a>`;
 
 /// The web Login Widget hands us `photo_url` directly, but that widget only
@@ -161,7 +161,7 @@ export function createBot() {
   bot.command('register', async (ctx) => {
     const { telegramId } = await load(ctx);
     const events = await prisma.event.findMany({
-      where: { published: true, endsAt: { gte: new Date() } },
+      where: { published: true, OR: [{ closesAt: null }, { closesAt: { gte: new Date() } }] },
       orderBy: { startsAt: 'asc' },
       take: 20,
     });
@@ -268,8 +268,8 @@ export function createBot() {
       data: { usedAt: new Date() },
     });
     await ctx.reply(
-      `Your sign-in code is:\n\n${code}\n\n` +
-      `Enter it at ${link(`${env.webUrl}/login`)} — it works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
+      `Tap to sign in:\n\n${link(`${env.webUrl}/l/${code}`, code)}\n\n` +
+      `Or enter that code by hand at ${link(`${env.webUrl}/login`)}. It works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
       { parse_mode: 'HTML' },
     );
   });
@@ -386,8 +386,9 @@ export function createBot() {
     const regs = await prisma.registration.findMany({
       where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
       include: { user: true },
-      orderBy: [{ rsvp: 'asc' }, { fursonaName: 'asc' }],
+      orderBy: { rsvp: 'asc' },
     });
+    regs.sort((a, b) => (a.rsvp === b.rsvp ? (a.fursonaName || a.user.displayName).localeCompare(b.fursonaName || b.user.displayName) : 0));
     if (!regs.length) return ctx.reply(`Nobody has RSVPed yes or maybe to ${event.title} yet.`);
     const lines = regs.map((r) => {
       const name = r.fursonaName || r.user.displayName;
@@ -541,6 +542,16 @@ export function createBot() {
         const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
         const fields = event.customFields || [];
         const field = fields[draft.fieldIndex];
+        if (field.type === 'qualifier') {
+          const options = field.options || [];
+          const picked = text
+            ? text.split(',').map((s) => s.trim()).filter(Boolean)
+                .map((s) => options.find((o) => o.toLowerCase() === s.toLowerCase())).filter(Boolean)
+            : [];
+          if (field.required && picked.length === 0) return ctx.reply(`${field.label} is required — reply with one or more, comma separated (e.g. ${options.slice(0, 2).join(', ')}).`);
+          if (picked.length) draft.answers[field.key] = picked;
+          return askCustom(draft.fieldIndex + 1);
+        }
         if (field.required && !text) return ctx.reply(`${field.label} is required.`);
         if (text) draft.answers[field.key] = text;
         return askCustom(draft.fieldIndex + 1);
@@ -571,7 +582,8 @@ export function createBot() {
       draft.fieldIndex = index;
       await save(telegramId, S.CUSTOM, draft);
       const opts = field.options?.length ? `\nOptions: ${field.options.join(', ')}` : '';
-      return ctx.reply(`${field.label}${field.required ? '' : ' (optional — /skip)'}${opts}`);
+      const hint = field.type === 'qualifier' ? '\nReply with one or more, comma separated.' : '';
+      return ctx.reply(`${field.label}${field.required ? '' : ' (optional — /skip)'}${opts}${hint}`);
     }
 
     async function askTier(event) {

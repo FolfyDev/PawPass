@@ -22,6 +22,16 @@ const AUDIENCE = {
   waitlist: { status: 'WAITLIST' },
 };
 
+export async function sendOtpEmail(email, code) {
+  const tx = getTransport();
+  await tx.sendMail({
+    from: env.smtp.from,
+    to: email,
+    subject: `Your sign-in code: ${code}`,
+    text: `Your sign-in code is ${code}. It works once and expires in ${env.loginCodeTtlMinutes} minutes.\n\nIf you didn't request this, you can ignore this email.`,
+  });
+}
+
 export function personalize(text, { reg, event, settings }) {
   return text
     .replaceAll('{{fursona_name}}', reg.fursonaName || reg.legalName)

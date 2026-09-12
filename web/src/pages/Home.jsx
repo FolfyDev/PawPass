@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
+import { usePageMeta } from '../lib/meta.js';
 import { Empty, fmtDate } from '../components/Bits.jsx';
 
 export default function Home() {
   const { settings } = useSession();
+  usePageMeta({ description: settings?.tagline });
   const [events, setEvents] = useState(null);
 
   useEffect(() => { api.get('/api/events').then(setEvents).catch(() => setEvents([])); }, []);
@@ -28,7 +30,7 @@ export default function Home() {
       {events === null && <p className="muted">Loading events…</p>}
       {events?.length === 0 && <Empty title="Nothing open yet">Check back soon, or follow the Telegram bot for an announcement.</Empty>}
 
-      <div className="stack" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', display: 'grid' }}>
+      <div className="stack" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(300px,100%),1fr))', display: 'grid' }}>
         {events?.map((e) => (
           <Link key={e.id} to={`/e/${e.slug}`} className="stub" style={{ textDecoration: 'none', color: 'inherit' }}>
             <div className="stub-accent" style={{ background: e.accentColor }} />

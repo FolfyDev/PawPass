@@ -4,12 +4,15 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
 import { Field, fmtDate, StatusPill, Avatar, RsvpButtons, Pill } from '../components/Bits.jsx';
+import { usePageMeta } from '../lib/meta.js';
+import Breadcrumbs from '../components/Breadcrumbs.jsx';
 
 export default function EventPage() {
   const { slug } = useParams();
   const nav = useNavigate();
   const { user, settings, refresh } = useSession();
   const [event, setEvent] = useState(null);
+  usePageMeta({ title: event?.title, description: event?.tagline || event?.description });
   const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', voucherCode: '' });
   const [showTos, setShowTos] = useState(false);
   const [showVoucher, setShowVoucher] = useState(false);
@@ -57,7 +60,10 @@ export default function EventPage() {
     setError('');
     if (form.legalName.trim().length < 2) return setError('Enter your full legal name.');
     if (!user && !/^\S+@\S+\.\S+$/.test(form.email)) return setError('Enter an email address so you can get back into your account later.');
-    for (const f of fields) if (f.required && !form.answers[f.key]) return setError(`${f.label} is required.`);
+    for (const f of fields) {
+      const v = form.answers[f.key];
+      if (f.required && (Array.isArray(v) ? v.length === 0 : !v)) return setError(`${f.label} is required.`);
+    }
     setShowTos(true);
   };
 
@@ -80,8 +86,8 @@ export default function EventPage() {
       }
       if (wasGuest) {
         // The server just created an account and signed it in — pick that
-        // session up, then offer to set a password before anything else,
-        // since a guest has no way back into this account otherwise.
+        // session up, then point out the email code is how they get back
+        // in, since a guest has no password to fall back on otherwise.
         await refresh();
         nav('/account?justRegistered=1');
       } else {
@@ -96,6 +102,7 @@ export default function EventPage() {
   return (
     <>
       <header style={{ padding: '40px 0 24px', maxWidth: 680 }}>
+        <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: event.title }]} />
         <p className="eyebrow">{fmtDate(event.startsAt, event.timezone)} · {event.venue}</p>
         <h1>{event.title}</h1>
         {event.tagline && <p className="muted">{event.tagline}</p>}
@@ -178,6 +185,18 @@ export default function EventPage() {
                   ) : f.type === 'checkbox' ? (
                     <span className="row"><input type="checkbox" checked={!!form.answers[f.key]}
                       onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.checked } })} /> {f.help}</span>
+                  ) : f.type === 'qualifier' ? (
+                    <div className="stack" style={{ gap: 4 }}>
+                      {(f.options || []).map((o) => {
+                        const picked = Array.isArray(form.answers[f.key]) ? form.answers[f.key] : [];
+                        return (
+                          <label key={o} className="row small">
+                            <input type="checkbox" checked={picked.includes(o)}
+                              onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.checked ? [...picked, o] : picked.filter((x) => x !== o) } })} /> {o}
+                          </label>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <input type={f.type === 'number' ? 'number' : 'text'} value={form.answers[f.key] || ''}
                       onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.value } })} />

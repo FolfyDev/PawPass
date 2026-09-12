@@ -4,3 +4,4 @@ dist/
 certs/*
 !certs/.gitkeep
 uploads/
+env

@@ -18,6 +18,7 @@ export const env = {
   publicUrl: process.env.PUBLIC_URL || 'http://localhost:4000',
   webUrl: process.env.WEB_URL || 'http://localhost:8080',
   jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-me',
+  encryptionKey: process.env.ENCRYPTION_KEY || 'insecure-dev-encryption-key-change-me',
   /// Local-only sign-in bypass. Refuses to engage unless the instance is
   /// plainly a development one — see requireLocalDev in lib/auth.js.
   devAuth: bool(process.env.DEV_AUTH),
@@ -26,6 +27,10 @@ export const env = {
   /// itself always runs in UTC — this only seeds the per-event `timezone`
   /// field, which is what actually drives date/time interpretation.
   defaultTimezone: process.env.DEFAULT_TIMEZONE || 'America/New_York',
+  legal: {
+    entityName: process.env.LEGAL_ENTITY_NAME || '',
+    contactEmail: process.env.LEGAL_CONTACT_EMAIL || '',
+  },
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     username: process.env.TELEGRAM_BOT_USERNAME || '',

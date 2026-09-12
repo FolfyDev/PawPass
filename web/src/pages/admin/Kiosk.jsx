@@ -21,6 +21,7 @@ export default function Kiosk() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [printMsg, setPrintMsg] = useState('');
+  const [printMsgOk, setPrintMsgOk] = useState(true);
 
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
 
@@ -32,7 +33,10 @@ export default function Kiosk() {
     e.preventDefault();
     setError('');
     if (form.legalName.trim().length < 2) return setError('Enter the attendee\'s full legal name.');
-    for (const f of fields) if (f.required && !form.answers[f.key]) return setError(`${f.label} is required.`);
+    for (const f of fields) {
+      const v = form.answers[f.key];
+      if (f.required && (Array.isArray(v) ? v.length === 0 : !v)) return setError(`${f.label} is required.`);
+    }
     if (!form.tosAccepted) return setError('Confirm the attendee has agreed to the terms.');
     if (form.tier === 'DONATION' && !form.paymentMethod) return setError('Select how the payment was received.');
     if (form.tier === 'DONATION' && !(Number(form.paymentAmount) > 0)) return setError('Enter the amount received.');
@@ -59,8 +63,8 @@ export default function Kiosk() {
 
   const print = async () => {
     setPrintMsg('');
-    try { const r = await printBadge(result.code, settings?.printMode); setPrintMsg(`Sent to the printer (copy ${r.printCount}).`); }
-    catch (e) { setPrintMsg(e.message); }
+    try { const r = await printBadge(result.code, settings?.printMode); setPrintMsg(`Sent to the printer (copy ${r.printCount}).`); setPrintMsgOk(true); }
+    catch (e) { setPrintMsg(e.message); setPrintMsgOk(false); }
   };
 
   const next = () => { setResult(null); setForm(BLANK_FORM); setError(''); setPrintMsg(''); };
@@ -90,7 +94,7 @@ export default function Kiosk() {
                 via {result.paymentMethod || 'unrecorded method'}{result.paymentNote ? ` — ${result.paymentNote}` : ''}
               </p>
             )}
-            {printMsg && <p className="note">{printMsg}</p>}
+            {printMsg && <p className={`note ${printMsgOk ? 'good' : 'bad'}`}>{printMsg}</p>}
             <div className="row">
               <button className="btn" onClick={print}>Print badge</button>
               <button className="btn signal" onClick={next}>Register next person →</button>
@@ -127,6 +131,18 @@ export default function Kiosk() {
                 ) : f.type === 'checkbox' ? (
                   <span className="row"><input type="checkbox" checked={!!form.answers[f.key]}
                     onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.checked } })} /> {f.help}</span>
+                ) : f.type === 'qualifier' ? (
+                  <div className="stack" style={{ gap: 4 }}>
+                    {(f.options || []).map((o) => {
+                      const picked = Array.isArray(form.answers[f.key]) ? form.answers[f.key] : [];
+                      return (
+                        <label key={o} className="row small">
+                          <input type="checkbox" checked={picked.includes(o)}
+                            onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.checked ? [...picked, o] : picked.filter((x) => x !== o) } })} /> {o}
+                        </label>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <input type={f.type === 'number' ? 'number' : 'text'} value={form.answers[f.key] || ''}
                     onChange={(e) => setForm({ ...form, answers: { ...form.answers, [f.key]: e.target.value } })} />

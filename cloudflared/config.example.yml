@@ -1,0 +1,7 @@
+tunnel: pawpass
+credentials-file: /home/YOUR_USER/.cloudflared/TUNNEL_ID.json
+
+ingress:
+  - hostname: pawpass.yourdomain.com
+    service: http://localhost:8080
+  - service: http_status:404

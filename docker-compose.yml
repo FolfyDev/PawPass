@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-pawpass}
     volumes:
       - db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pawpass}"]
       interval: 5s
@@ -26,24 +28,34 @@ services:
     volumes:
       - uploads:/app/uploads
       - ./certs:/app/certs:ro
+    # Bound to localhost only. The browser never talks to this port directly —
+    # nginx (the web service) proxies /api, /t, and /l to it over the internal
+    # compose network, which doesn't need a published port at all. This stays
+    # reachable from the host itself (curl, prisma studio) for debugging.
     ports:
-      - "${SERVER_PORT:-4000}:4000"
+      - "127.0.0.1:${SERVER_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   web:
-    # No VITE_API_BASE build arg — it defaults to "" (see web/Dockerfile),
-    # meaning the frontend calls /api/... as a path relative to whatever
-    # origin the page was loaded from. nginx (nginx.conf) already proxies
-    # /api/ straight through to the server container, so this always works
-    # regardless of the host/IP/domain/port the app is actually reached at.
-    # Pointing this at PUBLIC_URL instead breaks the moment PUBLIC_URL uses a
-    # different port than WEB_URL and that port isn't opened to the network
-    # the browser is on (e.g. a phone that can reach :8080 but not :4000).
     build:
       context: ./web
     restart: unless-stopped
-    depends_on: [server]
+    depends_on:
+      server:
+        condition: service_healthy
     ports:
       - "${WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   db-data:

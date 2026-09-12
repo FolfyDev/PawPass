@@ -30,7 +30,6 @@ export default function Staff() {
     <>
       <p className="eyebrow">Access</p>
       <h1>Staff</h1>
-      {!isOwner && <p className="note">Only owners can change roles. You can see who has access.</p>}
       {msg && <p className="note bad">{msg}</p>}
 
       <div className="card" style={{ padding: 0, marginBottom: 24, overflow: 'auto' }}>
@@ -60,7 +59,6 @@ export default function Staff() {
       {isOwner && (
         <div className="card stack">
           <h2 style={{ margin: 0 }}>Grant admin access</h2>
-          <p className="small muted">They need to sign in with Telegram once first, then search for them here.</p>
           <input placeholder="Search by name, @username or email" value={q} onChange={(e) => setQ(e.target.value)} />
           {found.filter((u) => u.role === 'USER').map((u) => (
             <div key={u.id} className="spread" style={{ padding: '8px 0', borderBottom: '1px solid var(--rule)' }}>

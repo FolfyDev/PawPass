@@ -1,11 +1,22 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, localDevAuthAvailable } from '../lib/auth.js';
+import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, requireAdmin, localDevAuthAvailable, redeemLoginCode, redeemEmailCode, LoginCodeError } from '../lib/auth.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
+import { blindIndex } from '../lib/crypto.js';
+import { sendOtpEmail } from '../lib/mailer.js';
 
 export const authRouter = Router();
+
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Wait a while and try again.' },
+});
 
 authRouter.get('/config', (_req, res) => {
   res.json({
@@ -16,6 +27,7 @@ authRouter.get('/config', (_req, res) => {
       // Over plain http, or on localhost, the code flow is the way in.
       widgetUsable: env.telegram.enabled && env.publicUrl.startsWith('https'),
     },
+    emailCodeEnabled: env.smtp.enabled,
     devAuth: localDevAuthAvailable(),
   });
 });
@@ -43,17 +55,21 @@ authRouter.post('/telegram', async (req, res) => {
 /// regular members alike. Members get a password by registering for an event
 /// as a guest (see public.js) or by adding one from the Account page; either
 /// way, an account with no passwordHash simply can't use this door.
-authRouter.post('/password', async (req, res) => {
+authRouter.post('/password', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
-  const user = await prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
-  if (!user?.passwordHash || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
+  const user = await prisma.user.findUnique({ where: { emailIndex: blindIndex(email) } });
+  if (!user?.passwordHash || user.role === 'USER' || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
     return res.status(401).json({ error: 'Email or password is incorrect.' });
 
   setSessionCookie(res, issueToken(user));
   res.json({ user: publicUser(user) });
 });
 
-authRouter.post('/logout', (_req, res) => {
+authRouter.post('/logout', async (req, res) => {
+  // Bumping tokenVersion invalidates this account's token everywhere, not
+  // just this browser — clearing the cookie alone wouldn't stop a copy of
+  // the token being reused elsewhere until it naturally expired.
+  if (req.user) await prisma.user.update({ where: { id: req.user.id }, data: { tokenVersion: { increment: 1 } } });
   res.clearCookie(COOKIE);
   res.json({ ok: true });
 });
@@ -76,7 +92,9 @@ authRouter.post('/link-telegram', requireUser, async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-authRouter.post('/set-password', requireUser, async (req, res) => {
+/// Staff only — end users sign in with an email code or Telegram, never a
+/// password (see /password above and /email-code below).
+authRouter.post('/set-password', requireAdmin, async (req, res) => {
   const { email, password } = req.body || {};
   if (!password || String(password).length < 10)
     return res.status(400).json({ error: 'Use at least 10 characters.' });
@@ -86,8 +104,13 @@ authRouter.post('/set-password', requireUser, async (req, res) => {
       data: {
         email: email ? String(email).toLowerCase() : req.user.email,
         passwordHash: await bcrypt.hash(String(password), 12),
+        tokenVersion: { increment: 1 },
       },
     });
+    // Re-issue so this browser's own session survives the bump above — only
+    // a token from *before* this change (e.g. on another device) is meant
+    // to stop working.
+    setSessionCookie(res, issueToken(user));
     res.json({ user: publicUser(user) });
   } catch (e) {
     if (e.code === 'P2002') return res.status(400).json({ error: 'That email is already in use by another account.' });
@@ -95,25 +118,61 @@ authRouter.post('/set-password', requireUser, async (req, res) => {
   }
 });
 
+/// Any signed-in user can update the email their account uses for guest
+/// registration lookups and sign-in codes — this is the end-user equivalent
+/// of /set-password, minus the password.
+authRouter.post('/email', requireUser, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  try {
+    const user = await prisma.user.update({ where: { id: req.user.id }, data: { email } });
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That email is already in use by another account.' });
+    throw e;
+  }
+});
+
+authRouter.post('/email-code/request', loginLimiter, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  const emailIndex = blindIndex(email);
+  const user = await prisma.user.findUnique({ where: { emailIndex } });
+  if (user) {
+    const code = makeLoginCode();
+    await prisma.emailLoginCode.create({ data: { code, emailIndex } });
+    await prisma.emailLoginCode.updateMany({
+      where: { emailIndex, usedAt: null, code: { not: code } },
+      data: { usedAt: new Date() },
+    });
+    await sendOtpEmail(email, code).catch((e) => console.error('otp email failed', email, e.message));
+  }
+  res.json({ ok: true });
+});
+
+authRouter.post('/email-code/verify', loginLimiter, async (req, res) => {
+  try {
+    const user = await redeemEmailCode(req.body?.email, req.body?.code);
+    setSessionCookie(res, issueToken(user));
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e instanceof LoginCodeError) return res.status(401).json({ error: e.message });
+    throw e;
+  }
+});
+
 /// Sign in with a code the bot handed out. Works over plain HTTP and needs no
 /// registered domain, so this is the local-testing path — and a reasonable
 /// production path for anyone who dislikes the widget's third-party script.
-authRouter.post('/telegram-code', async (req, res) => {
-  const code = String(req.body.code || '').trim().toUpperCase();
-  if (!code) return res.status(400).json({ error: 'Enter the code the bot sent you.' });
-
-  const row = await prisma.loginCode.findUnique({ where: { code } });
-  const ageMinutes = row ? (Date.now() - row.createdAt.getTime()) / 60000 : Infinity;
-  if (!row || row.usedAt || ageMinutes > env.loginCodeTtlMinutes)
-    return res.status(401).json({ error: 'That code is not valid any more. Send /login to the bot for a fresh one.' });
-
-  await prisma.loginCode.update({ where: { code }, data: { usedAt: new Date() } });
-
-  const user = await prisma.user.findUnique({ where: { telegramId: row.telegramId } });
-  if (!user) return res.status(404).json({ error: 'That Telegram account is not known here. Send /start to the bot first.' });
-
-  setSessionCookie(res, issueToken(user));
-  res.json({ user: publicUser(user) });
+authRouter.post('/telegram-code', loginLimiter, async (req, res) => {
+  try {
+    const user = await redeemLoginCode(req.body.code);
+    setSessionCookie(res, issueToken(user));
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e instanceof LoginCodeError) return res.status(401).json({ error: e.message });
+    throw e;
+  }
 });
 
 /// Local development only. Creates or reuses a throwaway account so the whole

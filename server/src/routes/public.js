@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
@@ -8,8 +9,21 @@ import { createRegistration, RegistrationError, registrationWindowState, promote
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
 import { notifyUser } from '../bot/index.js';
+import { blindIndex } from '../lib/crypto.js';
 
 export const publicRouter = Router();
+
+// Unauthenticated and the only public write endpoint that creates rows
+// (users + registrations) — without this, a script can hammer it far faster
+// than any human filling out the form, ahead of the duplicate-email check.
+const registerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { error: 'Too many registration attempts from this connection. Wait a while and try again.' },
+});
 
 publicRouter.get('/settings', async (_req, res) => {
   const s = await getSettings();
@@ -18,6 +32,8 @@ publicRouter.get('/settings', async (_req, res) => {
     wallet: { apple: env.apple.enabled, google: env.google.enabled },
     telegramBot: env.telegram.username,
     printMode: env.zebra.mode,
+    webUrl: env.webUrl,
+    legal: { entityName: env.legal.entityName, contactEmail: env.legal.contactEmail },
   });
 });
 
@@ -59,8 +75,9 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
   const regs = await prisma.registration.findMany({
     where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
     include: { user: true },
-    orderBy: [{ rsvp: 'asc' }, { fursonaName: 'asc' }],
+    orderBy: { rsvp: 'asc' },
   });
+  regs.sort((a, b) => (a.rsvp === b.rsvp ? (a.fursonaName || a.user.displayName).localeCompare(b.fursonaName || b.user.displayName) : 0));
   res.json(regs.map((r) => ({
     name: r.fursonaName || r.user.displayName,
     telegramUsername: r.user.telegramUsername,
@@ -83,7 +100,7 @@ publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
 /// still register. When there's no signed-in user, this creates one (like
 /// the admin walk-up flow already does) and signs them in immediately, same
 /// as any other login path, so there's no separate "log back in" step.
-publicRouter.post('/events/:slug/register', async (req, res) => {
+publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
@@ -98,7 +115,7 @@ publicRouter.post('/events/:slug/register', async (req, res) => {
     if (!email || !/^\S+@\S+\.\S+$/.test(email))
       return res.status(400).json({ error: 'Enter an email address so you can get back into your account later.' });
     const normalized = String(email).trim().toLowerCase();
-    const existing = await prisma.user.findUnique({ where: { email: normalized } });
+    const existing = await prisma.user.findUnique({ where: { emailIndex: blindIndex(normalized) } });
     if (existing) return res.status(409).json({ error: 'An account already exists with that email. Sign in first.' });
     try {
       user = await findOrCreateHeadlessUser({ eventId: event.id, legalName, fursonaName, email: normalized });

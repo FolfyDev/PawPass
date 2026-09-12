@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
-import { printBadge } from '../../lib/print.js';
-import { StatusPill, Pill, Empty } from '../../components/Bits.jsx';
+import { printBadge, printBadges, printAttendeeList } from '../../lib/print.js';
+import { StatusPill, Pill, Empty, Field, PaymentButtons } from '../../components/Bits.jsx';
+import Modal from '../../components/Modal.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 
 export default function Attendees() {
@@ -13,21 +14,83 @@ export default function Attendees() {
   const [q, setQ] = useState('');
   const [event, setEvent] = useState(null);
   const [msg, setMsg] = useState('');
+  const [msgOk, setMsgOk] = useState(true);
+  const [selected, setSelected] = useState(() => new Set());
 
   const load = () => api.get(`/api/admin/events/${id}/registrations?q=${encodeURIComponent(q)}`).then(setRows);
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [q, id]);
+  useEffect(() => { setSelected(new Set()); }, [id]);
 
   const print = async (code) => {
     setMsg('');
-    try { const r = await printBadge(code, settings?.printMode); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); }
-    catch (e) { setMsg(e.message); }
+    try { const r = await printBadge(code, settings?.printMode); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); setMsgOk(true); }
+    catch (e) { setMsg(e.message); setMsgOk(false); }
     load();
   };
+
+  const printSelected = async () => {
+    setMsg('');
+    const codes = [...selected];
+    try {
+      await printBadges(codes, settings?.printMode);
+      setMsg(`Sent ${codes.length} badge${codes.length === 1 ? '' : 's'} to the printer.`);
+      setMsgOk(true);
+      setSelected(new Set());
+    } catch (e) { setMsg(e.message); setMsgOk(false); }
+    load();
+  };
+
+  const toggleRow = (code) => setSelected((s) => {
+    const next = new Set(s);
+    if (next.has(code)) next.delete(code); else next.add(code);
+    return next;
+  });
+  const toggleAll = () => setSelected((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.code))));
 
   const setStatus = async (code, status) => { await api.patch(`/api/admin/registrations/${code}`, { status }); load(); };
 
   const checkedIn = rows?.filter((r) => r.checkedInAt).length || 0;
+
+  const [editing, setEditing] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [editMsg, setEditMsg] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+
+  const openEdit = (r) => {
+    setEditing(r);
+    setEditForm({
+      legalName: r.legalName || '',
+      fursonaName: r.fursonaName || '',
+      email: r.email || '',
+      paymentMethod: r.paymentMethod || '',
+      paymentAmount: r.paymentAmount != null ? String(r.paymentAmount) : '',
+      paymentNote: r.paymentNote || '',
+      answers: { ...(r.answers || {}) },
+    });
+    setEditMsg('');
+  };
+
+  const setAnswer = (key, value) => setEditForm((f) => ({ ...f, answers: { ...f.answers, [key]: value } }));
+
+  const saveEdit = async () => {
+    setEditBusy(true);
+    setEditMsg('');
+    try {
+      await api.patch(`/api/admin/registrations/${editing.code}`, {
+        legalName: editForm.legalName,
+        fursonaName: editForm.fursonaName,
+        email: editForm.email,
+        paymentMethod: editForm.paymentMethod || null,
+        paymentAmount: editForm.paymentAmount === '' ? null : Number(editForm.paymentAmount),
+        paymentNote: editForm.paymentNote,
+        answers: editForm.answers,
+      });
+      setEditing(null);
+      load();
+    } catch (e) { setEditMsg(e.message); }
+    finally { setEditBusy(false); }
+  };
 
   return (
     <>
@@ -38,6 +101,7 @@ export default function Attendees() {
         </div>
         <div className="row">
           <Link className="btn" to="/admin/scan">Open scanner</Link>
+          <button className="btn" disabled={!rows?.length} onClick={() => printAttendeeList(rows, event?.title)}>Print attendee list</button>
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
       </div>
@@ -46,18 +110,25 @@ export default function Attendees() {
       <div className="row" style={{ marginBottom: 14 }}>
         <input placeholder="Search name, fursona, code or email" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 340 }} />
         <span className="small muted">{rows?.length || 0} registered · {checkedIn} checked in</span>
+        {!!selected.size && (
+          <>
+            <span className="small muted">· {selected.size} selected</span>
+            <button className="btn sm" onClick={printSelected}>Print {selected.size} badge{selected.size === 1 ? '' : 's'}</button>
+          </>
+        )}
       </div>
-      {msg && <p className="note" style={{ marginBottom: 14 }}>{msg}</p>}
+      {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 14 }}>{msg}</p>}
 
       {rows?.length === 0 && <Empty title="Nobody yet">Share the event link or point people at the Telegram bot.</Empty>}
 
       {!!rows?.length && (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
           <table>
-            <thead><tr><th>Code</th><th>Badge #</th><th>Badge name</th><th>Legal name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Badge tier</th><th>Payment</th><th>Printed</th><th /></tr></thead>
+            <thead><tr><th><input type="checkbox" checked={selected.size === rows.length} onChange={toggleAll} /></th><th>Code</th><th>Badge #</th><th>Badge name</th><th>Legal name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Badge tier</th><th>Payment</th><th>Printed</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.code}>
+                  <td><input type="checkbox" checked={selected.has(r.code)} onChange={() => toggleRow(r.code)} /></td>
                   <td className="mono">{r.code}</td>
                   <td className="mono">{r.badgeNumber ?? '—'}</td>
                   <td><strong>{r.fursonaName || '—'}</strong></td>
@@ -74,6 +145,7 @@ export default function Attendees() {
                   <td className="small muted">{r.printCount ? `${r.printCount}×` : '—'}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
+                    <button className="btn sm" onClick={() => openEdit(r)}>Edit</button>{' '}
                     <button className="btn sm" onClick={() => print(r.code)}>Print</button>{' '}
                     {r.status !== 'CANCELLED'
                       ? <button className="btn sm danger" onClick={() => setStatus(r.code, 'CANCELLED')}>Cancel</button>
@@ -84,6 +156,75 @@ export default function Attendees() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {editing && editForm && (
+        <Modal title={`Edit ${editing.fursonaName || editing.legalName}`} onClose={() => setEditing(null)}
+          footer={<>
+            <button className="btn ghost" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="btn primary" disabled={editBusy} onClick={saveEdit}>Save changes</button>
+          </>}>
+          <div className="stack">
+            <p className="mono small muted" style={{ margin: 0 }}>{editing.code}</p>
+            {editMsg && <p className="note bad">{editMsg}</p>}
+            <div className="grid-2">
+              <Field label="Legal name">
+                <input value={editForm.legalName} onChange={(e) => setEditForm({ ...editForm, legalName: e.target.value })} />
+              </Field>
+              <Field label={settings?.fursonaNameLabel || 'Fursona name'}>
+                <input value={editForm.fursonaName} onChange={(e) => setEditForm({ ...editForm, fursonaName: e.target.value })} />
+              </Field>
+            </div>
+            <Field label="Email">
+              <input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
+            </Field>
+
+            {(event?.customFields || []).map((f) => (
+              <Field key={f.key} label={f.label} help={f.help}>
+                {f.type === 'select' ? (
+                  <select value={editForm.answers[f.key] || ''} onChange={(e) => setAnswer(f.key, e.target.value)}>
+                    <option value="">Choose one</option>
+                    {(f.options || []).map((o) => <option key={o}>{o}</option>)}
+                  </select>
+                ) : f.type === 'checkbox' ? (
+                  <span className="row"><input type="checkbox" checked={!!editForm.answers[f.key]}
+                    onChange={(e) => setAnswer(f.key, e.target.checked)} /> {f.help}</span>
+                ) : f.type === 'qualifier' ? (
+                  <div className="stack" style={{ gap: 4 }}>
+                    {(f.options || []).map((o) => {
+                      const picked = Array.isArray(editForm.answers[f.key]) ? editForm.answers[f.key] : [];
+                      return (
+                        <label key={o} className="row small">
+                          <input type="checkbox" checked={picked.includes(o)}
+                            onChange={(e) => setAnswer(f.key, e.target.checked ? [...picked, o] : picked.filter((x) => x !== o))} /> {o}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <input type={f.type === 'number' ? 'number' : 'text'} value={editForm.answers[f.key] || ''}
+                    onChange={(e) => setAnswer(f.key, e.target.value)} />
+                )}
+              </Field>
+            ))}
+
+            {editing.tier === 'DONATION' && (
+              <>
+                <Field label="Payment method">
+                  <PaymentButtons value={editForm.paymentMethod} onChange={(v) => setEditForm({ ...editForm, paymentMethod: v })} />
+                </Field>
+                <div className="grid-2">
+                  <Field label="Amount">
+                    <input type="number" step="0.01" value={editForm.paymentAmount} onChange={(e) => setEditForm({ ...editForm, paymentAmount: e.target.value })} />
+                  </Field>
+                  <Field label="Note">
+                    <input value={editForm.paymentNote} onChange={(e) => setEditForm({ ...editForm, paymentNote: e.target.value })} />
+                  </Field>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
       )}
     </>
   );

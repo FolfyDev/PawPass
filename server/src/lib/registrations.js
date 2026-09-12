@@ -1,5 +1,8 @@
 import { prisma } from './db.js';
 import { ticketCode, ticketSecret } from './codes.js';
+import { findMatchingBan } from './bans.js';
+import { audit } from './auth.js';
+import { blindIndex } from './crypto.js';
 
 export class RegistrationError extends Error {}
 
@@ -10,7 +13,7 @@ export function validateAnswers(event, answers = {}) {
   const clean = {};
   for (const f of fields) {
     const value = answers[f.key];
-    const empty = value === undefined || value === null || value === '';
+    const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
     if (f.required && empty) throw new RegistrationError(`${f.label} is required.`);
     if (!empty) clean[f.key] = value;
   }
@@ -33,6 +36,22 @@ export function registrationWindowState(event, confirmedCount) {
 }
 
 export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, tier, paymentMethod, paymentAmount, paymentNote, voucherCode }) {
+  const ban = await findMatchingBan({ legalName, email, telegramId: user.telegramId, telegramUsername: user.telegramUsername });
+  if (ban) {
+    await audit(null, 'ban.blocked_registration', ban.id, {
+      banReason: ban.reason || undefined,
+      eventId: event.id,
+      eventTitle: event.title,
+      legalName: legalName?.trim() || undefined,
+      fursonaName: fursonaName?.trim() || undefined,
+      email: email?.trim() || undefined,
+      telegramId: user.telegramId || undefined,
+      telegramUsername: user.telegramUsername || undefined,
+      source,
+    });
+    throw new RegistrationError('Registration is not available for this account. Contact the organizers if you think this is a mistake.');
+  }
+
   const existing = await prisma.registration.findUnique({
     where: { eventId_userId: { eventId: event.id, userId: user.id } },
   });
@@ -51,51 +70,51 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
     if (voucher.usedCount >= voucher.maxUses) throw new RegistrationError('That voucher code has already been used.');
   }
 
-  let chosenTier, status;
-  if (voucher) {
-    chosenTier = 'FREE';
-    status = 'CONFIRMED';
-  } else {
-    const confirmedCount = await prisma.registration.count({
-      where: { eventId: event.id, status: 'CONFIRMED' },
-    });
-    const state = registrationWindowState(event, confirmedCount);
-    if (!state.open) throw new RegistrationError(state.reason);
-    chosenTier = event.donationRequired ? 'DONATION' : tier === 'DONATION' ? 'DONATION' : 'FREE';
-    if (chosenTier === 'DONATION' && !event.donationPaypalLink)
-      throw new RegistrationError('The donation tier is not available for this event.');
-    status = state.waitlist ? 'WAITLIST' : 'CONFIRMED';
-  }
+  const cleanAnswers = validateAnswers(event, answers);
 
-  const data = {
-    legalName: legalName.trim(),
-    fursonaName: (fursonaName || '').trim(),
-    email: email?.trim() || null,
-    answers: validateAnswers(event, answers),
-    status,
-    tier: chosenTier,
-    rsvp: 'YES',
-    source,
-    tosAcceptedAt: new Date(),
-    tosVersion: tosVersion || null,
-    paymentMethod: chosenTier === 'DONATION' && PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null,
-    paymentAmount: chosenTier === 'DONATION' && paymentAmount != null && !isNaN(Number(paymentAmount)) ? Number(paymentAmount) : null,
-    paymentNote: chosenTier === 'DONATION' ? (paymentNote?.trim() || null) : null,
-    voucherCodeId: voucher?.id || null,
-    badgeTier: voucher?.badgeTier || null,
-  };
-
-  // The voucher claim, the badge-number increment, and the registration
-  // write all happen in one transaction — a limited-use voucher redeemed by
-  // two people at once must not both succeed.
   return prisma.$transaction(async (tx) => {
+    let chosenTier, status;
+
     if (voucher) {
       const claimed = await tx.voucherCode.updateMany({
         where: { id: voucher.id, usedCount: { lt: voucher.maxUses } },
         data: { usedCount: { increment: 1 } },
       });
       if (claimed.count === 0) throw new RegistrationError('That voucher code has already been used.');
+      chosenTier = 'FREE';
+      status = 'CONFIRMED';
+    } else {
+      if (event.capacity) {
+        await tx.$queryRaw`SELECT id FROM "Event" WHERE id = ${event.id} FOR UPDATE`;
+      }
+      const confirmedCount = await tx.registration.count({
+        where: { eventId: event.id, status: 'CONFIRMED' },
+      });
+      const state = registrationWindowState(event, confirmedCount);
+      if (!state.open) throw new RegistrationError(state.reason);
+      chosenTier = event.donationRequired ? 'DONATION' : tier === 'DONATION' ? 'DONATION' : 'FREE';
+      if (chosenTier === 'DONATION' && !event.donationPaypalLink)
+        throw new RegistrationError('The donation tier is not available for this event.');
+      status = state.waitlist ? 'WAITLIST' : 'CONFIRMED';
     }
+
+    const data = {
+      legalName: legalName.trim(),
+      fursonaName: (fursonaName || '').trim(),
+      email: email?.trim() || null,
+      answers: cleanAnswers,
+      status,
+      tier: chosenTier,
+      rsvp: 'YES',
+      source,
+      tosAcceptedAt: new Date(),
+      tosVersion: tosVersion || null,
+      paymentMethod: chosenTier === 'DONATION' && PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null,
+      paymentAmount: chosenTier === 'DONATION' && paymentAmount != null && !isNaN(Number(paymentAmount)) ? Number(paymentAmount) : null,
+      paymentNote: chosenTier === 'DONATION' ? (paymentNote?.trim() || null) : null,
+      voucherCodeId: voucher?.id || null,
+      badgeTier: voucher?.badgeTier || null,
+    };
 
     if (existing) {
       return tx.registration.update({ where: { id: existing.id }, data });
@@ -115,7 +134,7 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
         badgeNumber: updatedEvent.nextBadgeNumber - 1,
       },
     });
-  });
+  }, { maxWait: 10000, timeout: 10000 });
 }
 
 /// Creates the User a registration needs when there's no signed-in account to
@@ -129,8 +148,8 @@ export async function findOrCreateHeadlessUser({ eventId, legalName, fursonaName
       eventId,
       status: { not: 'CANCELLED' },
       OR: [
-        { legalName: { equals: legalName, mode: 'insensitive' } },
-        ...(email ? [{ email: { equals: email, mode: 'insensitive' } }] : []),
+        { legalNameIndex: blindIndex(legalName) },
+        ...(email ? [{ emailIndex: blindIndex(email) }] : []),
       ],
     },
   });
