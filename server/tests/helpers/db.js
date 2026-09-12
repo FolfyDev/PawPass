@@ -2,6 +2,12 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../../src/lib/db.js';
 import { blindIndex } from '../../src/lib/crypto.js';
 
+// Every test file imports this module before touching the app, so this is
+// the one place to flag "we're in the test suite" — the registration rate
+// limiter checks it to let the concurrency/load tests fire bursts of
+// requests no real attendee ever would.
+process.env.NODE_ENV = 'test';
+
 function assertTestDatabase() {
   const url = process.env.DATABASE_URL || '';
   let dbName = '';
