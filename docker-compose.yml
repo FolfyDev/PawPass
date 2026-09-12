@@ -28,10 +28,6 @@ services:
     volumes:
       - uploads:/app/uploads
       - ./certs:/app/certs:ro
-    # Bound to localhost only. The browser never talks to this port directly —
-    # nginx (the web service) proxies /api, /t, and /l to it over the internal
-    # compose network, which doesn't need a published port at all. This stays
-    # reachable from the host itself (curl, prisma studio) for debugging.
     ports:
       - "127.0.0.1:${SERVER_PORT:-4000}:4000"
     healthcheck:
