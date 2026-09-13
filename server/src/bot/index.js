@@ -270,7 +270,7 @@ export function createBot() {
     await ctx.reply(
       `Tap to sign in:\n\n${link(`${env.webUrl}/l/${code}`, code)}\n\n` +
       `Or enter that code by hand at ${link(`${env.webUrl}/login`)}. It works once and expires in ${env.loginCodeTtlMinutes} minutes.`,
-      { parse_mode: 'HTML' },
+      { parse_mode: 'HTML', link_preview_options: { is_disabled: true } },
     );
   });
 
@@ -354,6 +354,8 @@ export function createBot() {
     await ctx.reply(`${label} Send /rsvp any time to change it.`);
   });
 
+
+
   bot.command('going', async (ctx) => {
     const { user } = await load(ctx);
     const regs = await prisma.registration.findMany({
@@ -371,6 +373,8 @@ export function createBot() {
     });
     await ctx.reply('Which event?', { reply_markup: kb });
   });
+
+  
 
   bot.callbackQuery(/^goingfor:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
