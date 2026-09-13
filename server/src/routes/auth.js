@@ -154,6 +154,17 @@ authRouter.post('/email', requireUser, async (req, res) => {
   }
 });
 
+
+authRouter.post('/fursona-name', requireUser, async (req, res) => {
+  const fursonaName = String(req.body?.fursonaName || '').trim();
+  if (!fursonaName) return res.status(400).json({ error: 'Enter a badge name.' });
+  const [user] = await prisma.$transaction([
+    prisma.user.update({ where: { id: req.user.id }, data: { fursonaName } }),
+    prisma.registration.updateMany({ where: { userId: req.user.id }, data: { fursonaName } }),
+  ]);
+  res.json({ user: publicUser(user) });
+});
+
 authRouter.post('/email-code/request', loginLimiter, async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
@@ -182,9 +193,6 @@ authRouter.post('/email-code/verify', loginLimiter, async (req, res) => {
   }
 });
 
-/// Sign in with a code the bot handed out. Works over plain HTTP and needs no
-/// registered domain, so this is the local-testing path — and a reasonable
-/// production path for anyone who dislikes the widget's third-party script.
 authRouter.post('/telegram-code', loginLimiter, async (req, res) => {
   try {
     const user = await redeemLoginCode(req.body.code);

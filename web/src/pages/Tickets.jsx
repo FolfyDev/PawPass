@@ -67,9 +67,6 @@ export default function Tickets() {
                   <button className="btn sm" onClick={() => google(t.code)}>Add to Google Wallet</button>
                 )}
               </div>
-              {!settings?.wallet?.apple && !settings?.wallet?.google && (
-                <p className="small muted" style={{ margin: 0 }}>Wallet passes are not set up on this instance — screenshot the code instead.</p>
-              )}
             </div>
           </div>
         ))}

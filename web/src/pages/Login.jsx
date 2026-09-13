@@ -118,7 +118,7 @@ export default function Login() {
 
       {!config?.telegram?.enabled && config?.emailCodeEnabled && tab !== 'dev' && (
         <p className="small muted" style={{ marginTop: 14 }}>
-          Telegram sign-in is off because no bot token is set. You can still register for events and sign in with an emailed code.
+          Telegram sign-in is off. You can still register for events and sign in with an emailed code.
         </p>
       )}
     </div>
