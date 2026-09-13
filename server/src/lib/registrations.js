@@ -170,6 +170,16 @@ export async function findOrCreateHeadlessUser({ eventId, legalName, fursonaName
   return prisma.user.create({ data: { displayName: legalName, legalName, fursonaName } });
 }
 
+/// Shared by the web self-service cancel and the bot's /regcancel — flips the
+/// registration to cancelled and immediately tries to backfill the freed
+/// spot from the waitlist, same as the admin status-edit path does. Callers
+/// are responsible for notifying whoever gets promoted (Telegram vs HTTP
+/// response formats differ, so that part isn't shared).
+export async function cancelRegistration(reg) {
+  await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
+  return promoteFromWaitlist(reg.eventId);
+}
+
 /// Promotes the longest-waiting person when a confirmed spot frees up.
 export async function promoteFromWaitlist(eventId) {
   const event = await prisma.event.findUnique({ where: { id: eventId } });

@@ -5,7 +5,7 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { requireUser, issueToken, setSessionCookie, audit } from '../lib/auth.js';
-import { createRegistration, RegistrationError, registrationWindowState, promoteFromWaitlist, findOrCreateHeadlessUser } from '../lib/registrations.js';
+import { createRegistration, RegistrationError, registrationWindowState, findOrCreateHeadlessUser, cancelRegistration } from '../lib/registrations.js';
 import { findMatchingBan, normHandle } from '../lib/bans.js';
 import { ticketCode, ticketSecret } from '../lib/codes.js';
 import { buildApplePass } from '../wallet/apple.js';
@@ -178,8 +178,7 @@ publicRouter.post('/my/tickets/:code/rsvp', requireUser, async (req, res) => {
 publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
-  await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
-  const promoted = await promoteFromWaitlist(reg.eventId);
+  const promoted = await cancelRegistration(reg);
   if (promoted?.user.telegramId) {
     await notifyUser(promoted.user.telegramId,
       `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +

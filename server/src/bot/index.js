@@ -5,7 +5,7 @@ import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
+import { createRegistration, RegistrationError, registrationWindowState, cancelRegistration } from '../lib/registrations.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { escapeHtml as esc } from '../lib/html.js';
 import { sendRegistrationConfirmation } from '../lib/mailer.js';
@@ -117,6 +117,7 @@ export function createBot() {
       '/register — sign up for an event\n' +
       '/mytickets — show your tickets\n' +
       '/rsvp — say whether you\'re going\n' +
+      '/regcancel — cancel a registration\n' +
       '/going — see who else is going\n' +
       '/merch — see what is for sale\n' +
       '/login — get a code to sign in on the website\n' +
@@ -134,6 +135,7 @@ export function createBot() {
       '/register — sign up for an event\n' +
       '/mytickets — your tickets and codes\n' +
       '/rsvp — say whether you\'re going, any time\n' +
+      '/regcancel — cancel a registration\n' +
       '/going — see who else is going\n' +
       '/merch — see what is for sale\n' +
       '/login — a one-time code for the website\n' +
@@ -356,7 +358,58 @@ export function createBot() {
     await ctx.reply(`${label} Send /rsvp any time to change it.`);
   });
 
+  /// Same shape as /rsvp above: pick a registration if there's more than
+  /// one, then a plain yes/no before anything actually happens — same
+  /// single-confirm bar as the website's own self-service cancel button.
+  bot.command('regcancel', async (ctx) => {
+    const { user } = await load(ctx);
+    const regs = await prisma.registration.findMany({
+      where: { userId: user.id, status: { not: 'CANCELLED' } },
+      include: { event: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!regs.length) return ctx.reply('You have no active registrations to cancel.');
+    if (regs.length === 1) return askRegCancel(ctx, regs[0]);
 
+    const kb = new InlineKeyboard();
+    regs.forEach((r, i) => {
+      kb.text(r.event.title, `regcancelfor:${r.id}`);
+      if (i < regs.length - 1) kb.row();
+    });
+    await ctx.reply('Which registration do you want to cancel?', { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^regcancelfor:(.+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    const reg = await prisma.registration.findUnique({ where: { id: ctx.match[1] }, include: { event: true } });
+    if (!reg || reg.userId !== user.id) return ctx.reply('That ticket is not yours.');
+    await askRegCancel(ctx, reg);
+  });
+
+  async function askRegCancel(ctx, reg) {
+    const kb = new InlineKeyboard()
+      .text('Yes, cancel it', `regcancelset:${reg.id}:yes`)
+      .text('No, keep it', `regcancelset:${reg.id}:no`);
+    await ctx.reply(`Cancel your registration for ${reg.event.title}? This cannot be undone.`, { reply_markup: kb });
+  }
+
+  bot.callbackQuery(/^regcancelset:(.+):(yes|no)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    if (ctx.match[2] === 'no') return ctx.reply('Okay, keeping it.');
+    const reg = await prisma.registration.findUnique({ where: { id: ctx.match[1] }, include: { event: true } });
+    if (!reg || reg.userId !== user.id) return ctx.reply('That ticket is not yours.');
+    if (reg.status === 'CANCELLED') return ctx.reply('That registration is already cancelled.');
+    const promoted = await cancelRegistration(reg);
+    if (promoted?.user.telegramId) {
+      await notifyUser(promoted.user.telegramId,
+        `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
+        `Badge code: ${promoted.code}\n` +
+        `Ticket and wallet pass: ${env.webUrl}/tickets`);
+    }
+    await ctx.reply(`Cancelled your registration for ${reg.event.title}.`);
+  });
 
   bot.command('going', async (ctx) => {
     const { user } = await load(ctx);
