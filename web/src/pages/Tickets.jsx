@@ -141,7 +141,7 @@ export default function Tickets() {
           <div className="stack">
             {settings?.askFursonaName !== false && (
               <form className="stack" onSubmit={saveBadgeName}>
-                <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="Changes your badge name everywhere, not just this ticket — same as the Account page.">
+                <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="Change your badge name.">
                   <div className="row">
                     <input value={badgeName} onChange={(e) => setBadgeName(e.target.value)} />
                     <button className="btn sm">Save</button>
@@ -158,7 +158,7 @@ export default function Tickets() {
 
             {showTransferNudge && !transferOpen && (
               <div className="card stack" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
-                <p className="small muted" style={{ margin: 0 }}>Since you can't make it — cancel your spot, or hand it to someone else?</p>
+                <p className="small muted" style={{ margin: 0 }}>Since you can't make it, cancel your spot, or hand it to someone else?</p>
                 <div className="row">
                   <button className="btn sm danger" disabled={cancelBusy} onClick={() => cancelTicket(modifying.code)}>Cancel registration</button>
                   <button className="btn sm" onClick={() => setTransferOpen(true)}>Transfer to someone else</button>
@@ -175,8 +175,8 @@ export default function Tickets() {
               {transferOpen && !transferConfirm && (
                 <>
                   <p className="small muted" style={{ margin: 0 }}>
-                    Give this spot to someone else. They'll need to sign in with the Telegram account or email you provide —
-                    for Telegram, they need to have messaged the bot at least once already.
+                    Give this spot to someone else. They'll need to sign in with the Telegram account or email you provid.
+                    For Telegram, they need to have messaged the bot at least once already.
                   </p>
                   <div className="segmented">
                     <button type="button" className={transferMethod === 'telegram' ? 'selected' : ''} onClick={() => setTransferMethod('telegram')}>Telegram username</button>
