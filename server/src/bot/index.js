@@ -8,6 +8,7 @@ import { getSettings } from '../lib/settings.js';
 import { createRegistration, RegistrationError, registrationWindowState } from '../lib/registrations.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { escapeHtml as esc } from '../lib/html.js';
+import { sendRegistrationConfirmation } from '../lib/mailer.js';
 
 /// Telegram doesn't reliably auto-link plain URLs (localhost during local
 /// dev never gets linked at all), so any message with a link is sent with
@@ -240,6 +241,7 @@ export function createBot() {
         where: { id: user.id },
         data: { legalName: reg.legalName, fursonaName: reg.fursonaName, email: reg.email ?? undefined },
       });
+      getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
       await reset(telegramId);
       await ctx.reply(
         `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${esc(event.title)}.\n\n` +

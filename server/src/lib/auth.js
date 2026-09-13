@@ -55,6 +55,47 @@ export async function redeemEmailCode(rawEmail, rawCode) {
   return user;
 }
 
+export class TelegramLinkError extends Error {}
+
+/// Attaches `telegramId` to `targetUser`. The tricky part: literally any
+/// Telegram interaction — even just running /login to fetch a linking code —
+/// auto-creates a bare shell User row for that id (see load() in
+/// bot/index.js), so "a User already has this telegramId" is not by itself a
+/// real conflict. A shell with zero registrations is just bot plumbing and
+/// gets quietly repointed onto targetUser; a shell (or account) that actually
+/// has registrations is a genuine second identity and gets rejected, with
+/// the admin "combine registrations" tool as the intended way to resolve it.
+///
+/// `telegramUsernameHint` is only used when there's no existing User row for
+/// this telegramId to source a username from (e.g. the Login Widget flow,
+/// which hands over a username directly and may be the very first contact
+/// this telegramId has ever had with the app).
+export async function linkTelegramIdentity(targetUser, telegramId, telegramUsernameHint) {
+  const taken = await prisma.user.findUnique({ where: { telegramId } });
+  if (!taken || taken.id === targetUser.id) {
+    return prisma.user.update({
+      where: { id: targetUser.id },
+      data: { telegramId, telegramUsername: taken?.telegramUsername ?? telegramUsernameHint ?? null },
+    });
+  }
+
+  const regCount = await prisma.registration.count({ where: { userId: taken.id } });
+  if (regCount > 0)
+    throw new TelegramLinkError('That Telegram username or email is already in use by another account.');
+
+  // Empty shell — safe to repoint. telegramId is @unique, so the old holder
+  // has to be cleared before the new one can take it; Postgres checks unique
+  // constraints immediately, not at transaction end, so this has to be two
+  // separate statements in the transaction, in this order, not one combined
+  // update.
+  const username = taken.telegramUsername;
+  const [, user] = await prisma.$transaction([
+    prisma.user.update({ where: { id: taken.id }, data: { telegramId: null, telegramUsername: null } }),
+    prisma.user.update({ where: { id: targetUser.id }, data: { telegramId, telegramUsername: username } }),
+  ]);
+  return user;
+}
+
 /// Verifies the hash Telegram signs Login Widget payloads with.
 export function verifyTelegramLogin(data) {
   const { hash, ...rest } = data;

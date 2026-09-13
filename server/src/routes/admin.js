@@ -8,7 +8,7 @@ import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
+import { requireAdmin, requireOwner, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers } from '../lib/registrations.js';
 import { norm, normHandle } from '../lib/bans.js';
@@ -16,7 +16,7 @@ import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg } from './public.js';
-import { sendCampaign } from '../lib/mailer.js';
+import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
 import { notifyUser } from '../bot/index.js';
 
 export const adminRouter = Router();
@@ -121,6 +121,7 @@ adminRouter.post('/registrations', async (req, res) => {
     if (!user) user = await findOrCreateHeadlessUser({ eventId: req.body.eventId, legalName: req.body.legalName, fursonaName: req.body.fursonaName, email: req.body.email });
     const reg = await createRegistration({ event, user, ...req.body, source: 'admin' });
     await audit(req.user.id, 'registration.create', reg.id, { code: reg.code });
+    getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
     res.json(shapeReg(reg));
   } catch (e) {
     if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
@@ -153,6 +154,87 @@ adminRouter.patch('/registrations/:code', async (req, res) => {
   }
   await audit(req.user.id, 'registration.update', reg.id, data);
   res.json(shapeReg(reg));
+});
+
+/// Narrow, purpose-built search for the "link/combine" tools below — deliberately
+/// not the fuller GET /users (owner-only, since that exposes the whole staff
+/// roster) since this only needs to find an existing Telegram-linked account by
+/// name or username, and staff below owner are allowed to use it.
+adminRouter.get('/telegram-lookup', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+  const users = await prisma.user.findMany({
+    where: {
+      telegramId: { not: null },
+      OR: [
+        { displayName: { contains: q, mode: 'insensitive' } },
+        { telegramUsername: { contains: q, mode: 'insensitive' } },
+      ],
+    },
+    take: 8,
+  });
+  res.json(users.map((u) => ({ id: u.id, displayName: u.displayName, telegramUsername: u.telegramUsername, telegramId: u.telegramId })));
+});
+
+/// Manually attach a Telegram identity to a registration's account — same
+/// empty-shell-vs-real-conflict handling as the self-service code flow (see
+/// linkTelegramIdentity), just admin-initiated and by search instead of a code.
+adminRouter.patch('/registrations/:code/telegram', async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { user: true } });
+  if (!reg) return res.status(404).json({ error: 'Registration not found.' });
+  const telegramId = String(req.body.telegramId || '').trim();
+  if (!telegramId) return res.status(400).json({ error: 'Choose a Telegram account.' });
+  try {
+    const user = await linkTelegramIdentity(reg.user, telegramId);
+    await audit(req.user.id, 'registration.link_telegram', reg.id, { telegramId });
+    res.json(publicUser(user));
+  } catch (e) {
+    if (e instanceof TelegramLinkError) return res.status(409).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Combines two registrations that turned out to be the same person under
+/// two different accounts (one web, one Telegram, say) — cancels the
+/// duplicate rather than deleting it, and copies over whichever of
+/// telegramId/telegramUsername/email the keeper's account is missing. Any
+/// *other* registrations the dropped account had (different events) move
+/// over too, except ones that would collide with a registration the keeper
+/// already has for that event — those are left alone and reported back
+/// rather than silently dropped.
+adminRouter.post('/registrations/combine', async (req, res) => {
+  const { keepCode, dropCode } = req.body || {};
+  const [keep, drop] = await Promise.all([
+    prisma.registration.findUnique({ where: { code: keepCode }, include: { user: true } }),
+    prisma.registration.findUnique({ where: { code: dropCode }, include: { user: true } }),
+  ]);
+  if (!keep || !drop) return res.status(404).json({ error: 'Registration not found.' });
+  if (keep.eventId !== drop.eventId) return res.status(400).json({ error: 'Registrations must be for the same event.' });
+  if (keep.userId === drop.userId) return res.status(400).json({ error: 'These are already the same account.' });
+
+  const adoptTelegram = !keep.user.telegramId && drop.user.telegramId;
+  const patch = {};
+  if (adoptTelegram) { patch.telegramId = drop.user.telegramId; patch.telegramUsername = drop.user.telegramUsername; }
+  if (!keep.user.email && drop.user.email) patch.email = drop.user.email;
+
+  await prisma.$transaction([
+    prisma.registration.update({ where: { id: drop.id }, data: { status: 'CANCELLED' } }),
+    // telegramId is @unique — the old holder has to be cleared in the same
+    // transaction before the keeper can take it.
+    ...(adoptTelegram ? [prisma.user.update({ where: { id: drop.userId }, data: { telegramId: null, telegramUsername: null } })] : []),
+    prisma.user.update({ where: { id: keep.userId }, data: patch }),
+  ]);
+
+  const others = await prisma.registration.findMany({ where: { userId: drop.userId, id: { not: drop.id } } });
+  const skipped = [];
+  for (const other of others) {
+    const collision = await prisma.registration.findUnique({ where: { eventId_userId: { eventId: other.eventId, userId: keep.userId } } });
+    if (collision) { skipped.push(other.code); continue; }
+    await prisma.registration.update({ where: { id: other.id }, data: { userId: keep.userId } });
+  }
+
+  await audit(req.user.id, 'registration.combine', keep.id, { keptCode: keep.code, droppedCode: drop.code, skipped });
+  res.json({ ok: true, skipped });
 });
 
 /* ---------------- merch ---------------- */

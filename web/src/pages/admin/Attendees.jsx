@@ -92,6 +92,52 @@ export default function Attendees() {
     finally { setEditBusy(false); }
   };
 
+  const [telegramQuery, setTelegramQuery] = useState('');
+  const [telegramMatches, setTelegramMatches] = useState([]);
+  const [telegramBusy, setTelegramBusy] = useState(false);
+
+  useEffect(() => {
+    if (!editing || !telegramQuery.trim()) { setTelegramMatches([]); return; }
+    const t = setTimeout(() => {
+      api.get(`/api/admin/telegram-lookup?q=${encodeURIComponent(telegramQuery)}`).then(setTelegramMatches);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [telegramQuery, editing]);
+
+  const linkTelegram = async (telegramId) => {
+    setTelegramBusy(true);
+    setEditMsg('');
+    try {
+      await api.patch(`/api/admin/registrations/${editing.code}/telegram`, { telegramId });
+      setTelegramQuery('');
+      setTelegramMatches([]);
+      setEditing(null);
+      setMsg('Telegram account linked.');
+      setMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); }
+    finally { setTelegramBusy(false); }
+  };
+
+  const [combining, setCombining] = useState(null);
+  const [combineBusy, setCombineBusy] = useState(false);
+
+  const combineChoose = async (keepCode) => {
+    const dropCode = combining.find((r) => r.code !== keepCode).code;
+    setCombineBusy(true);
+    try {
+      const r = await api.post('/api/admin/registrations/combine', { keepCode, dropCode });
+      setMsg(r.skipped?.length
+        ? `Combined — ${r.skipped.length} other registration${r.skipped.length === 1 ? '' : 's'} couldn't be moved: ${r.skipped.join(', ')}.`
+        : 'Registrations combined.');
+      setMsgOk(true);
+      setCombining(null);
+      setSelected(new Set());
+      load();
+    } catch (e) { setMsg(e.message); setMsgOk(false); }
+    finally { setCombineBusy(false); }
+  };
+
   return (
     <>
       <div className="spread" style={{ marginBottom: 16 }}>
@@ -114,6 +160,9 @@ export default function Attendees() {
           <>
             <span className="small muted">· {selected.size} selected</span>
             <button className="btn sm" onClick={printSelected}>Print {selected.size} badge{selected.size === 1 ? '' : 's'}</button>
+            {selected.size === 2 && (
+              <button className="btn sm" onClick={() => setCombining(rows.filter((r) => selected.has(r.code)))}>Combine 2 registrations</button>
+            )}
           </>
         )}
       </div>
@@ -179,6 +228,23 @@ export default function Attendees() {
               <input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
             </Field>
 
+            <Field label="Telegram account" help="Search by name or username to link or replace">
+              <div className="stack" style={{ gap: 6 }}>
+                <p className="small muted" style={{ margin: 0 }}>{editing.telegram ? `Currently @${editing.telegram}` : 'Not linked'}</p>
+                <input placeholder="Search name or username" value={telegramQuery} onChange={(e) => setTelegramQuery(e.target.value)} />
+                {telegramMatches.length > 0 && (
+                  <div className="card" style={{ padding: 0 }}>
+                    {telegramMatches.map((m) => (
+                      <div key={m.id} className="spread small" style={{ padding: '6px 10px', borderBottom: '1px solid var(--rule)' }}>
+                        <span>{m.displayName}{m.telegramUsername ? <> <span className="mono muted">@{m.telegramUsername}</span></> : null}</span>
+                        <button className="btn sm" disabled={telegramBusy} onClick={() => linkTelegram(m.telegramId)}>Link</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Field>
+
             {(event?.customFields || []).map((f) => (
               <Field key={f.key} label={f.label} help={f.help}>
                 {f.type === 'select' ? (
@@ -223,6 +289,27 @@ export default function Attendees() {
                 </div>
               </>
             )}
+          </div>
+        </Modal>
+      )}
+
+      {combining && (
+        <Modal title="Combine registrations" onClose={() => setCombining(null)}
+          footer={<button className="btn ghost" onClick={() => setCombining(null)}>Cancel</button>}>
+          <div className="stack">
+            <p className="small muted" style={{ margin: 0 }}>
+              Pick which registration to keep — the other is cancelled, and any Telegram account or email the kept one is
+              missing gets copied over from it.
+            </p>
+            {combining.map((r) => (
+              <div key={r.code} className="spread card" style={{ padding: 12, alignItems: 'center' }}>
+                <span className="small">
+                  <strong>{r.fursonaName || r.legalName}</strong> · {r.legalName} · <span className="mono">{r.code}</span>
+                  {r.telegram ? <> · @{r.telegram}</> : ''}{r.email ? <> · {r.email}</> : ''}
+                </span>
+                <button className="btn sm primary" disabled={combineBusy} onClick={() => combineChoose(r.code)}>Keep this one</button>
+              </div>
+            ))}
           </div>
         </Modal>
       )}

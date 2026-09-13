@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import QRCode from 'qrcode';
 import { prisma } from './db.js';
 import { env } from './env.js';
 import { getSettings } from './settings.js';
@@ -29,6 +30,38 @@ export async function sendOtpEmail(email, code) {
     to: email,
     subject: `Your sign-in code: ${code}`,
     text: `Your sign-in code is ${code}. It works once and expires in ${env.loginCodeTtlMinutes} minutes.\n\nIf you didn't request this, you can ignore this email.`,
+  });
+}
+
+/// Sent right after a registration is created (web, bot, or admin walk-up —
+/// see the three call sites in registrations.js's callers). Fire-and-forget
+/// from the caller's side, same as sendOtpEmail: a missing/broken SMTP setup
+/// should never fail the registration itself.
+export async function sendRegistrationConfirmation(reg, event, settings) {
+  if (!reg.email) return;
+  const tx = getTransport();
+  const name = reg.fursonaName || reg.legalName;
+  const eventDate = event?.startsAt ? new Date(event.startsAt).toDateString() : '';
+  const qrPayload = `${env.webUrl}/t/${reg.secret}`;
+  const qrPng = await QRCode.toBuffer(qrPayload, { type: 'png', margin: 1, width: 240 });
+
+  const statusLine = reg.status === 'WAITLIST' ? 'You are on the waitlist for' : 'You are registered for';
+
+  await tx.sendMail({
+    from: env.smtp.from,
+    to: reg.email,
+    subject: `${statusLine} ${event?.title || settings.orgName}`,
+    text:
+      `${statusLine} ${event?.title || settings.orgName}${eventDate ? ` (${eventDate})` : ''}.\n\n` +
+      `Name: ${name}\n` +
+      `Badge code: ${reg.code}\n\n` +
+      `Bring the QR attached to this email to check in, or view it any time at ${env.webUrl}/tickets.`,
+    html:
+      `<p>${statusLine} <strong>${event?.title || settings.orgName}</strong>${eventDate ? ` (${eventDate})` : ''}.</p>` +
+      `<p>Name: <strong>${name}</strong><br>Badge code: <strong>${reg.code}</strong></p>` +
+      `<p><img src="cid:regqr" alt="Check-in QR code" width="240" height="240"></p>` +
+      `<p>Bring this QR to check in, or view your ticket any time at <a href="${env.webUrl}/tickets">${env.webUrl}/tickets</a>.</p>`,
+    attachments: [{ filename: 'ticket-qr.png', content: qrPng, cid: 'regqr' }],
   });
 }
 
