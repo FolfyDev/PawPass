@@ -120,7 +120,7 @@ export default function EventPage() {
             <dt className="eyebrow">Starts</dt><dd style={{ margin: 0 }}>{fmtDate(event.startsAt, event.timezone)}</dd>
             <dt className="eyebrow">Ends</dt><dd style={{ margin: 0 }}>{fmtDate(event.endsAt, event.timezone)}</dd>
             {event.venue && <><dt className="eyebrow">Where</dt><dd style={{ margin: 0 }}>{event.venue}</dd></>}
-            {event.capacity && <><dt className="eyebrow">Spots</dt><dd style={{ margin: 0 }}>{event.confirmed} of {event.capacity} taken</dd></>}
+            {event.confirmed > 0 && <><dt className="eyebrow">Registered</dt><dd style={{ margin: 0 }}>{event.confirmed}</dd></>}
           </dl>
         </article>
 
