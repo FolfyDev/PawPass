@@ -32,7 +32,7 @@ export default function Kiosk() {
   const submit = async (e) => {
     e.preventDefault();
     setError('');
-    if (form.legalName.trim().length < 2) return setError('Enter the attendee\'s full legal name.');
+    if (form.legalName.trim().length < 2) return setError('Enter the attendee\'s preferred name.');
     for (const f of fields) {
       const v = form.answers[f.key];
       if (f.required && (Array.isArray(v) ? v.length === 0 : !v)) return setError(`${f.label} is required.`);
@@ -104,7 +104,7 @@ export default function Kiosk() {
           <form className="stack" onSubmit={submit}>
             <h2 style={{ margin: 0 }}>Register a walk-in</h2>
 
-            <Field label={settings?.legalNameLabel || 'Full legal name'} help={settings?.legalNameHelp}>
+            <Field label={settings?.legalNameLabel || 'Preferred name'} help={settings?.legalNameHelp}>
               <input value={form.legalName} autoFocus
                 onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
             </Field>

@@ -55,7 +55,9 @@ export default function Attendees() {
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [editMsg, setEditMsg] = useState('');
+  const [editMsgOk, setEditMsgOk] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
 
   const openEdit = (r) => {
     setEditing(r);
@@ -69,6 +71,7 @@ export default function Attendees() {
       answers: { ...(r.answers || {}) },
     });
     setEditMsg('');
+    setEditMsgOk(false);
   };
 
   const setAnswer = (key, value) => setEditForm((f) => ({ ...f, answers: { ...f.answers, [key]: value } }));
@@ -88,8 +91,19 @@ export default function Attendees() {
       });
       setEditing(null);
       load();
-    } catch (e) { setEditMsg(e.message); }
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
     finally { setEditBusy(false); }
+  };
+
+  const resendEmail = async () => {
+    setResendBusy(true);
+    setEditMsg('');
+    try {
+      await api.post(`/api/admin/registrations/${editing.code}/resend-email`);
+      setEditMsg('Confirmation email sent.');
+      setEditMsgOk(true);
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+    finally { setResendBusy(false); }
   };
 
   const [telegramQuery, setTelegramQuery] = useState('');
@@ -115,7 +129,7 @@ export default function Attendees() {
       setMsg('Telegram account linked.');
       setMsgOk(true);
       load();
-    } catch (e) { setEditMsg(e.message); }
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
     finally { setTelegramBusy(false); }
   };
 
@@ -173,7 +187,7 @@ export default function Attendees() {
       {!!rows?.length && (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
           <table>
-            <thead><tr><th><input type="checkbox" checked={selected.size === rows.length} onChange={toggleAll} /></th><th>Code</th><th>Badge #</th><th>Badge name</th><th>Legal name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Badge tier</th><th>Payment</th><th>Printed</th><th /></tr></thead>
+            <thead><tr><th><input type="checkbox" checked={selected.size === rows.length} onChange={toggleAll} /></th><th>Code</th><th>Badge #</th><th>Badge name</th><th>Preferred name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Badge tier</th><th>Payment</th><th>Printed</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.code}>
@@ -215,9 +229,9 @@ export default function Attendees() {
           </>}>
           <div className="stack">
             <p className="mono small muted" style={{ margin: 0 }}>{editing.code}</p>
-            {editMsg && <p className="note bad">{editMsg}</p>}
+            {editMsg && <p className={`note ${editMsgOk ? 'good' : 'bad'}`}>{editMsg}</p>}
             <div className="grid-2">
-              <Field label="Legal name">
+              <Field label="Preferred name">
                 <input value={editForm.legalName} onChange={(e) => setEditForm({ ...editForm, legalName: e.target.value })} />
               </Field>
               <Field label={settings?.fursonaNameLabel || 'Fursona name'}>
@@ -225,7 +239,12 @@ export default function Attendees() {
               </Field>
             </div>
             <Field label="Email">
-              <input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
+              <div className="row">
+                <input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
+                <button type="button" className="btn sm" disabled={!editing.email || resendBusy} onClick={resendEmail}>
+                  Resend confirmation email
+                </button>
+              </div>
             </Field>
 
             <Field label="Telegram account" help="Search by name or username to link or replace">

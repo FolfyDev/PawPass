@@ -78,4 +78,14 @@ export const env = {
       return Boolean(this.issuerId && this.serviceAccount);
     },
   },
+  /// Guards the guest (no-Telegram) web registration form against scripted
+  /// signups — see lib/turnstile.js. Optional: unset, registration works
+  /// exactly as before with no challenge.
+  turnstile: {
+    siteKey: process.env.TURNSTILE_SITE_KEY || '',
+    secretKey: process.env.TURNSTILE_SECRET_KEY || '',
+    get enabled() {
+      return Boolean(this.siteKey && this.secretKey);
+    },
+  },
 };

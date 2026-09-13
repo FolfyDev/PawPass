@@ -101,7 +101,7 @@ export function printAttendeeList(rows, eventTitle) {
   if (!win) throw new Error('Your browser blocked the print window — allow pop-ups for this site.');
 
   const cols = [
-    ['code', 'Code'], ['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Legal name'],
+    ['code', 'Code'], ['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'],
     ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tier', 'Tier'], ['badgeTier', 'Badge tier'],
     ['paymentMethod', 'Payment'], ['paymentAmount', 'Amount'], ['checkedInAt', 'Checked in'],
   ];

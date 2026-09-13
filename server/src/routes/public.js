@@ -11,6 +11,7 @@ import { googleSaveUrl } from '../wallet/google.js';
 import { notifyUser } from '../bot/index.js';
 import { blindIndex } from '../lib/crypto.js';
 import { sendRegistrationConfirmation } from '../lib/mailer.js';
+import { verifyTurnstile } from '../lib/turnstile.js';
 
 export const publicRouter = Router();
 
@@ -31,6 +32,7 @@ publicRouter.get('/settings', async (_req, res) => {
   res.json({
     ...s,
     wallet: { apple: env.apple.enabled, google: env.google.enabled },
+    turnstile: { enabled: env.turnstile.enabled, siteKey: env.turnstile.siteKey },
     telegramBot: env.telegram.username,
     printMode: env.zebra.mode,
     webUrl: env.webUrl,
@@ -108,13 +110,18 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   const { legalName, fursonaName, email, answers, acceptedTos, tier, voucherCode } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
-    return res.status(400).json({ error: 'Enter your full legal name.' });
+    return res.status(400).json({ error: 'Enter your preferred name.' });
 
   let user = req.user;
   let guest = false;
   if (!user) {
     if (!email || !/^\S+@\S+\.\S+$/.test(email))
       return res.status(400).json({ error: 'Enter an email address so you can get back into your account later.' });
+    // Only the guest path is challenged — a signed-in session already went
+    // through Telegram or an emailed code, which a scripted signup can't
+    // fake at scale the way a bare name+email POST can.
+    if (!(await verifyTurnstile(req.body.turnstileToken, req.ip)))
+      return res.status(400).json({ error: 'Please complete the verification challenge and try again.' });
     const normalized = String(email).trim().toLowerCase();
     const existing = await prisma.user.findUnique({ where: { emailIndex: blindIndex(normalized) } });
     if (existing) return res.status(409).json({ error: 'An account already exists with that email. Sign in first.' });

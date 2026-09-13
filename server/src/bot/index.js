@@ -529,11 +529,11 @@ export function createBot() {
 
     switch (session.state) {
       case S.LEGAL_NAME: {
-        if (text.length < 2) return ctx.reply('Please send your full legal name.');
+        if (text.length < 2) return ctx.reply('Please send your preferred name.');
         draft.legalName = text;
         if (!settings.askFursonaName) { draft.fursonaName = ''; return askEmail(); }
         await save(telegramId, S.FURSONA_NAME, draft);
-        return ctx.reply(`${settings.fursonaNameLabel}? This is the big name on your badge. Send /skip to use your legal name.`);
+        return ctx.reply(`${settings.fursonaNameLabel}? This is the big name on your badge. Send /skip to use your preferred name.`);
       }
       case S.FURSONA_NAME: {
         draft.fursonaName = text;
