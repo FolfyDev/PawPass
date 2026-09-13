@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
-import TelegramLogin from '../components/TelegramLogin.jsx';
 import { Field } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 
@@ -23,8 +22,7 @@ export default function Login() {
   useEffect(() => {
     if (!config) return;
     setTab(
-      config.telegram?.widgetUsable ? 'widget'
-      : config.telegram?.enabled ? 'code'
+      config.telegram?.enabled ? 'code'
       : config.emailCodeEnabled ? 'email'
       : config.devAuth ? 'dev'
       : null,
@@ -55,7 +53,6 @@ export default function Login() {
       )}
 
       <div className="row" style={{ marginBottom: 14 }}>
-        {config?.telegram?.widgetUsable && <button className={`btn sm ${tab === 'widget' ? 'primary' : ''}`} onClick={() => setTab('widget')}>Telegram button</button>}
         {config?.telegram?.enabled && <button className={`btn sm ${tab === 'code' ? 'primary' : ''}`} onClick={() => setTab('code')}>Code from the bot</button>}
         {config?.emailCodeEnabled && <button className={`btn sm ${tab === 'email' ? 'primary' : ''}`} onClick={() => setTab('email')}>Email code</button>}
         {config?.devAuth && <button className={`btn sm ${tab === 'dev' ? 'primary' : ''}`} onClick={() => setTab('dev')}>Dev</button>}
@@ -65,13 +62,6 @@ export default function Login() {
         <p className="note bad">
           No sign-in method is configured on this instance. Set a Telegram bot token, SMTP credentials, or ask an organizer for access.
         </p>
-      )}
-
-      {tab === 'widget' && (
-        <div className="card stack">
-          <p className="muted small">Attendee accounts are Telegram accounts. Nothing to remember, and your ticket shows up in chat.</p>
-          <TelegramLogin botUsername={bot} onDone={done} />
-        </div>
       )}
 
       {tab === 'code' && (
