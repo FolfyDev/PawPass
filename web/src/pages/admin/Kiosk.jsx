@@ -8,10 +8,7 @@ import { printBadge } from '../../lib/print.js';
 
 const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', paymentMethod: '', paymentAmount: '', paymentNote: '', tosAccepted: false };
 
-/// Onsite registration desk: staff type in a walk-in's info, optionally note
-/// how a donation was paid, then the screen resets for the next person.
-/// Unlike the public form or the bot, there is no Telegram linking here —
-/// this is for brand-new walk-ins, not looking up people who preregistered.
+
 export default function Kiosk() {
   const { id } = useParams();
   const { settings } = useSession();

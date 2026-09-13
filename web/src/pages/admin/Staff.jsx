@@ -3,8 +3,7 @@ import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Pill } from '../../components/Bits.jsx';
 
-/// Admin access is grant-only: someone signs in with Telegram first, then an
-/// owner finds them here and elevates them.
+
 export default function Staff() {
   const { user } = useSession();
   const [staff, setStaff] = useState([]);

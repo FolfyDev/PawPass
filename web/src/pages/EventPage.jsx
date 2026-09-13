@@ -90,9 +90,6 @@ export default function EventPage() {
         window.open(event.donationPaypalLink, '_blank', 'noopener');
       }
       if (wasGuest) {
-        // The server just created an account and signed it in — pick that
-        // session up, then point out the email code is how they get back
-        // in, since a guest has no password to fall back on otherwise.
         await refresh();
         nav('/account?justRegistered=1');
       } else {

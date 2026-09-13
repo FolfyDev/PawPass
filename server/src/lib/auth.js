@@ -138,9 +138,7 @@ export const requireAdmin = (req, res, next) =>
 export const requireOwner = (req, res, next) =>
   req.user?.role === 'OWNER' ? next() : res.status(403).json({ error: 'Owner access only.' });
 
-/// The dev bypass is gated on the deployment obviously being local: the flag
-/// must be on, the public URL must be plain HTTP, and it must point at a
-/// loopback address. Flipping DEV_AUTH on a real host does nothing.
+
 export function localDevAuthAvailable() {
   if (!env.devAuth) return false;
   try {

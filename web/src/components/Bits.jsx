@@ -31,8 +31,6 @@ export const fmtDate = (d, tz) =>
     hour: 'numeric', minute: '2-digit', timeZone: tz || undefined,
   });
 
-/// Telegram photo if we have one (only ever comes through the web Login
-/// Widget — see server/src/routes/auth.js), otherwise a plain initial.
 export function Avatar({ src, name, size = 28 }) {
   const style = { width: size, height: size, borderRadius: '50%' };
   if (src) return <img src={src} alt="" width={size} height={size} style={{ ...style, objectFit: 'cover' }} />;

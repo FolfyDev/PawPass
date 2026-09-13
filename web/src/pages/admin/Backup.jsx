@@ -22,7 +22,7 @@ export default function Backup() {
       setResult(r);
       setMsg('Restore complete.');
       setFile(null); setConfirmText('');
-      await refresh(); // the signed-in account may have changed or gone away
+      await refresh();
     } catch (e) {
       setMsg(e.message);
     } finally { setBusy(false); }
@@ -33,8 +33,8 @@ export default function Backup() {
       <p className="eyebrow">Instance</p>
       <h1>Backup &amp; restore</h1>
       <p className="muted">
-        Everything this app manages — events, registrations, merch, sales, donations, vouchers, badge templates,
-        settings, and uploaded files (logos, cached Telegram photos) — as one file. Owner-only, since restoring
+        Everything this app manages events, registrations, merch, sales, donations, vouchers, badge templates,
+        settings, and uploaded files (logos, cached Telegram photos) as one file. Owner-only, since restoring
         replaces all of it.
       </p>
 
@@ -47,7 +47,7 @@ export default function Backup() {
       <div className="card stack">
         <h2 style={{ margin: 0 }}>Restore from a backup</h2>
         <p className="note bad" style={{ margin: 0 }}>
-          This replaces ALL current data — every registration, sale, donation, and event — with the contents of the
+          This replaces ALL current data, every registration, sale, donation, and event with the contents of the
           file you upload. Anything created since that backup was taken is gone. This cannot be undone. If the
           backup is from a different instance, your own account may not exist in it, and you could be signed out
           once it's done.
