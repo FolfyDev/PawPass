@@ -2,12 +2,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-/// `dotenv/config` loads `.env` from process.cwd(), but the README's local-dev
-/// flow runs this from inside server/ (`cd server && npm run dev`), where
-/// there is no .env — the real one lives at the repo root. Resolve it
-/// relative to this file instead of trusting the cwd. In Docker, env vars are
-/// already injected via compose's `env_file`, so this is a harmless no-op
-/// there (dotenv never overrides an already-set process.env value).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
@@ -19,13 +13,8 @@ export const env = {
   webUrl: process.env.WEB_URL || 'http://localhost:8080',
   jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-me',
   encryptionKey: process.env.ENCRYPTION_KEY || 'insecure-dev-encryption-key-change-me',
-  /// Local-only sign-in bypass. Refuses to engage unless the instance is
-  /// plainly a development one — see requireLocalDev in lib/auth.js.
   devAuth: bool(process.env.DEV_AUTH),
   loginCodeTtlMinutes: Number(process.env.LOGIN_CODE_TTL_MINUTES || 10),
-  /// IANA zone new events start with (e.g. "America/New_York"). The server
-  /// itself always runs in UTC — this only seeds the per-event `timezone`
-  /// field, which is what actually drives date/time interpretation.
   defaultTimezone: process.env.DEFAULT_TIMEZONE || 'America/New_York',
   legal: {
     entityName: process.env.LEGAL_ENTITY_NAME || '',
@@ -54,11 +43,7 @@ export const env = {
     host: process.env.ZEBRA_HOST || '',
     port: Number(process.env.ZEBRA_PORT || 9100),
     dpi: Number(process.env.ZEBRA_DPI || 300),
-    /// 'network' pushes raw ZPL straight to host:port (requires the printer
-    /// reachable from wherever this server runs). 'browser' is for a
-    /// USB-attached printer on a different machine than the server — the
-    /// frontend opens the badge image and uses the OS print dialog instead.
-    mode: process.env.ZEBRA_PRINT_MODE === 'browser' ? 'browser' : 'network',
+      mode: process.env.ZEBRA_PRINT_MODE === 'browser' ? 'browser' : 'network',
   },
   apple: {
     passTypeId: process.env.APPLE_PASS_TYPE_ID || '',
@@ -78,10 +63,7 @@ export const env = {
       return Boolean(this.issuerId && this.serviceAccount);
     },
   },
-  /// Guards the guest (no-Telegram) web registration form against scripted
-  /// signups — see lib/turnstile.js. Optional: unset, registration works
-  /// exactly as before with no challenge.
-  turnstile: {
+    turnstile: {
     siteKey: process.env.TURNSTILE_SITE_KEY || '',
     secretKey: process.env.TURNSTILE_SECRET_KEY || '',
     get enabled() {

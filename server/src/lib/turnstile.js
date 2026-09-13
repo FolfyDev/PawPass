@@ -1,9 +1,5 @@
 import { env } from './env.js';
 
-/// Verifies a Cloudflare Turnstile token against its siteverify endpoint.
-/// Only meaningful when TURNSTILE_SITE_KEY/SECRET_KEY are both set — an
-/// instance that hasn't configured it gets no challenge at all, same as
-/// SMTP/Telegram being optional elsewhere in this app.
 export async function verifyTurnstile(token, remoteIp) {
   if (!env.turnstile.enabled) return true;
   if (!token) return false;

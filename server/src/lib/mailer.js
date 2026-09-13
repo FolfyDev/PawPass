@@ -33,10 +33,6 @@ export async function sendOtpEmail(email, code) {
   });
 }
 
-/// Sent right after a registration is created (web, bot, or admin walk-up —
-/// see the three call sites in registrations.js's callers). Fire-and-forget
-/// from the caller's side, same as sendOtpEmail: a missing/broken SMTP setup
-/// should never fail the registration itself.
 export async function sendRegistrationConfirmation(reg, event, settings) {
   if (!reg.email) return;
   const tx = getTransport();

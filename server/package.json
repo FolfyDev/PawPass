@@ -1,6 +1,7 @@
 {
   "name": "pawpass-server",
-  "version": "0.1.0",
+  "description": "Simple Mobile Identity and Ticketing Management for Events",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "license": "MIT",
