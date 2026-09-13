@@ -11,10 +11,7 @@ COPY prisma ./prisma
 RUN npx prisma generate
 COPY src ./src
 COPY docker-entrypoint.sh ./
-# /app/uploads is the only path the app writes to at runtime (also the mount
-# point for the `uploads` named volume in docker-compose.yml) — everything
-# else the image ships with is read-only to the app. node:22's image already
-# has a low-privilege `node` user.
+
 RUN mkdir -p /app/uploads && chown -R node:node /app/uploads
 
 USER node

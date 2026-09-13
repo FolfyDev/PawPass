@@ -1,8 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { api } from '../lib/api.js';
 
-/// Mounts Telegram's Login Widget. The callback hash is verified server-side,
-/// so the button is the whole sign-in flow for attendees.
 export default function TelegramLogin({ botUsername, onDone, mode = 'login', label = 'Log in with Telegram' }) {
   const host = useRef(null);
 
