@@ -31,10 +31,7 @@ if (env.encryptionKey === 'insecure-dev-encryption-key-change-me' && !isLocalDev
   console.error('Refusing to start: ENCRYPTION_KEY is still the default. Set a long random value in .env before deploying.');
   process.exit(1);
 }
-// Both JWT_SECRET and ENCRYPTION_KEY are used as raw key material (the latter
-// via HKDF — see lib/crypto.js), so a short/guessable value is brute-forceable
-// regardless of whether it happens to differ from the literal placeholder
-// default above.
+
 const MIN_SECRET_LENGTH = 32;
 if (env.jwtSecret.length < MIN_SECRET_LENGTH && !isLocalDev()) {
   console.error(`Refusing to start: JWT_SECRET is too short (${env.jwtSecret.length} chars) — use at least ${MIN_SECRET_LENGTH} random characters.`);
@@ -51,24 +48,17 @@ if ((env.owner.password || 'change-me-now') === 'change-me-now' && !isLocalDev()
 export const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({
-  // script-src has no 'unsafe-inline'/'unsafe-eval' — the app's one inline
-  // script (theme init) now lives at web/public/theme-init.js so it doesn't
-  // need an allowance, and this also means an injected onload=/onerror=
-  // attribute (e.g. via the badge designer's dangerouslySetInnerHTML SVG
-  // preview) can't execute even if malicious markup got in. style-src still
-  // needs 'unsafe-inline' — the app uses inline style={{}} throughout.
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", 'https://telegram.org'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-      // Loose on purpose: the Telegram Login Widget flow stores a user's
-      // photo_url straight from Telegram's own CDN (unlike the bot flow,
-      // which re-hosts avatars), so a fixed allowlist would need to track
-      // whatever hosts Telegram uses for that.
+
       imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: ["'self'"],
+
+      frameSrc: ['https://oauth.telegram.org'],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
