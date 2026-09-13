@@ -9,6 +9,8 @@ export const DEFAULT_SETTINGS = {
   accentColor: '#FF5B04',
   inkColor: '#0E1116',
   logoUrl: '',
+  useLightBanner: false,
+  logoUrlLight: '',
   askFursonaName: true,
   fursonaNameLabel: 'Fursona name',
   legalNameLabel: 'Preferred name',

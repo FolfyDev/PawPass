@@ -44,6 +44,18 @@ export default function Settings() {
     } catch (err) { setMsg(err.message); }
   };
 
+  const uploadBannerLight = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { url } = await api.upload('/api/admin/upload', file);
+      await api.put('/api/admin/settings', { logoUrlLight: url });
+      await refresh();
+      setS((cur) => ({ ...cur, logoUrlLight: url }));
+      setMsg('Light mode banner uploaded.'); setTimeout(() => setMsg(''), 2000);
+    } catch (err) { setMsg(err.message); }
+  };
+
   const downloadSettings = () => {
     const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -97,6 +109,16 @@ export default function Settings() {
           <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBanner} />
           {s.logoUrl && <img src={s.logoUrl} alt="Banner preview" style={{ height: 32, marginTop: 10, display: 'block' }} />}
         </Field>
+        <label className="row small">
+          <input type="checkbox" checked={!!s.useLightBanner} onChange={(e) => setS({ ...s, useLightBanner: e.target.checked })} />
+          Use a different banner when a visitor's site is in light mode
+        </label>
+        {s.useLightBanner && (
+          <Field label="Light mode banner" help="Shown instead of the banner above only while the viewer has light mode on — switching back to dark shows the original">
+            <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBannerLight} />
+            {s.logoUrlLight && <img src={s.logoUrlLight} alt="Light mode banner preview" style={{ height: 32, marginTop: 10, display: 'block', background: '#fff', padding: 4 }} />}
+          </Field>
+        )}
         {TEXT_FIELDS.map(([k, label]) => (
           <Field key={k} label={label}>
             {k === 'welcomeMessage' || k === 'botWelcome'

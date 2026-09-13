@@ -7,7 +7,7 @@ import { Field } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 
 export default function Account() {
-  const { user, config, isStaff, refresh } = useSession();
+  const { user, config, settings, isStaff, refresh } = useSession();
   usePageMeta({ title: 'Account', noindex: true });
   const [params] = useSearchParams();
   const [pw, setPw] = useState({ email: user.email || '', password: '' });
@@ -17,6 +17,20 @@ export default function Account() {
   const [linkCode, setLinkCode] = useState('');
   const [linkMsg, setLinkMsg] = useState('');
   const [linkMsgOk, setLinkMsgOk] = useState(true);
+  const [fursonaName, setFursonaName] = useState(user.fursonaName || '');
+  const [fnMsg, setFnMsg] = useState('');
+  const [fnMsgOk, setFnMsgOk] = useState(true);
+
+  const saveFursonaName = async (e) => {
+    e.preventDefault();
+    setFnMsg('');
+    try {
+      await api.post('/api/auth/fursona-name', { fursonaName });
+      await refresh();
+      setFnMsg('Badge name updated.');
+      setFnMsgOk(true);
+    } catch (err) { setFnMsg(err.message); setFnMsgOk(false); }
+  };
 
   const linkWithCode = async (e) => {
     e.preventDefault();
@@ -48,7 +62,6 @@ export default function Account() {
       <h1>{user.displayName}</h1>
 
       <div className="card stack" style={{ marginBottom: 20 }}>
-        <div className="spread"><span className="eyebrow">Role</span><span>{user.role}</span></div>
         <div className="spread"><span className="eyebrow">Telegram</span>
           <span>{user.telegramUsername ? `@${user.telegramUsername}` : user.telegramId || 'Not linked'}</span></div>
         {!user.telegramId && (
@@ -78,6 +91,18 @@ export default function Account() {
           You're registered! Your email works to sign back in any time — we'll send a one-time code, no password needed.
           {!user.telegramId && ' You can also link Telegram above for one-tap sign-in.'}
         </p>
+      )}
+
+      {settings?.askFursonaName !== false && (
+        <form className="card stack" style={{ marginBottom: 20 }} onSubmit={saveFursonaName}>
+          <h2 style={{ margin: 0 }}>Badge name</h2>
+          <p className="small muted">Updates any event you're currently registered for, not just future ones.</p>
+          <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="The big name on your badge">
+            <input value={fursonaName} onChange={(e) => setFursonaName(e.target.value)} />
+          </Field>
+          {fnMsg && <p className={`note ${fnMsgOk ? 'good' : 'bad'}`}>{fnMsg}</p>}
+          <button className="btn primary">Save badge name</button>
+        </form>
       )}
 
       {isStaff ? (

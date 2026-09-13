@@ -1,23 +1,10 @@
 import { api } from './api.js';
 
-/// Every popup window below is built with document.write() string
-/// concatenation, and some of what gets concatenated in (a scanned QR/Aztec
-/// payload, a typed badge code) is attacker-influenced — a malicious code
-/// handed to a staff member at check-in could otherwise break out of the
-/// `<title>` text or an `<img src="...">` attribute and inject script into
-/// the admin's own session. Escaping quotes too (not just &/</>) makes this
-/// safe in both contexts.
 const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-/// Opens the badge image in a new tab and fires the browser's own print
-/// dialog — for a printer that's USB-attached to whichever computer staff
-/// are actually using, not reachable on the network from the server. The
-/// physical label size comes from the OS printer's own default media/page
-/// setup (a one-time thing to configure in Windows), not from this page —
-/// there's no TCP handshake here to control that, unlike the raw-ZPL path.
-function openPrintWindow(tail) {
+  function openPrintWindow(tail) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
     if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
@@ -31,18 +18,6 @@ function openPrintWindow(tail) {
     img.onerror = () => reject(new Error('Could not load the badge image to print.'));
   });
 }
-
-/// `value` is whatever identifies the ticket — a clean badge code (Attendees,
-/// Kiosk), a raw scanned QR payload (a `.../t/<secret>` URL, not a code), or
-/// a scanned Aztec badge payload (`CODE|TIER|NAME` — see `{{badge_payload}}`
-/// in render.js, only the leading code matters here). Stripping to the first
-/// "|" then the trailing path segment leaves a code or secret either way,
-/// and the server resolves either — a plain code with neither passes through
-/// unchanged.
-///
-/// `mode` is the instance's printMode setting (from useSession()'s settings,
-/// sourced from ZEBRA_PRINT_MODE server-side). 'network' keeps the existing
-/// raw-ZPL-over-TCP path; 'browser' is the USB/driver path above.
 export async function printBadge(value, mode) {
   const tail = String(value).trim().split('|')[0].trim().split('/').pop();
   if (mode === 'browser') {
@@ -52,9 +27,6 @@ export async function printBadge(value, mode) {
   return api.post('/api/badges/print', { value });
 }
 
-/// Same idea as openPrintWindow, but stacks every selected badge into one
-/// window and fires a single print job — one OS print dialog for the whole
-/// batch instead of one popup per attendee.
 function openPrintWindowMulti(tails) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
@@ -80,10 +52,6 @@ ${imgs}`);
   });
 }
 
-/// Mass-print: `codes` is a list of badge codes selected in the attendee
-/// portal. 'network' hands the whole list to /print-batch as one job;
-/// 'browser' opens one combined print window (see above) and then records
-/// each badge as printed, same as the single-badge browser path.
 export async function printBadges(codes, mode) {
   const tails = codes.map((v) => String(v).trim().split('/').pop());
   if (mode === 'browser') {
@@ -93,9 +61,6 @@ export async function printBadges(codes, mode) {
   return api.post('/api/badges/print-batch', { codes: tails });
 }
 
-/// Opens a printable 8.5×11 reference sheet of every attendee's info in a new
-/// tab and fires the print dialog — the same popup-and-print pattern as
-/// badge printing, just a plain HTML table instead of a rendered image.
 export function printAttendeeList(rows, eventTitle) {
   const win = window.open('', '_blank', 'width=900,height=700');
   if (!win) throw new Error('Your browser blocked the print window — allow pop-ups for this site.');

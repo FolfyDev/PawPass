@@ -32,13 +32,17 @@ export default function App() {
   const { theme, toggleTheme } = useTheme();
   if (loading) return null;
 
+    const banner = theme === 'light' && settings?.useLightBanner && settings?.logoUrlLight
+    ? settings.logoUrlLight
+    : settings?.logoUrl;
+
   return (
     <>
       <nav className="nav">
         <div className="nav-inner">
           <Link to="/" className="brand">
-            {settings?.logoUrl
-              ? <img src={settings.logoUrl} alt={settings?.orgName || 'Home'} className="brand-banner" />
+            {banner
+              ? <img src={banner} alt={settings?.orgName || 'Home'} className="brand-banner" />
               : <><span className="brand-mark" />{settings?.orgName || 'PawPass'}</>}
           </Link>
           <NavLink to="/" className="link" end>Events</NavLink>
