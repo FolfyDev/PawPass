@@ -51,14 +51,18 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", 'https://telegram.org'],
+      // challenges.cloudflare.com is Turnstile's widget script + assets
+      // (only matters if TURNSTILE_SITE_KEY is set — the widget is never
+      // loaded otherwise, but the allowance has to exist in the policy either way).
+      scriptSrc: ["'self'", 'https://telegram.org', 'https://challenges.cloudflare.com'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
 
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", 'https://challenges.cloudflare.com'],
 
-      frameSrc: ['https://oauth.telegram.org'],
+      // oauth.telegram.org is the Login Widget's button iframe; challenges.cloudflare.com is Turnstile's.
+      frameSrc: ['https://oauth.telegram.org', 'https://challenges.cloudflare.com'],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],

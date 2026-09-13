@@ -27,7 +27,7 @@ export default function Privacy() {
           <h2>1. Information we collect</h2>
           <ul>
             <li><strong>Telegram sign-in:</strong> your Telegram ID, username, display name, and profile photo, if you sign in or register through Telegram.</li>
-            <li><strong>Registration details:</strong> your legal name, fursona/badge name, email address, and answers to any custom event questions.</li>
+            <li><strong>Registration details:</strong> your preferred name, fursona/badge name, email address, and answers to any custom event questions.</li>
             <li><strong>Ticket &amp; check-in data:</strong> your registration status, RSVP, QR code, check-in time, and badge print history.</li>
             <li><strong>Payment records:</strong> for donation/paid tiers, the payment method and amount as recorded by staff or returned by PayPal we do not collect or store card numbers.</li>
             <li><strong>Account credentials:</strong> a hashed password, if you set one for email sign-in.</li>

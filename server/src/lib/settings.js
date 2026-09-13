@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS = {
   logoUrl: '',
   askFursonaName: true,
   fursonaNameLabel: 'Fursona name',
-  legalNameLabel: 'Full legal name',
+  legalNameLabel: 'Preferred name',
   legalNameHelp: 'Must match the photo ID you bring to check-in.',
   ticketFooter: 'Show this code at the door.',
   welcomeMessage: 'Welcome! Pick an event below to register.',

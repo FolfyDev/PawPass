@@ -38,7 +38,7 @@ export default function Terms() {
           <h2>2. Accounts and accuracy</h2>
           <p>
             You may sign in with a Telegram account or with an email and password. You are responsible for keeping
-            your credentials secure. The legal name you provide at registration must match the photo ID you bring
+            your credentials secure. The preferred name you provide at registration must match the photo ID you bring
             to check-in  providing false identity information may result in your registration being cancelled at
             the door.
           </p>

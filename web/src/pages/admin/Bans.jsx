@@ -48,7 +48,7 @@ export default function Bans() {
         <div className="card stack" style={{ marginBottom: 24 }}>
           <h2 style={{ margin: 0 }}>Add a ban</h2>
           <div className="grid-2">
-            <Field label="Legal name"><input value={draft.legalName} onChange={(e) => setDraft({ ...draft, legalName: e.target.value })} /></Field>
+            <Field label="Preferred name"><input value={draft.legalName} onChange={(e) => setDraft({ ...draft, legalName: e.target.value })} /></Field>
             <Field label="Email"><input type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} /></Field>
             <Field label="Telegram ID"><input value={draft.telegramId} onChange={(e) => setDraft({ ...draft, telegramId: e.target.value })} /></Field>
             <Field label="Telegram username" help="With or without the @"><input value={draft.telegramUsername} onChange={(e) => setDraft({ ...draft, telegramUsername: e.target.value })} /></Field>
@@ -65,7 +65,7 @@ export default function Bans() {
       {bans.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'auto', marginBottom: 32 }}>
           <table>
-            <thead><tr><th>Legal name</th><th>Email</th><th>Telegram</th><th>Reason</th><th>Added</th>{isOwner && <th />}</tr></thead>
+            <thead><tr><th>Preferred name</th><th>Email</th><th>Telegram</th><th>Reason</th><th>Added</th>{isOwner && <th />}</tr></thead>
             <tbody>
               {bans.map((b) => (
                 <tr key={b.id}>

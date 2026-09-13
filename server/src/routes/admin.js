@@ -156,6 +156,24 @@ adminRouter.patch('/registrations/:code', async (req, res) => {
   res.json(shapeReg(reg));
 });
 
+/// Manual re-send for "I never got the confirmation email" — awaited rather
+/// than fire-and-forget like the automatic send at registration time, since
+/// here an admin is directly waiting on the result and needs to know if it
+/// actually went out (e.g. SMTP not configured on this instance).
+adminRouter.post('/registrations/:code/resend-email', async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
+  if (!reg) return res.status(404).json({ error: 'Registration not found.' });
+  if (!reg.email) return res.status(400).json({ error: 'This registration has no email on file.' });
+  try {
+    const settings = await getSettings();
+    await sendRegistrationConfirmation(reg, reg.event, settings);
+    await audit(req.user.id, 'registration.resend_email', reg.id, { email: reg.email });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 /// Narrow, purpose-built search for the "link/combine" tools below — deliberately
 /// not the fuller GET /users (owner-only, since that exposes the whole staff
 /// roster) since this only needs to find an existing Telegram-linked account by
@@ -636,7 +654,7 @@ adminRouter.post('/bans', requireOwner, async (req, res) => {
     reason: reason?.trim() || '',
   };
   if (!data.legalName && !data.email && !data.telegramId && !data.telegramUsername)
-    return res.status(400).json({ error: 'Enter at least a legal name, email, or Telegram ID/username to ban.' });
+    return res.status(400).json({ error: 'Enter at least a preferred name, email, or Telegram ID/username to ban.' });
   const ban = await prisma.ban.create({ data: { ...data, createdById: req.user.id } });
   await audit(req.user.id, 'ban.create', ban.id, data);
   res.json(ban);

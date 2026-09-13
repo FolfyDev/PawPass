@@ -6,6 +6,7 @@ import Modal from '../components/Modal.jsx';
 import { Field, fmtDate, StatusPill, Avatar, RsvpButtons, Pill } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
+import Turnstile from '../components/Turnstile.jsx';
 
 export default function EventPage() {
   const { slug } = useParams();
@@ -19,6 +20,7 @@ export default function EventPage() {
   const [guestMode, setGuestMode] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
   const [going, setGoing] = useState(null);
   const [merch, setMerch] = useState(null);
 
@@ -53,12 +55,15 @@ export default function EventPage() {
 
   const fields = event.customFields || [];
   const registered = event.registration && event.registration.status !== 'CANCELLED';
+  // Only the guest (no signed-in session) path is challenged — see the
+  // matching guard server-side in public.js's /register handler.
+  const captchaRequired = !user && settings?.turnstile?.enabled;
 
   // The submit button opens the terms; agreeing inside the sheet is what registers.
   const openTos = (e) => {
     e.preventDefault();
     setError('');
-    if (form.legalName.trim().length < 2) return setError('Enter your full legal name.');
+    if (form.legalName.trim().length < 2) return setError('Enter your preferred name.');
     if (!user && !/^\S+@\S+\.\S+$/.test(form.email)) return setError('Enter an email address so you can get back into your account later.');
     for (const f of fields) {
       const v = form.answers[f.key];
@@ -71,7 +76,7 @@ export default function EventPage() {
     const wasGuest = !user;
     setBusy(true);
     try {
-      const reg = await api.post(`/api/events/${slug}/register`, { ...form, acceptedTos: true });
+      const reg = await api.post(`/api/events/${slug}/register`, { ...form, acceptedTos: true, turnstileToken: captchaToken });
       setShowTos(false);
       // Gate on the server's actual result, not the pre-submit form state — a
       // voucher code can override a Donation pick to a free confirmed spot.
@@ -158,7 +163,7 @@ export default function EventPage() {
               {event.state.open && event.state.waitlist && <p className="note">{event.state.reason}</p>}
               {!event.state.open && <p className="note">Registration is normally closed ({event.state.reason}) — a valid voucher code will still get you in.</p>}
 
-              <Field label={settings?.legalNameLabel || 'Full legal name'} help={settings?.legalNameHelp}>
+              <Field label={settings?.legalNameLabel || 'Preferred name'} help={settings?.legalNameHelp}>
                 <input value={form.legalName} required autoComplete="name"
                   onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
               </Field>
@@ -280,12 +285,17 @@ export default function EventPage() {
           onClose={() => setShowTos(false)}
           footer={<>
             <button className="btn ghost" onClick={() => setShowTos(false)}>Back</button>
-            <button className="btn signal" disabled={busy} onClick={accept}>
+            <button className="btn signal" disabled={busy || (captchaRequired && !captchaToken)} onClick={accept}>
               {busy ? 'Registering…' : 'I accept — register me'}
             </button>
           </>}
         >
           <p className="tos">{event.tosBody || 'The organiser has not published terms for this event yet.'}</p>
+          {captchaRequired && (
+            <div style={{ marginTop: 14 }}>
+              <Turnstile siteKey={settings.turnstile.siteKey} onChange={setCaptchaToken} />
+            </div>
+          )}
         </Modal>
       )}
     </>
