@@ -4,8 +4,10 @@ import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { requireUser, issueToken, setSessionCookie } from '../lib/auth.js';
+import { requireUser, issueToken, setSessionCookie, audit } from '../lib/auth.js';
 import { createRegistration, RegistrationError, registrationWindowState, promoteFromWaitlist, findOrCreateHeadlessUser } from '../lib/registrations.js';
+import { findMatchingBan, normHandle } from '../lib/bans.js';
+import { ticketCode, ticketSecret } from '../lib/codes.js';
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
 import { notifyUser } from '../bot/index.js';
@@ -184,6 +186,74 @@ publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
       `Badge code: ${promoted.code}\n` +
       `Ticket and wallet pass: ${env.webUrl}/tickets`);
   }
+  res.json({ ok: true });
+});
+
+/// Hands a registration to someone else — resolved either by an existing
+/// Telegram username (they must have messaged the bot at least once; there's
+/// no other way to reach them) or by email (creates a bare headless account
+/// for them if none exists yet, same as a guest web registration would).
+/// There's no TRANSFERRED status in the schema, so this mutates the row in
+/// place rather than adding one: new owner, code/secret rotated so any
+/// already-printed badge for the old owner stops scanning, print/check-in
+/// history cleared since it belongs to a different person now. legalName/
+/// fursonaName are left as-is — the new owner can change them from their own
+/// Account page or this same ticket once they can see it.
+publicRouter.post('/my/tickets/:code/transfer', requireUser, async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
+  if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
+  if (reg.status === 'CANCELLED') return res.status(400).json({ error: 'This ticket is cancelled.' });
+  if (reg.checkedInAt) return res.status(400).json({ error: 'This ticket has already been checked in and can no longer be transferred.' });
+
+  const telegramUsername = req.body?.telegramUsername ? normHandle(req.body.telegramUsername) : '';
+  const emailInput = req.body?.email ? String(req.body.email).trim().toLowerCase() : '';
+  if (!telegramUsername && !emailInput) return res.status(400).json({ error: 'Enter a Telegram username or an email address.' });
+  if (emailInput && !/^\S+@\S+\.\S+$/.test(emailInput)) return res.status(400).json({ error: 'Enter a valid email address.' });
+
+  let target;
+  if (telegramUsername) {
+    target = await prisma.user.findFirst({ where: { telegramUsername: { equals: telegramUsername, mode: 'insensitive' } } });
+    if (!target) return res.status(404).json({ error: 'That Telegram username has not messaged the bot yet — ask them to send /start first.' });
+  } else {
+    target = await prisma.user.findUnique({ where: { emailIndex: blindIndex(emailInput) } });
+    if (!target) target = await prisma.user.create({ data: { displayName: emailInput, email: emailInput } });
+  }
+  if (target.id === req.user.id) return res.status(400).json({ error: "You can't transfer a ticket to yourself." });
+
+  // @@unique([eventId, userId]) means the recipient can't already hold a slot
+  // here — a live one is a hard stop, but a merely-cancelled leftover from a
+  // previous registration attempt is safe to clear out of the way.
+  const conflict = await prisma.registration.findUnique({ where: { eventId_userId: { eventId: reg.eventId, userId: target.id } } });
+  if (conflict) {
+    if (conflict.status !== 'CANCELLED') return res.status(409).json({ error: 'They are already registered for this event.' });
+    await prisma.registration.delete({ where: { id: conflict.id } });
+  }
+
+  const ban = await findMatchingBan({ email: emailInput, telegramId: target.telegramId, telegramUsername: target.telegramUsername });
+  if (ban) return res.status(403).json({ error: 'Registration is not available for this account. Contact the organizers if you think this is a mistake.' });
+
+  const updated = await prisma.registration.update({
+    where: { id: reg.id },
+    data: {
+      userId: target.id,
+      email: target.email ?? null,
+      code: ticketCode(),
+      secret: ticketSecret(),
+      checkedInAt: null,
+      badgePrintedAt: null,
+      printCount: 0,
+    },
+  });
+
+  await audit(req.user.id, 'registration.transfer', reg.id, { toUserId: target.id, telegramUsername: telegramUsername || undefined, email: emailInput || undefined });
+
+  if (target.telegramId) {
+    await notifyUser(target.telegramId,
+      `A ticket for ${reg.event.title} was transferred to you.\n\nBadge code: ${updated.code}\nTicket and wallet pass: ${env.webUrl}/tickets`);
+  } else if (target.email) {
+    getSettings().then((settings) => sendRegistrationConfirmation(updated, reg.event, settings)).catch((e) => console.error('transfer email failed', updated.code, e.message));
+  }
+
   res.json({ ok: true });
 });
 
