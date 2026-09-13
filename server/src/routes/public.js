@@ -10,6 +10,7 @@ import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
 import { notifyUser } from '../bot/index.js';
 import { blindIndex } from '../lib/crypto.js';
+import { sendRegistrationConfirmation } from '../lib/mailer.js';
 
 export const publicRouter = Router();
 
@@ -137,6 +138,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
       where: { id: user.id },
       data: { legalName: reg.legalName, fursonaName: reg.fursonaName, email: reg.email ?? undefined },
     });
+    getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
     if (guest) setSessionCookie(res, issueToken(user));
     res.json(shapeReg(reg));
   } catch (e) {

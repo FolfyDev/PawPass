@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, requireAdmin, localDevAuthAvailable, redeemLoginCode, redeemEmailCode, LoginCodeError } from '../lib/auth.js';
+import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, requireAdmin, localDevAuthAvailable, redeemLoginCode, redeemEmailCode, LoginCodeError, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { blindIndex } from '../lib/crypto.js';
 import { sendOtpEmail } from '../lib/mailer.js';
@@ -82,14 +82,35 @@ authRouter.get('/me', (req, res) => {
 /// and vice versa, so the two doors lead to one identity.
 authRouter.post('/link-telegram', requireUser, async (req, res) => {
   if (!verifyTelegramLogin(req.body)) return res.status(401).json({ error: 'That link could not be verified.' });
-  const taken = await prisma.user.findUnique({ where: { telegramId: String(req.body.id) } });
-  if (taken && taken.id !== req.user.id)
-    return res.status(409).json({ error: 'That Telegram account is already linked to another user.' });
-  const user = await prisma.user.update({
-    where: { id: req.user.id },
-    data: { telegramId: String(req.body.id), telegramUsername: req.body.username },
-  });
-  res.json({ user: publicUser(user) });
+  try {
+    const user = await linkTelegramIdentity(req.user, String(req.body.id), req.body.username);
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e instanceof TelegramLinkError) return res.status(409).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Same idea, but for someone who'd rather not load Telegram's widget
+/// script — they message the bot for a one-time code (the same one /login
+/// uses to sign in) and paste it here instead.
+authRouter.post('/link-telegram-code', requireUser, loginLimiter, async (req, res) => {
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  if (!code) return res.status(400).json({ error: 'Enter the code the bot sent you.' });
+
+  const row = await prisma.loginCode.findUnique({ where: { code } });
+  const ageMinutes = row ? (Date.now() - row.createdAt.getTime()) / 60000 : Infinity;
+  if (!row || row.usedAt || ageMinutes > env.loginCodeTtlMinutes)
+    return res.status(401).json({ error: 'That code is not valid any more. Send /login to the bot for a fresh one.' });
+  await prisma.loginCode.update({ where: { code }, data: { usedAt: new Date() } });
+
+  try {
+    const user = await linkTelegramIdentity(req.user, row.telegramId);
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    if (e instanceof TelegramLinkError) return res.status(409).json({ error: e.message });
+    throw e;
+  }
 });
 
 /// Staff only — end users sign in with an email code or Telegram, never a

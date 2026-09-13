@@ -58,6 +58,19 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
   if (existing && existing.status !== 'CANCELLED')
     throw new RegistrationError('You are already registered for this event.');
 
+  // Catches the case `existing` above can't: the same person registering
+  // under a *different* account than last time (e.g. web guest first, then
+  // Telegram) — findOrCreateHeadlessUser() only guards brand-new headless
+  // signups, so this is the one check that runs for every caller (web, bot,
+  // admin walk-up) regardless of how `user` was resolved.
+  if (email) {
+    const emailDup = await prisma.registration.findFirst({
+      where: { eventId: event.id, status: { not: 'CANCELLED' }, emailIndex: blindIndex(email), userId: { not: user.id } },
+    });
+    if (emailDup)
+      throw new RegistrationError(`${emailDup.legalName} already has a registration for this event using that email (code ${emailDup.code}). If this is you, ask an organizer to combine your accounts.`);
+  }
+
   // A valid voucher grants a free, guaranteed-confirmed spot regardless of
   // capacity/waitlist/registration window — organizers and other special
   // badge holders need to get in regardless of the public registration state.

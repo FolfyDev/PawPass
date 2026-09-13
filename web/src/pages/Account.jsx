@@ -14,6 +14,21 @@ export default function Account() {
   const [email, setEmail] = useState(user.email || '');
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
+  const [linkCode, setLinkCode] = useState('');
+  const [linkMsg, setLinkMsg] = useState('');
+  const [linkMsgOk, setLinkMsgOk] = useState(true);
+
+  const linkWithCode = async (e) => {
+    e.preventDefault();
+    setLinkMsg('');
+    try {
+      await api.post('/api/auth/link-telegram-code', { code: linkCode });
+      await refresh();
+      setLinkCode('');
+      setLinkMsg('Telegram linked.');
+      setLinkMsgOk(true);
+    } catch (err) { setLinkMsg(err.message); setLinkMsgOk(false); }
+  };
 
   const savePassword = async (e) => {
     e.preventDefault();
@@ -40,6 +55,20 @@ export default function Account() {
           <>
             <p className="small muted">Link Telegram so you can sign in either way.</p>
             <TelegramLogin mode="link" botUsername={config?.telegram?.botUsername} onDone={refresh} label="Link this Telegram account" />
+            {config?.telegram?.enabled && (
+              <form className="stack" style={{ marginTop: 10 }} onSubmit={linkWithCode}>
+                <p className="small muted" style={{ margin: 0 }}>
+                  Or message {config.telegram.botUsername ? <a href={`https://t.me/${config.telegram.botUsername}`}>@{config.telegram.botUsername}</a> : 'the bot'} and
+                  send <code className="mono">/login</code>, then paste the code here:
+                </p>
+                <div className="row">
+                  <input className="mono" placeholder="XXXX-XXXX" value={linkCode}
+                    onChange={(e) => setLinkCode(e.target.value.toUpperCase())} style={{ maxWidth: 160, letterSpacing: '.12em' }} />
+                  <button className="btn sm">Link</button>
+                </div>
+                {linkMsg && <p className={`note ${linkMsgOk ? 'good' : 'bad'}`} style={{ margin: 0 }}>{linkMsg}</p>}
+              </form>
+            )}
           </>
         )}
       </div>
