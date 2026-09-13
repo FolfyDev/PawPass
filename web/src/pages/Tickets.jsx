@@ -175,7 +175,7 @@ export default function Tickets() {
               {transferOpen && !transferConfirm && (
                 <>
                   <p className="small muted" style={{ margin: 0 }}>
-                    Give this spot to someone else. They'll need to sign in with the Telegram account or email you provid.
+                    Give this spot to someone else. They'll need to sign in with the Telegram account or email you provided.
                     For Telegram, they need to have messaged the bot at least once already.
                   </p>
                   <div className="segmented">
