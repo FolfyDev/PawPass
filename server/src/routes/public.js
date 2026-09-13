@@ -91,9 +91,7 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
   })));
 });
 
-/// Read-only availability for signed-in attendees — same bar as /rsvps above
-/// (anyone who can sign in already clears it). Sales are always recorded by
-/// staff in person; there is no self-checkout here.
+
 publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
@@ -101,10 +99,7 @@ publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
   res.json(items.map((i) => ({ id: i.id, name: i.name, price: i.price, remaining: Math.max(i.maxCount - i.soldCount, 0) })));
 });
 
-/// No requireUser gate — someone with no Telegram and no account yet can
-/// still register. When there's no signed-in user, this creates one (like
-/// the admin walk-up flow already does) and signs them in immediately, same
-/// as any other login path, so there's no separate "log back in" step.
+
 publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
@@ -119,9 +114,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   if (!user) {
     if (!email || !/^\S+@\S+\.\S+$/.test(email))
       return res.status(400).json({ error: 'Enter an email address so you can get back into your account later.' });
-    // Only the guest path is challenged — a signed-in session already went
-    // through Telegram or an emailed code, which a scripted signup can't
-    // fake at scale the way a bare name+email POST can.
+
     if (!(await verifyTurnstile(req.body.turnstileToken, req.ip)))
       return res.status(400).json({ error: 'Please complete the verification challenge and try again.' });
     const normalized = String(email).trim().toLowerCase();
@@ -188,16 +181,7 @@ publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
   res.json({ ok: true });
 });
 
-/// Hands a registration to someone else — resolved either by an existing
-/// Telegram username (they must have messaged the bot at least once; there's
-/// no other way to reach them) or by email (creates a bare headless account
-/// for them if none exists yet, same as a guest web registration would).
-/// There's no TRANSFERRED status in the schema, so this mutates the row in
-/// place rather than adding one: new owner, code/secret rotated so any
-/// already-printed badge for the old owner stops scanning, print/check-in
-/// history cleared since it belongs to a different person now. legalName/
-/// fursonaName are left as-is — the new owner can change them from their own
-/// Account page or this same ticket once they can see it.
+
 publicRouter.post('/my/tickets/:code/transfer', requireUser, async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
   if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });

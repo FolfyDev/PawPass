@@ -12,8 +12,7 @@ const MODES = {
   both: { label: 'Check in and print', verb: 'Checked in and printed' },
 };
 
-/// One camera, three jobs. The badge desk usually sits on "check in and print":
-/// scan a phone, the ZD500 spits out the badge.
+
 export default function Scanner() {
   const { settings } = useSession();
   const [mode, setMode] = useState('both');
@@ -32,8 +31,8 @@ export default function Scanner() {
   useEffect(() => { api.get('/api/admin/events').then(setEvents); }, []);
   useEffect(() => () => { readerRef.current?.stop().catch(() => {}); }, []);
 
-  // Name search needs one event to search within — same per-event
-  // registrations endpoint Attendees.jsx uses.
+
+
   useEffect(() => {
     if (!eventId || !q.trim()) { setMatches([]); return; }
     const t = setTimeout(() => {
@@ -77,9 +76,6 @@ export default function Scanner() {
       await reader.start({ facingMode: 'environment' }, {
         fps: 10,
         qrbox: { width: 240, height: 240 },
-        // Badges print an Aztec code now (see STARTER_TEMPLATE in
-        // template.js); QR stays supported for wallet-pass barcodes and any
-        // badge printed from an older/custom template.
         formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.AZTEC],
       }, handle, () => {});
       setScanning(true);

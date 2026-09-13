@@ -23,8 +23,7 @@ authRouter.get('/config', (_req, res) => {
     telegram: {
       enabled: env.telegram.enabled,
       botUsername: env.telegram.username,
-      // The Login Widget needs an https domain registered with BotFather.
-      // Over plain http, or on localhost, the code flow is the way in.
+
       widgetUsable: env.telegram.enabled && env.publicUrl.startsWith('https'),
     },
     emailCodeEnabled: env.smtp.enabled,
@@ -32,8 +31,7 @@ authRouter.get('/config', (_req, res) => {
   });
 });
 
-/// Telegram Login Widget callback. Attendees use this exclusively; staff may
-/// use it too because their accounts are linked by Telegram ID.
+
 authRouter.post('/telegram', async (req, res) => {
   if (!env.telegram.enabled) return res.status(400).json({ error: 'Telegram sign-in is not configured.' });
   if (!verifyTelegramLogin(req.body)) return res.status(401).json({ error: 'That sign-in could not be verified. Try again.' });
@@ -51,10 +49,7 @@ authRouter.post('/telegram', async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-/// Email + password sign-in, for any account that has one set — staff and
-/// regular members alike. Members get a password by registering for an event
-/// as a guest (see public.js) or by adding one from the Account page; either
-/// way, an account with no passwordHash simply can't use this door.
+
 authRouter.post('/password', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   const user = await prisma.user.findUnique({ where: { emailIndex: blindIndex(email) } });
@@ -66,9 +61,7 @@ authRouter.post('/password', loginLimiter, async (req, res) => {
 });
 
 authRouter.post('/logout', async (req, res) => {
-  // Bumping tokenVersion invalidates this account's token everywhere, not
-  // just this browser — clearing the cookie alone wouldn't stop a copy of
-  // the token being reused elsewhere until it naturally expired.
+
   if (req.user) await prisma.user.update({ where: { id: req.user.id }, data: { tokenVersion: { increment: 1 } } });
   res.clearCookie(COOKIE);
   res.json({ ok: true });
@@ -78,8 +71,7 @@ authRouter.get('/me', (req, res) => {
   res.json({ user: req.user ? publicUser(req.user) : null });
 });
 
-/// Lets an admin who signed in with a password attach their Telegram account,
-/// and vice versa, so the two doors lead to one identity.
+
 authRouter.post('/link-telegram', requireUser, async (req, res) => {
   if (!verifyTelegramLogin(req.body)) return res.status(401).json({ error: 'That link could not be verified.' });
   try {
@@ -91,9 +83,6 @@ authRouter.post('/link-telegram', requireUser, async (req, res) => {
   }
 });
 
-/// Same idea, but for someone who'd rather not load Telegram's widget
-/// script — they message the bot for a one-time code (the same one /login
-/// uses to sign in) and paste it here instead.
 authRouter.post('/link-telegram-code', requireUser, loginLimiter, async (req, res) => {
   const code = String(req.body?.code || '').trim().toUpperCase();
   if (!code) return res.status(400).json({ error: 'Enter the code the bot sent you.' });
@@ -128,9 +117,7 @@ authRouter.post('/set-password', requireAdmin, async (req, res) => {
         tokenVersion: { increment: 1 },
       },
     });
-    // Re-issue so this browser's own session survives the bump above — only
-    // a token from *before* this change (e.g. on another device) is meant
-    // to stop working.
+
     setSessionCookie(res, issueToken(user));
     res.json({ user: publicUser(user) });
   } catch (e) {
@@ -139,9 +126,7 @@ authRouter.post('/set-password', requireAdmin, async (req, res) => {
   }
 });
 
-/// Any signed-in user can update the email their account uses for guest
-/// registration lookups and sign-in codes — this is the end-user equivalent
-/// of /set-password, minus the password.
+
 authRouter.post('/email', requireUser, async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
@@ -204,8 +189,7 @@ authRouter.post('/telegram-code', loginLimiter, async (req, res) => {
   }
 });
 
-/// Local development only. Creates or reuses a throwaway account so the whole
-/// app can be exercised with no bot, no domain, and no certificates.
+
 authRouter.post('/dev', async (req, res) => {
   if (!localDevAuthAvailable())
     return res.status(404).json({ error: 'Not available.' });

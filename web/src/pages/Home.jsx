@@ -42,7 +42,7 @@ export default function Home() {
             <div className="stub-tear" />
             <div className="stub-foot spread">
               <span className="small muted">
-                {e.capacity ? `${e.confirmed ?? 0} of ${e.capacity} spots taken` : `${e.confirmed ?? 0} registered`}
+                {e.confirmed ?? 0} registered
               </span>
               <span className="btn sm">Register</span>
             </div>

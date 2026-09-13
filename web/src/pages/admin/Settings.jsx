@@ -66,12 +66,10 @@ export default function Settings() {
 
   const uploadSettings = async (e) => {
     const file = e.target.files?.[0];
-    e.target.value = ''; // let the same file be picked again later
+    e.target.value = '';
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      // Only known keys make it in — an uploaded file with junk or unexpected
-      // fields shouldn't create garbage settings rows.
       const allowed = Object.keys(s);
       const clean = Object.fromEntries(Object.entries(parsed).filter(([k]) => allowed.includes(k)));
       setS((cur) => ({ ...cur, ...clean }));

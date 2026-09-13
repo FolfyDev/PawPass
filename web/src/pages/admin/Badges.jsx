@@ -12,9 +12,7 @@ const NEW_ELEMENT = {
   image:{ type: 'image', x: 2, y: 2, w: 14, h: 14, href: 'https://example.com/logo.png' },
 };
 
-/// Direct-manipulation badge designer. The canvas is a scaled millimetre grid;
-/// the server renders the same JSON to PNG and to ZPL, so what you drag here is
-/// what the ZD500 prints.
+
 export default function Badges() {
   const { user } = useSession();
   const [templates, setTemplates] = useState([]);
@@ -28,7 +26,6 @@ export default function Badges() {
   const canvas = useRef(null);
   const drag = useRef(null);
 
-  // Fit the die to a comfortable on-screen width whatever the stock.
   const SCALE = t ? Math.min(9, 420 / t.widthMm) : 7;
 
   const load = async () => {
