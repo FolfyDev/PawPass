@@ -74,6 +74,12 @@ app.use(cors({ origin: [env.webUrl], credentials: true }));
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(loadUser);
+// Every file under uploads/ is write-once, either a random nanoid filename
+// (admin logo/badge uploads — a re-upload gets a new name, never overwrites
+// the old one) or a per-user Telegram photo cached the first time it's seen
+// (bot/index.js's cacheTelegramPhoto only runs when the user has none yet).
+// So the browser can hold onto any of these indefinitely instead of asking
+// again on every "who's going" list it renders.
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads'), { maxAge: '30d' }));
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
