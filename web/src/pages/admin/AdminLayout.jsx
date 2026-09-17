@@ -22,6 +22,7 @@ export default function AdminLayout() {
         {isOwner && <NavLink to="/admin/staff">Staff</NavLink>}
         <NavLink to="/admin/bans">Bans</NavLink>
         {isOwner && <NavLink to="/admin/audit">Audit log</NavLink>}
+        {isOwner && <NavLink to="/admin/analytics">Analytics</NavLink>}
         {isOwner && <NavLink to="/admin/settings">Settings</NavLink>}
         {isOwner && <NavLink to="/admin/backup">Backup &amp; restore</NavLink>}
       </aside>

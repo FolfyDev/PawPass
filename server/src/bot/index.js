@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import QRCode from 'qrcode';
+import sharp from 'sharp';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
@@ -28,16 +29,25 @@ async function cacheTelegramPhoto(bot, telegramId, userId) {
   try {
     const photos = await bot.api.getUserProfilePhotos(Number(telegramId), { limit: 1 });
     if (!photos.total_count) return;
-    const fileId = photos.photos[0][0].file_id; // smallest size — plenty for an avatar
+    const fileId = photos.photos[0][0].file_id; // smallest size Telegram offers
     const file = await bot.api.getFile(fileId);
     const res = await fetch(`https://api.telegram.org/file/bot${env.telegram.token}/${file.file_path}`);
     if (!res.ok) return;
-    const buf = Buffer.from(await res.arrayBuffer());
+    const raw = Buffer.from(await res.arrayBuffer());
+    // Re-encoded to a small square WebP — this is rendered as a 28px avatar
+    // in lists that can run to hundreds of attendees, so it's not worth
+    // serving Telegram's own (still fairly large) smallest size as-is.
+    const buf = await sharp(raw).resize(96, 96, { fit: 'cover' }).webp({ quality: 82 }).toBuffer();
     const uploadsDir = path.join(process.cwd(), 'uploads');
     await fs.mkdir(uploadsDir, { recursive: true });
-    const filename = `tg-${telegramId}${path.extname(file.file_path) || '.jpg'}`;
+    const filename = `tg-${telegramId}.webp`;
     await fs.writeFile(path.join(uploadsDir, filename), buf);
-    await prisma.user.update({ where: { id: userId }, data: { telegramPhotoUrl: `${env.publicUrl}/uploads/${filename}` } });
+    // webUrl, not publicUrl — /uploads is proxied through the web origin
+    // (see web/nginx.conf), and browsers load this as an <img>, subject to
+    // the page's img-src CSP. Pointing it at publicUrl instead would make it
+    // cross-origin whenever the API and front end aren't the same domain
+    // (true of local dev by default), and CSP would block it.
+    await prisma.user.update({ where: { id: userId }, data: { telegramPhotoUrl: `${env.webUrl}/uploads/${filename}` } });
   } catch {
     // Profile photo can be private, missing, or briefly unreachable — never
     // worth failing a bot command over.
@@ -79,6 +89,25 @@ export async function notifyUser(telegramId, text) {
   } catch (e) {
     console.error('telegram notify failed', telegramId, e.message);
   }
+}
+
+/// Tells whoever `promoteFromWaitlist`/`cancelRegistration` just bumped to
+/// CONFIRMED, over every channel they actually have — Telegram and email
+/// aren't exclusive (a registration can have both), and the alternative is
+/// what this replaces: three call sites each hand-rolling the Telegram-only
+/// half of this and silently skipping anyone who signed up by email code.
+export async function notifyWaitlistPromotion(promoted) {
+  if (!promoted) return;
+  if (promoted.user.telegramId) {
+    await notifyUser(promoted.user.telegramId,
+      `Good news! A spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
+      `Badge code: ${promoted.code}\n` +
+      `Ticket: ${env.webUrl}/tickets`) +
+      `\n\nBring the QR from that page to check-in. Send /rsvp any time to update whether you're going.`;
+  }
+  const settings = await getSettings();
+  await sendRegistrationConfirmation(promoted, promoted.event, settings)
+    .catch((e) => console.error('waitlist promotion email failed', promoted.code, e.message));
 }
 
 export function createBot() {
@@ -402,12 +431,7 @@ export function createBot() {
     if (!reg || reg.userId !== user.id) return ctx.reply('That ticket is not yours.');
     if (reg.status === 'CANCELLED') return ctx.reply('That registration is already cancelled.');
     const promoted = await cancelRegistration(reg);
-    if (promoted?.user.telegramId) {
-      await notifyUser(promoted.user.telegramId,
-        `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
-        `Badge code: ${promoted.code}\n` +
-        `Ticket and wallet pass: ${env.webUrl}/tickets`);
-    }
+    await notifyWaitlistPromotion(promoted);
     await ctx.reply(`Cancelled your registration for ${reg.event.title}.`);
   });
 

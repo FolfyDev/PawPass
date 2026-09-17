@@ -78,7 +78,8 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?required}
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    profiles: [cloudflare]
     networks: [frontend]
     security_opt:
       - no-new-privileges:true

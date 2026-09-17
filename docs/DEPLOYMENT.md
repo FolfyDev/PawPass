@@ -68,14 +68,19 @@ reg.yourdomain.com {
 ```
 
 Either way, once traffic reaches `reg.yourdomain.com` over https, come back
-and register that exact hostname with BotFather:
+and register that exact hostname with BotFather — this only enables the blue
+in-Telegram "Log in with Telegram" button; the bot itself and the `/login`
+code flow both work without it.
 
 ```
 /setdomain  →  pick your bot  →  https://reg.yourdomain.com
 ```
 
-(Origin only — no path, no port, no `http://`. See the README's
-"When /setdomain does nothing" section if BotFather ignores it.)
+Send the origin only — no path, no port, no `http://`. It rejects
+`localhost`/IPs/http silently, and the domain must match exactly (registering
+`yourdomain.com` does not authorise `reg.yourdomain.com`). If BotFather
+doesn't respond at all, send `/cancel` first — you're probably mid-conversation
+in another command.
 
 ## 5. First boot
 

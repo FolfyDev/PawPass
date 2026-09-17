@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, NavLink, Link, Navigate } from 'react-router-dom';
 import { useSession } from './lib/session.jsx';
 import { useTheme } from './lib/theme.jsx';
@@ -10,22 +11,28 @@ import Account from './pages/Account.jsx';
 import Terms from './pages/Terms.jsx';
 import Privacy from './pages/Privacy.jsx';
 import NotFound from './pages/NotFound.jsx';
-import AdminLayout from './pages/admin/AdminLayout.jsx';
-import AdminEvents from './pages/admin/Events.jsx';
-import AdminEventEdit from './pages/admin/EventEdit.jsx';
-import AdminAttendees from './pages/admin/Attendees.jsx';
-import AdminKiosk from './pages/admin/Kiosk.jsx';
-import AdminMerch from './pages/admin/Merch.jsx';
-import AdminReconciliation from './pages/admin/Reconciliation.jsx';
-import AdminVouchers from './pages/admin/Vouchers.jsx';
-import AdminScanner from './pages/admin/Scanner.jsx';
-import AdminBadges from './pages/admin/Badges.jsx';
-import AdminEmail from './pages/admin/Email.jsx';
-import AdminStaff from './pages/admin/Staff.jsx';
-import AdminBans from './pages/admin/Bans.jsx';
-import AdminAuditLog from './pages/admin/AuditLog.jsx';
-import AdminSettings from './pages/admin/Settings.jsx';
-import AdminBackup from './pages/admin/Backup.jsx';
+
+// Lazy-loaded: the admin console (and the changelog, staff-only same as it)
+// is only ever reached by staff, so it has no business shipping in the
+// bundle every attendee downloads just to register.
+const Changelog = lazy(() => import('./pages/Changelog.jsx'));
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout.jsx'));
+const AdminEvents = lazy(() => import('./pages/admin/Events.jsx'));
+const AdminEventEdit = lazy(() => import('./pages/admin/EventEdit.jsx'));
+const AdminAttendees = lazy(() => import('./pages/admin/Attendees.jsx'));
+const AdminKiosk = lazy(() => import('./pages/admin/Kiosk.jsx'));
+const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
+const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
+const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
+const AdminScanner = lazy(() => import('./pages/admin/Scanner.jsx'));
+const AdminBadges = lazy(() => import('./pages/admin/Badges.jsx'));
+const AdminEmail = lazy(() => import('./pages/admin/Email.jsx'));
+const AdminStaff = lazy(() => import('./pages/admin/Staff.jsx'));
+const AdminBans = lazy(() => import('./pages/admin/Bans.jsx'));
+const AdminAuditLog = lazy(() => import('./pages/admin/AuditLog.jsx'));
+const AdminSettings = lazy(() => import('./pages/admin/Settings.jsx'));
+const AdminBackup = lazy(() => import('./pages/admin/Backup.jsx'));
+const AdminAnalytics = lazy(() => import('./pages/admin/Analytics.jsx'));
 
 export default function App() {
   const { user, settings, isStaff, logout, loading } = useSession();
@@ -62,35 +69,39 @@ export default function App() {
       </nav>
 
       <main className="shell">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/e/:slug" element={<EventPage />} />
-          <Route path="/tickets" element={user ? <Tickets /> : <Navigate to="/login" />} />
-          <Route path="/account" element={user ? <Account /> : <Navigate to="/login" />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/staff" element={<StaffLogin />} />
-          <Route path="/legal/terms" element={<Terms />} />
-          <Route path="/legal/privacy" element={<Privacy />} />
-          <Route path="/admin" element={<AdminLayout />}>
-            <Route index element={<AdminEvents />} />
-            <Route path="events/:id" element={<AdminEventEdit />} />
-            <Route path="events/:id/attendees" element={<AdminAttendees />} />
-            <Route path="events/:id/kiosk" element={<AdminKiosk />} />
-            <Route path="events/:id/merch" element={<AdminMerch />} />
-            <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
-            <Route path="events/:id/vouchers" element={<AdminVouchers />} />
-            <Route path="scan" element={<AdminScanner />} />
-            <Route path="badges" element={<AdminBadges />} />
-            <Route path="email" element={<AdminEmail />} />
-            <Route path="staff" element={<AdminStaff />} />
-            <Route path="bans" element={<AdminBans />} />
-            <Route path="audit" element={<AdminAuditLog />} />
-            <Route path="settings" element={<AdminSettings />} />
-            <Route path="backup" element={<AdminBackup />} />
+        <Suspense fallback={<p className="muted" style={{ paddingTop: 40 }}>Loading…</p>}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/e/:slug" element={<EventPage />} />
+            <Route path="/tickets" element={user ? <Tickets /> : <Navigate to="/login" />} />
+            <Route path="/account" element={user ? <Account /> : <Navigate to="/login" />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/staff" element={<StaffLogin />} />
+            <Route path="/legal/terms" element={<Terms />} />
+            <Route path="/legal/privacy" element={<Privacy />} />
+            <Route path="/changelog" element={isStaff ? <Changelog /> : <Navigate to="/" />} />
+            <Route path="/admin" element={<AdminLayout />}>
+              <Route index element={<AdminEvents />} />
+              <Route path="events/:id" element={<AdminEventEdit />} />
+              <Route path="events/:id/attendees" element={<AdminAttendees />} />
+              <Route path="events/:id/kiosk" element={<AdminKiosk />} />
+              <Route path="events/:id/merch" element={<AdminMerch />} />
+              <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
+              <Route path="events/:id/vouchers" element={<AdminVouchers />} />
+              <Route path="scan" element={<AdminScanner />} />
+              <Route path="badges" element={<AdminBadges />} />
+              <Route path="email" element={<AdminEmail />} />
+              <Route path="staff" element={<AdminStaff />} />
+              <Route path="bans" element={<AdminBans />} />
+              <Route path="audit" element={<AdminAuditLog />} />
+              <Route path="analytics" element={<AdminAnalytics />} />
+              <Route path="settings" element={<AdminSettings />} />
+              <Route path="backup" element={<AdminBackup />} />
+              <Route path="*" element={<NotFound />} />
+            </Route>
             <Route path="*" element={<NotFound />} />
-          </Route>
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+          </Routes>
+        </Suspense>
       </main>
 
       <footer className="site-footer">
@@ -100,6 +111,7 @@ export default function App() {
           PROD-2026.1.0.3 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
           <br />
           <Link to="/legal/terms">Terms of Service</Link> • <Link to="/legal/privacy">Privacy Policy</Link>
+          {isStaff && <> • <Link to="/changelog">Changelog</Link></>}
         </p>
       </footer>
     </>

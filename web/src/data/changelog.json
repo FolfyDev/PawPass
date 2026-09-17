@@ -1,0 +1,65 @@
+[
+  {
+    "version": "1.0.3",
+    "date": "2026-09-17",
+    "current": true,
+    "highlights": [
+      "Attendees sign in with an email code or Telegram only, no password",
+      "Sessions expire after 1 day instead of 30",
+      "Names, emails, and answers encrypted at rest",
+      "Site-wide ban list with logged attempts",
+      "New owner-only Analytics dashboard",
+      "Staff split into Owner and Admin roles",
+      "Waitlist promotion notifies by email and Telegram",
+      "Attendee list is sortable and paginated",
+      "Printable attendee sheet has a column picker and sort order",
+      "Check-in scanner plays a sound on success or failure",
+      "Cloudflare Tunnel is now optional",
+      "Telegram avatars load faster and are cached"
+    ]
+  },
+  {
+    "version": "1.0.1",
+    "date": "2026-09-13",
+    "highlights": [
+      "SMTP and Telegram sign-in reliability fixes",
+      "Cloudflare Turnstile bot protection added",
+      "Light mode added",
+      "Ticket transfer between attendees",
+      "RSVP and self-cancel improvements",
+      "Fixed an nginx 502 error"
+    ]
+  },
+  {
+    "version": "1.0.0",
+    "date": "2026-09-12",
+    "highlights": [
+      "First production-ready release",
+      "Deployment, testing, and upgrade docs added",
+      "Docker Compose hardening",
+      "General stability fixes",
+      "General bug fixes"
+    ]
+  },
+  {
+    "version": "0.6.0",
+    "date": "2026-09-09",
+    "highlights": [
+      "Automated test suite added",
+      "Server restructured to be testable",
+      "Docker Compose fixes",
+      "General bug fixes"
+    ]
+  },
+  {
+    "version": "0.4.0",
+    "date": "2026-07-26",
+    "highlights": [
+      "Initial registration flow, web and Telegram bot",
+      "Badge printing to Zebra printers",
+      "Kiosk mode and merch tracker",
+      "First version of staff login",
+      "Telegram bot messaging fixes"
+    ]
+  }
+]

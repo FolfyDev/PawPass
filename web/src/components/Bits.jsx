@@ -33,7 +33,7 @@ export const fmtDate = (d, tz) =>
 
 export function Avatar({ src, name, size = 28 }) {
   const style = { width: size, height: size, borderRadius: '50%' };
-  if (src) return <img src={src} alt="" width={size} height={size} style={{ ...style, objectFit: 'cover' }} />;
+  if (src) return <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" style={{ ...style, objectFit: 'cover' }} />;
   return (
     <span style={{
       ...style, display: 'grid', placeItems: 'center', background: 'var(--rule)', color: 'var(--ink-2)',

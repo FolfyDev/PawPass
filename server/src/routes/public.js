@@ -10,7 +10,7 @@ import { findMatchingBan, normHandle } from '../lib/bans.js';
 import { ticketCode, ticketSecret } from '../lib/codes.js';
 import { buildApplePass } from '../wallet/apple.js';
 import { googleSaveUrl } from '../wallet/google.js';
-import { notifyUser } from '../bot/index.js';
+import { notifyUser, notifyWaitlistPromotion } from '../bot/index.js';
 import { blindIndex } from '../lib/crypto.js';
 import { sendRegistrationConfirmation } from '../lib/mailer.js';
 import { verifyTurnstile } from '../lib/turnstile.js';
@@ -172,12 +172,7 @@ publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
   const promoted = await cancelRegistration(reg);
-  if (promoted?.user.telegramId) {
-    await notifyUser(promoted.user.telegramId,
-      `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
-      `Badge code: ${promoted.code}\n` +
-      `Ticket and wallet pass: ${env.webUrl}/tickets`);
-  }
+  await notifyWaitlistPromotion(promoted);
   res.json({ ok: true });
 });
 
