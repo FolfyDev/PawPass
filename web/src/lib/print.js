@@ -61,15 +61,33 @@ export async function printBadges(codes, mode) {
   return api.post('/api/badges/print-batch', { codes: tails });
 }
 
-export function printAttendeeList(rows, eventTitle) {
+export const ATTENDEE_LIST_COLUMNS = [
+  ['code', 'Code'], ['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'],
+  ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tier', 'Tier'], ['badgeTier', 'Badge tier'],
+  ['paymentMethod', 'Payment'], ['paymentAmount', 'Amount'], ['checkedInAt', 'Checked in'],
+];
+
+// Blanks always sort last — a column full of "—" isn't useful to page
+// through either way, no matter which field it's mixed in with.
+function sortRows(rows, key) {
+  return [...rows].sort((a, b) => {
+    const av = a[key], bv = b[key];
+    const aEmpty = av === null || av === undefined || av === '';
+    const bEmpty = bv === null || bv === undefined || bv === '';
+    if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+    if (typeof av === 'string' && typeof bv === 'string') return av.toLowerCase().localeCompare(bv.toLowerCase());
+    return av < bv ? -1 : av > bv ? 1 : 0;
+  });
+}
+
+export function printAttendeeList(rows, eventTitle, columnKeys, sortKey = 'badgeNumber') {
   const win = window.open('', '_blank', 'width=900,height=700');
   if (!win) throw new Error('Your browser blocked the print window — allow pop-ups for this site.');
 
-  const cols = [
-    ['code', 'Code'], ['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'],
-    ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tier', 'Tier'], ['badgeTier', 'Badge tier'],
-    ['paymentMethod', 'Payment'], ['paymentAmount', 'Amount'], ['checkedInAt', 'Checked in'],
-  ];
+  const cols = columnKeys?.length
+    ? ATTENDEE_LIST_COLUMNS.filter(([key]) => columnKeys.includes(key))
+    : ATTENDEE_LIST_COLUMNS;
+  const sorted = sortRows(rows, sortKey);
   const cell = (r, key) => {
     if (key === 'checkedInAt') return r.checkedInAt ? new Date(r.checkedInAt).toLocaleString() : '';
     if (key === 'telegram') return r.telegram ? `@${r.telegram}` : '';
@@ -78,7 +96,7 @@ export function printAttendeeList(rows, eventTitle) {
   };
 
   const head = cols.map(([, label]) => `<th>${esc(label)}</th>`).join('');
-  const body = rows.map((r) => `<tr>${cols.map(([key]) => `<td>${esc(cell(r, key))}</td>`).join('')}</tr>`).join('');
+  const body = sorted.map((r) => `<tr>${cols.map(([key]) => `<td>${esc(cell(r, key))}</td>`).join('')}</tr>`).join('');
 
   win.document.write(`<!doctype html><title>${esc(eventTitle || 'Attendees')} — attendee list</title>
 <style>

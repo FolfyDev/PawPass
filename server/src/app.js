@@ -74,7 +74,7 @@ app.use(cors({ origin: [env.webUrl], credentials: true }));
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(loadUser);
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads'), { maxAge: '30d' }));
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 

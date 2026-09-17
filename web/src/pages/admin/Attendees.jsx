@@ -2,10 +2,39 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
-import { printBadge, printBadges, printAttendeeList } from '../../lib/print.js';
-import { StatusPill, Pill, Empty, Field, PaymentButtons } from '../../components/Bits.jsx';
+import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } from '../../lib/print.js';
+import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
+
+const PAGE_SIZES = [10, 20, 50, 100];
+
+function SortTh({ label, sortKey, sort, onSort }) {
+  const active = sort.key === sortKey;
+  return (
+    <th style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => onSort(sortKey)}>
+      {label}<span style={{ opacity: active ? 1 : 0.25 }}>{active && sort.dir === 'desc' ? ' ▼' : ' ▲'}</span>
+    </th>
+  );
+}
+
+// Missing values always sort to the bottom, regardless of direction — a
+// column full of "—" isn't useful to page through either way.
+function compareRows(a, b, key, dir) {
+  const val = (r) => {
+    switch (key) {
+      case 'fursonaName': case 'legalName': return (r[key] || '').toLowerCase();
+      case 'createdAt': return new Date(r.createdAt).getTime();
+      default: return r[key];
+    }
+  };
+  const av = val(a), bv = val(b);
+  const aEmpty = av === null || av === undefined || av === '';
+  const bEmpty = bv === null || bv === undefined || bv === '';
+  if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+  const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+  return dir === 'asc' ? cmp : -cmp;
+}
 
 export default function Attendees() {
   const { id } = useParams();
@@ -16,11 +45,23 @@ export default function Attendees() {
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
   const [selected, setSelected] = useState(() => new Set());
+  const [sort, setSort] = useState({ key: 'createdAt', dir: 'desc' });
+  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+  const [printPicker, setPrintPicker] = useState(false);
+  const [printCols, setPrintCols] = useState(() => new Set(ATTENDEE_LIST_COLUMNS.map(([key]) => key)));
+  const [printSort, setPrintSort] = useState('badgeNumber');
 
   const load = () => api.get(`/api/admin/events/${id}/registrations?q=${encodeURIComponent(q)}`).then(setRows);
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [q, id]);
   useEffect(() => { setSelected(new Set()); }, [id]);
+  useEffect(() => { setPage(1); }, [q, id, sort, pageSize]);
+
+  const toggleSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+  const sortedRows = rows ? [...rows].sort((a, b) => compareRows(a, b, sort.key, sort.dir)) : [];
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+  const pageRows = sortedRows.slice((page - 1) * pageSize, page * pageSize);
 
   const print = async (code) => {
     setMsg('');
@@ -47,6 +88,16 @@ export default function Attendees() {
     return next;
   });
   const toggleAll = () => setSelected((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.code))));
+
+  const togglePrintCol = (key) => setPrintCols((s) => {
+    const next = new Set(s);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const submitPrintList = () => {
+    printAttendeeList(rows, event?.title, [...printCols], printSort);
+    setPrintPicker(false);
+  };
 
   const setStatus = async (code, status) => { await api.patch(`/api/admin/registrations/${code}`, { status }); load(); };
 
@@ -161,7 +212,7 @@ export default function Attendees() {
         </div>
         <div className="row">
           <Link className="btn" to="/admin/scan">Open scanner</Link>
-          <button className="btn" disabled={!rows?.length} onClick={() => printAttendeeList(rows, event?.title)}>Print attendee list</button>
+          <button className="btn" disabled={!rows?.length} onClick={() => setPrintPicker(true)}>Print attendee list</button>
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
       </div>
@@ -187,9 +238,25 @@ export default function Attendees() {
       {!!rows?.length && (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
           <table>
-            <thead><tr><th><input type="checkbox" checked={selected.size === rows.length} onChange={toggleAll} /></th><th>Code</th><th>Badge #</th><th>Badge name</th><th>Preferred name</th><th>Contact</th><th>Status</th><th>Tier</th><th>Badge tier</th><th>Payment</th><th>Printed</th><th /></tr></thead>
+            <thead>
+              <tr>
+                <th><input type="checkbox" checked={selected.size === rows.length} onChange={toggleAll} /></th>
+                <th>Code</th>
+                <SortTh label="Badge #" sortKey="badgeNumber" sort={sort} onSort={toggleSort} />
+                <SortTh label="Badge name" sortKey="fursonaName" sort={sort} onSort={toggleSort} />
+                <SortTh label="Preferred name" sortKey="legalName" sort={sort} onSort={toggleSort} />
+                <th>Contact</th>
+                <SortTh label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
+                <th>Tier</th>
+                <th>Badge tier</th>
+                <th>Payment</th>
+                <th>Printed</th>
+                <SortTh label="Date registered" sortKey="createdAt" sort={sort} onSort={toggleSort} />
+                <th />
+              </tr>
+            </thead>
             <tbody>
-              {rows.map((r) => (
+              {pageRows.map((r) => (
                 <tr key={r.code}>
                   <td><input type="checkbox" checked={selected.has(r.code)} onChange={() => toggleRow(r.code)} /></td>
                   <td className="mono">{r.code}</td>
@@ -206,6 +273,7 @@ export default function Attendees() {
                       : <Pill tone="wait">Unrecorded</Pill>}
                   </td>
                   <td className="small muted">{r.printCount ? `${r.printCount}×` : '—'}</td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.createdAt, event?.timezone)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
                     <button className="btn sm" onClick={() => openEdit(r)}>Edit</button>{' '}
@@ -219,6 +287,46 @@ export default function Attendees() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {!!rows?.length && (
+        <div className="spread" style={{ marginTop: 14 }}>
+          <div className="seg">
+            {PAGE_SIZES.map((n) => (
+              <button key={n} aria-current={pageSize === n} onClick={() => setPageSize(n)}>{n}</button>
+            ))}
+          </div>
+          <div className="row" style={{ gap: 10 }}>
+            <button className="btn sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>&lt; Go left</button>
+            <span className="small muted" style={{ whiteSpace: 'nowrap' }}>Page {page} of {totalPages}</span>
+            <button className="btn sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Go right &gt;</button>
+          </div>
+          <span className="small muted">{sortedRows.length} total</span>
+        </div>
+      )}
+
+      {printPicker && (
+        <Modal title="Print attendee list" onClose={() => setPrintPicker(false)}
+          footer={<>
+            <button className="btn ghost" onClick={() => setPrintPicker(false)}>Cancel</button>
+            <button className="btn primary" disabled={!printCols.size} onClick={submitPrintList}>Print</button>
+          </>}>
+          <div className="stack">
+            <Field label="Sort by">
+              <select value={printSort} onChange={(e) => setPrintSort(e.target.value)}>
+                {ATTENDEE_LIST_COLUMNS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+              </select>
+            </Field>
+            <p className="small muted" style={{ margin: 0 }}>Choose which columns to include.</p>
+            <div className="grid-2">
+              {ATTENDEE_LIST_COLUMNS.map(([key, label]) => (
+                <label key={key} className="row small">
+                  <input type="checkbox" checked={printCols.has(key)} onChange={() => togglePrintCol(key)} /> {label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </Modal>
       )}
 
       {editing && editForm && (

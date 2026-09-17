@@ -17,7 +17,7 @@ import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg } from './public.js';
 import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
-import { notifyUser } from '../bot/index.js';
+import { notifyWaitlistPromotion } from '../bot/index.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -145,12 +145,7 @@ adminRouter.patch('/registrations/:code', async (req, res) => {
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
   if (data.status === 'CANCELLED') {
     const promoted = await promoteFromWaitlist(reg.eventId);
-    if (promoted?.user.telegramId) {
-      await notifyUser(promoted.user.telegramId,
-        `Good news — a spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
-        `Badge code: ${promoted.code}\n` +
-        `Ticket and wallet pass: ${env.webUrl}/tickets`);
-    }
+    await notifyWaitlistPromotion(promoted);
   }
   await audit(req.user.id, 'registration.update', reg.id, data);
   res.json(shapeReg(reg));
@@ -759,7 +754,10 @@ adminRouter.post('/upload', upload.single('file'), async (req, res) => {
   if (!ext) return res.status(400).json({ error: 'Use a PNG, JPEG, WebP, or GIF image.' });
   const filename = `${nanoid(10)}${ext}`;
   await fs.writeFile(path.join(process.cwd(), 'uploads', filename), req.file.buffer);
-  res.json({ url: `${env.publicUrl}/uploads/${filename}` });
+  // webUrl, not publicUrl — see the matching note in bot/index.js's
+  // cacheTelegramPhoto. This one is rendered as the site logo/banner <img>,
+  // same CSP img-src exposure.
+  res.json({ url: `${env.webUrl}/uploads/${filename}` });
 });
 
 /* ---------------- settings ---------------- */
@@ -774,6 +772,53 @@ adminRouter.put('/settings', requireOwner, async (req, res) => {
 adminRouter.get('/audit', requireOwner, async (_req, res) => {
   const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
   res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
+});
+
+/* ---------------- analytics (owner only) ---------------- */
+
+// Buckets registration counts per calendar day in UTC — daily granularity is
+// plenty for a signup trend line, and it sidesteps per-event timezone
+// handling that would otherwise be needed to bucket "by day" correctly.
+adminRouter.get('/analytics', requireOwner, async (req, res) => {
+  const eventId = req.query.eventId || undefined;
+  const daysParam = Number(req.query.days);
+  const days = Number.isFinite(daysParam) ? daysParam : 30;
+  const since = days > 0 ? new Date(Date.now() - days * 86400000) : null;
+
+  const regs = await prisma.registration.findMany({
+    where: { ...(eventId && { eventId }), ...(since && { createdAt: { gte: since } }) },
+    select: { createdAt: true, status: true, source: true, tier: true, checkedInAt: true },
+  });
+
+  const dayKey = (d) => d.toISOString().slice(0, 10);
+  const dailyMap = new Map();
+  if (since) {
+    for (let t = new Date(since); t <= new Date(); t.setUTCDate(t.getUTCDate() + 1)) dailyMap.set(dayKey(t), 0);
+  }
+  const bySource = {};
+  const byStatus = { CONFIRMED: 0, WAITLIST: 0, CANCELLED: 0 };
+  let checkedIn = 0;
+  const todayKey = dayKey(new Date());
+  let today = 0;
+
+  for (const r of regs) {
+    const k = dayKey(r.createdAt);
+    dailyMap.set(k, (dailyMap.get(k) || 0) + 1);
+    bySource[r.source] = (bySource[r.source] || 0) + 1;
+    byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+    if (r.checkedInAt) checkedIn += 1;
+    if (k === todayKey) today += 1;
+  }
+
+  const daily = [...dailyMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, count }));
+
+  res.json({
+    range: { days, since: since?.toISOString() ?? null },
+    totals: { total: regs.length, checkedIn, today },
+    daily,
+    bySource: Object.entries(bySource).map(([source, count]) => ({ source, count })).sort((a, b) => b.count - a.count),
+    byStatus: Object.entries(byStatus).map(([status, count]) => ({ status, count })),
+  });
 });
 
 /* ---------------- backup & restore (owner only) ---------------- */
