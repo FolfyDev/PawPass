@@ -2,8 +2,54 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
+import { downloadEventIcs } from '../lib/ics.js';
 import { Empty, StatusPill, RsvpButtons, fmtDate, Field } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
+
+const TICKET_GRID = { display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' };
+
+function TicketCard({ t, settings, onModify, onGoogleWallet }) {
+  return (
+    <div className="stub">
+      <div className="stub-accent" style={{ background: t.event.accentColor }} />
+      <div className="stub-head">
+        <p className="eyebrow">{fmtDate(t.event.startsAt, t.event.timezone)}</p>
+        <h2 style={{ margin: '4px 0 2px' }}>{t.event.title}</h2>
+        <p className="small muted" style={{ margin: 0 }}>{t.event.venue}</p>
+        <div style={{ margin: '18px 0 6px', display: 'grid', placeItems: 'center' }}>
+          <img alt={`QR code for ${t.code}`} width="190" height="190"
+            src={`${api.base}/api/my/tickets/${t.code}/qr.png`} style={{ borderRadius: 8 }} />
+        </div>
+        <p className="code" style={{ textAlign: 'center', margin: 0 }}>{t.code}</p>
+        <p className="small muted" style={{ textAlign: 'center' }}>{settings?.ticketFooter}</p>
+      </div>
+      <div className="stub-tear" />
+      <div className="stub-foot stack">
+        <div className="spread">
+          <span className="small muted">{t.fursonaName || t.legalName}</span>
+          <StatusPill status={t.status} checkedInAt={t.checkedInAt} />
+        </div>
+        {t.status !== 'CANCELLED' && (
+          <button className="btn sm" onClick={() => onModify(t)}>Modify ticket</button>
+        )}
+        <div className="row">
+          <button className="btn sm" onClick={() => downloadEventIcs({
+            uid: t.code, title: t.event.title, venue: t.event.venue,
+            startsAt: t.event.startsAt, endsAt: t.event.endsAt, description: `Badge code: ${t.code}`,
+          })}>
+            Add to calendar
+          </button>
+          {settings?.wallet?.apple && (
+            <a className="btn sm" href={`${api.base}/api/my/tickets/${t.code}/apple.pkpass`}>Add to Apple Wallet</a>
+          )}
+          {settings?.wallet?.google && (
+            <button className="btn sm" onClick={() => onGoogleWallet(t.code)}>Add to Google Wallet</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function Tickets() {
   const { settings, refresh } = useSession();
