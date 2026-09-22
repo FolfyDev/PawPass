@@ -161,7 +161,7 @@ a.stub:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 }
 
 /* ---- pills ---- */
-.pill { font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 5px 8px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); background: var(--paper); }
+.pill { font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 5px 8px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); background: var(--paper); white-space: nowrap; }
 .pill.go { color: var(--go); border-color: color-mix(in srgb, var(--go) 35%, var(--rule)); background: color-mix(in srgb, var(--go) 8%, var(--card)); }
 .pill.wait { color: var(--signal); border-color: color-mix(in srgb, var(--signal) 35%, var(--rule)); background: color-mix(in srgb, var(--signal) 8%, var(--card)); }
 .pill.stop { color: var(--stop); border-color: color-mix(in srgb, var(--stop) 30%, var(--rule)); }

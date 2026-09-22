@@ -9,6 +9,24 @@ import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 
 const PAGE_SIZES = [10, 20, 50, 100];
+const BULK_SORT_KEYS = [['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'], ['code', 'Code']];
+const BULK_STATUSES = [['CONFIRMED', 'Confirmed'], ['WAITLIST', 'Waitlist'], ['CANCELLED', 'Cancelled']];
+
+function inBulkRange(r, key, from, to) {
+  if (!from && !to) return true;
+  const raw = key === 'fursonaName' || key === 'legalName' ? (r[key] || '').toLowerCase() : r[key];
+  if (raw === null || raw === undefined || raw === '') return false;
+  if (key === 'badgeNumber') {
+    const n = Number(raw);
+    if (from !== '' && n < Number(from)) return false;
+    if (to !== '' && n > Number(to)) return false;
+    return true;
+  }
+  const v = String(raw).toLowerCase();
+  if (from && v < from.toLowerCase()) return false;
+  if (to && v > `${to.toLowerCase()}￿`) return false;
+  return true;
+}
 
 function SortTh({ label, sortKey, sort, onSort }) {
   const active = sort.key === sortKey;
@@ -53,6 +71,14 @@ export default function Attendees() {
   const [printCols, setPrintCols] = useState(() => new Set(ATTENDEE_LIST_COLUMNS.map(([key]) => key)));
   const [printSort, setPrintSort] = useState('badgeNumber');
 
+  const [bulkPrintOpen, setBulkPrintOpen] = useState(false);
+  const [bulkStatuses, setBulkStatuses] = useState(() => new Set(['CONFIRMED']));
+  const [bulkSortKey, setBulkSortKey] = useState('badgeNumber');
+  const [bulkSortDir, setBulkSortDir] = useState('asc');
+  const [bulkFrom, setBulkFrom] = useState('');
+  const [bulkTo, setBulkTo] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   const load = () => api.get(`/api/admin/events/${id}/registrations?q=${encodeURIComponent(q)}`).then(setRows);
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [q, id]);
@@ -87,6 +113,32 @@ export default function Attendees() {
       setMsgOk(true);
       setSelected(new Set());
     } catch (e) { setMsg(e.message); setMsgOk(false); }
+    load();
+  };
+
+  const toggleBulkStatus = (status) => setBulkStatuses((s) => {
+    const next = new Set(s);
+    if (next.has(status)) next.delete(status); else next.add(status);
+    return next;
+  });
+
+  const bulkPrintRows = rows
+    ? rows
+      .filter((r) => bulkStatuses.has(r.status) && inBulkRange(r, bulkSortKey, bulkFrom, bulkTo))
+      .sort((a, b) => compareRows(a, b, bulkSortKey, bulkSortDir))
+    : [];
+
+  const submitBulkPrint = async () => {
+    setBulkBusy(true);
+    setMsg('');
+    const codes = bulkPrintRows.map((r) => r.code);
+    try {
+      await printBadges(codes, settings?.printMode);
+      setMsg(`Sent ${codes.length} badge${codes.length === 1 ? '' : 's'} to the printer.`);
+      setMsgOk(true);
+      setBulkPrintOpen(false);
+    } catch (e) { setMsg(e.message); setMsgOk(false); }
+    finally { setBulkBusy(false); }
     load();
   };
 
@@ -220,6 +272,7 @@ export default function Attendees() {
         </div>
         <div className="row">
           <Link className="btn" to={`/admin/scan/${id}`}>Open scanner</Link>
+          <button className="btn" disabled={!rows?.length} onClick={() => setBulkPrintOpen(true)}>Print badges</button>
           <button className="btn" disabled={!rows?.length} onClick={() => setPrintPicker(true)}>Print attendee list</button>
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
@@ -267,20 +320,20 @@ export default function Attendees() {
               {pageRows.map((r) => (
                 <tr key={r.code}>
                   <td><input type="checkbox" checked={selected.has(r.code)} onChange={() => toggleRow(r.code)} /></td>
-                  <td className="mono">{r.code}</td>
-                  <td className="mono">{r.badgeNumber ?? '—'}</td>
-                  <td><strong>{r.fursonaName || '—'}</strong></td>
-                  <td>{r.legalName}</td>
+                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.code}</td>
+                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.badgeNumber ?? '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}><strong>{r.fursonaName || '—'}</strong></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{r.legalName}</td>
                   <td className="small muted">{r.telegram ? `@${r.telegram}` : ''}{r.email ? <><br />{r.email}</> : ''}</td>
-                  <td><StatusPill status={r.status} checkedInAt={r.checkedInAt} /></td>
-                  <td>{r.tier === 'DONATION' ? <Pill tone="go">Donation</Pill> : <Pill>Free</Pill>}</td>
-                  <td className="small muted">{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}><StatusPill status={r.status} checkedInAt={r.checkedInAt} /></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{r.tier === 'DONATION' ? <Pill tone="go">Donation</Pill> : <Pill>Free</Pill>}</td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '—'}</td>
                   <td className="small muted">
                     {r.tier !== 'DONATION' ? '—' : r.paymentMethod
                       ? <>{r.paymentMethod}{r.paymentAmount != null ? ` · $${Number(r.paymentAmount).toFixed(2)}` : ''}{r.paymentNote ? <><br />{r.paymentNote}</> : ''}</>
                       : <Pill tone="wait">Unrecorded</Pill>}
                   </td>
-                  <td className="small muted">{r.printCount ? `${r.printCount}×` : '—'}</td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.printCount ? `${r.printCount}×` : '—'}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.createdAt, event?.timezone)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
@@ -314,6 +367,52 @@ export default function Attendees() {
       )}
 
       <PrintPreviewModal code={previewCode} busy={previewBusy} onCancel={() => setPreviewCode(null)} onConfirm={confirmPrint} />
+
+      {bulkPrintOpen && (
+        <Modal title="Print badges" onClose={() => setBulkPrintOpen(false)}
+          footer={<>
+            <button className="btn ghost" onClick={() => setBulkPrintOpen(false)}>Cancel</button>
+            <button className="btn primary" disabled={bulkBusy || !bulkPrintRows.length} onClick={submitBulkPrint}>
+              {bulkBusy ? 'Sending…' : `Print ${bulkPrintRows.length} badge${bulkPrintRows.length === 1 ? '' : 's'}`}
+            </button>
+          </>}>
+          <div className="stack">
+            <Field label="Include">
+              <div className="row">
+                {BULK_STATUSES.map(([status, label]) => (
+                  <label key={status} className="row small" style={{ gap: 6 }}>
+                    <input type="checkbox" checked={bulkStatuses.has(status)} onChange={() => toggleBulkStatus(status)} /> {label}
+                  </label>
+                ))}
+              </div>
+            </Field>
+
+            <div className="grid-2">
+              <Field label="Sort by">
+                <select value={bulkSortKey} onChange={(e) => setBulkSortKey(e.target.value)}>
+                  {BULK_SORT_KEYS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                </select>
+              </Field>
+              <Field label="Order">
+                <div className="seg" style={{ width: '100%' }}>
+                  <button type="button" aria-current={bulkSortDir === 'asc'} onClick={() => setBulkSortDir('asc')} style={{ flex: 1 }}>Ascending</button>
+                  <button type="button" aria-current={bulkSortDir === 'desc'} onClick={() => setBulkSortDir('desc')} style={{ flex: 1 }}>Descending</button>
+                </div>
+              </Field>
+            </div>
+
+            <div className="grid-2">
+              <Field label="From" help={bulkSortKey === 'badgeNumber' ? 'Leave blank for no lower bound' : 'e.g. "A" — leave blank for no lower bound'}>
+                <input value={bulkFrom} onChange={(e) => setBulkFrom(e.target.value)} placeholder={bulkSortKey === 'badgeNumber' ? '1' : 'A'} />
+              </Field>
+              <Field label="To" help={bulkSortKey === 'badgeNumber' ? 'Leave blank for no upper bound' : 'e.g. "M" — leave blank for no upper bound'}>
+                <input value={bulkTo} onChange={(e) => setBulkTo(e.target.value)} placeholder={bulkSortKey === 'badgeNumber' ? '50' : 'M'} />
+              </Field>
+            </div>
+
+          </div>
+        </Modal>
+      )}
 
       {printPicker && (
         <Modal title="Print attendee list" onClose={() => setPrintPicker(false)}
