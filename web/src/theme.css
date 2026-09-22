@@ -292,6 +292,30 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 .rank-bar-track { height: 10px; border-radius: 5px; background: color-mix(in srgb, var(--platform) 8%, var(--paper)); overflow: hidden; }
 .rank-bar-fill { height: 100%; border-radius: 5px; background: var(--platform); }
 
+/* ---- check-in ---- */
+/* Fixed colours on purpose: dark mode brightens --go/--stop, and a white
+   glyph on those loses contrast. */
+.status-mark { display: inline-grid; place-items: center; flex: 0 0 auto; width: 48px; height: 48px; border-radius: 50%; color: #fff; }
+.status-mark svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.status-mark.ok { background: #0f7a52; box-shadow: 0 0 0 5px color-mix(in srgb, #0f7a52 22%, transparent); }
+.status-mark.bad { background: #c02626; box-shadow: 0 0 0 5px color-mix(in srgb, #c02626 22%, transparent); }
+.status-mark.warn { background: #d97706; box-shadow: 0 0 0 5px color-mix(in srgb, #d97706 22%, transparent); }
+.status-mark.ready { background: #fff; color: #0f7a52; width: 84px; height: 84px; }
+.status-mark.ready svg { width: 46px; height: 46px; }
+.status-mark.sm { width: 26px; height: 26px; box-shadow: none; }
+.status-mark.sm svg { width: 15px; height: 15px; }
+
+.ready-panel { display: grid; justify-items: center; gap: 14px; padding: 40px 20px; border-radius: var(--radius); background: #0f7a52; color: #fff; text-align: center; }
+.ready-panel h2 { margin: 0; color: #fff; }
+.ready-panel p { margin: 0; color: rgba(255, 255, 255, .82); font-size: 14px; }
+
+.outcome-head { display: flex; align-items: center; gap: 16px; }
+.outcome-head h2 { margin: 0; text-wrap: balance; }
+
+.check-row { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--rule); }
+.check-row:last-child { border-bottom: 0; }
+.check-row strong { display: block; }
+
 /* ---- footer ---- */
 .site-footer { max-width: 1080px; margin: 0 auto; padding: 0 20px 32px; text-align: center; }
 .site-footer .hero-rule { margin: 0 0 18px; }

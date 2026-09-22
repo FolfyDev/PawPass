@@ -5,6 +5,7 @@ import { useSession } from '../../lib/session.jsx';
 import { Field, PaymentButtons } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 import { printBadge } from '../../lib/print.js';
+import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 
 const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', paymentMethod: '', paymentAmount: '', paymentNote: '', tosAccepted: false };
 
@@ -19,6 +20,8 @@ export default function Kiosk() {
   const [result, setResult] = useState(null);
   const [printMsg, setPrintMsg] = useState('');
   const [printMsgOk, setPrintMsgOk] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
 
@@ -64,6 +67,11 @@ export default function Kiosk() {
     catch (e) { setPrintMsg(e.message); setPrintMsgOk(false); }
   };
 
+  const confirmPrint = async () => {
+    setPreviewBusy(true);
+    try { await print(); } finally { setPreviewBusy(false); setPreviewOpen(false); }
+  };
+
   const next = () => { setResult(null); setForm(BLANK_FORM); setError(''); setPrintMsg(''); };
 
   return (
@@ -93,7 +101,7 @@ export default function Kiosk() {
             )}
             {printMsg && <p className={`note ${printMsgOk ? 'good' : 'bad'}`}>{printMsg}</p>}
             <div className="row">
-              <button className="btn" onClick={print}>Print badge</button>
+              <button className="btn" onClick={() => setPreviewOpen(true)}>Print badge</button>
               <button className="btn signal" onClick={next}>Register next person →</button>
             </div>
           </div>
@@ -194,6 +202,8 @@ export default function Kiosk() {
           </form>
         )}
       </div>
+
+      <PrintPreviewModal code={previewOpen ? result?.code : null} busy={previewBusy} onCancel={() => setPreviewOpen(false)} onConfirm={confirmPrint} />
     </>
   );
 }

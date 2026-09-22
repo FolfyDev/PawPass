@@ -9,7 +9,7 @@ async function request(method, path, body) {
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
-  if (!res.ok) throw new Error(data?.error || 'Request failed.');
+  if (!res.ok) throw Object.assign(new Error(data?.error || 'Request failed.'), { status: res.status, data });
   return data;
 }
 

@@ -5,6 +5,7 @@ import { useSession } from '../../lib/session.jsx';
 import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } from '../../lib/print.js';
 import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
+import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 
 const PAGE_SIZES = [10, 20, 50, 100];
@@ -68,6 +69,13 @@ export default function Attendees() {
     try { const r = await printBadge(code, settings?.printMode); setMsg(`Sent ${r.code} to the printer (copy ${r.printCount}).`); setMsgOk(true); }
     catch (e) { setMsg(e.message); setMsgOk(false); }
     load();
+  };
+
+  const [previewCode, setPreviewCode] = useState(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const confirmPrint = async () => {
+    setPreviewBusy(true);
+    try { await print(previewCode); } finally { setPreviewBusy(false); setPreviewCode(null); }
   };
 
   const printSelected = async () => {
@@ -211,7 +219,7 @@ export default function Attendees() {
           <h1 style={{ margin: 0 }}>Attendees</h1>
         </div>
         <div className="row">
-          <Link className="btn" to="/admin/scan">Open scanner</Link>
+          <Link className="btn" to={`/admin/scan/${id}`}>Open scanner</Link>
           <button className="btn" disabled={!rows?.length} onClick={() => setPrintPicker(true)}>Print attendee list</button>
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
@@ -277,7 +285,7 @@ export default function Attendees() {
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
                     <button className="btn sm" onClick={() => openEdit(r)}>Edit</button>{' '}
-                    <button className="btn sm" onClick={() => print(r.code)}>Print</button>{' '}
+                    <button className="btn sm" onClick={() => setPreviewCode(r.code)}>Print</button>{' '}
                     {r.status !== 'CANCELLED'
                       ? <button className="btn sm danger" onClick={() => setStatus(r.code, 'CANCELLED')}>Cancel</button>
                       : <button className="btn sm" onClick={() => setStatus(r.code, 'CONFIRMED')}>Restore</button>}
@@ -304,6 +312,8 @@ export default function Attendees() {
           <span className="small muted">{sortedRows.length} total</span>
         </div>
       )}
+
+      <PrintPreviewModal code={previewCode} busy={previewBusy} onCancel={() => setPreviewCode(null)} onConfirm={confirmPrint} />
 
       {printPicker && (
         <Modal title="Print attendee list" onClose={() => setPrintPicker(false)}

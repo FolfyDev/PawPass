@@ -105,6 +105,12 @@ export default function EventPage() {
     <>
       <header style={{ padding: '40px 0 24px', maxWidth: 680 }}>
         <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: event.title }]} />
+        {!event.published && (
+          <p className="note" style={{ marginBottom: 14 }}>
+            <strong>Staff preview</strong>
+            This event is not published. Attendees can't see or register for this page yet.
+          </p>
+        )}
         <p className="eyebrow">{fmtDate(event.startsAt, event.timezone)} · {event.venue}</p>
         <h1>{event.title}</h1>
         {event.tagline && <p className="muted">{event.tagline}</p>}

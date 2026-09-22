@@ -24,6 +24,7 @@ const AdminKiosk = lazy(() => import('./pages/admin/Kiosk.jsx'));
 const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
 const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
 const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
+const AdminCheckInSelect = lazy(() => import('./pages/admin/CheckInSelect.jsx'));
 const AdminScanner = lazy(() => import('./pages/admin/Scanner.jsx'));
 const AdminBadges = lazy(() => import('./pages/admin/Badges.jsx'));
 const AdminEmail = lazy(() => import('./pages/admin/Email.jsx'));
@@ -88,7 +89,8 @@ export default function App() {
               <Route path="events/:id/merch" element={<AdminMerch />} />
               <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
               <Route path="events/:id/vouchers" element={<AdminVouchers />} />
-              <Route path="scan" element={<AdminScanner />} />
+              <Route path="scan" element={<AdminCheckInSelect />} />
+              <Route path="scan/:eventId" element={<AdminScanner />} />
               <Route path="badges" element={<AdminBadges />} />
               <Route path="email" element={<AdminEmail />} />
               <Route path="staff" element={<AdminStaff />} />
