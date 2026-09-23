@@ -1,8 +1,24 @@
 [
   {
+    "version": "1.1.4",
+    "date": "2026-09-23",
+    "current": true,
+    "highlights": [
+      "Scanner is now per-event, with pre-flight checks (event day, published, registrations, camera) before check-in starts",
+      "Waitlisted registrations are blocked from check-in with a clear message, same as cancelled ones",
+      "New fullscreen second-monitor check-in display with a live welcome message and running count",
+      "Print confirmation preview before a badge is sent to the printer",
+      "Bulk badge printing by status, sort order, and badge number/name range",
+      "Manually change a registration's status from the attendee edit popup",
+      "Success and failure sounds plus clearer status icons at the scanner",
+      "Staff can preview an unpublished event's page before it goes live",
+      "Add-to-calendar (.ics) download on ticket pages",
+      "General stability fixes"
+    ]
+  },
+  {
     "version": "1.0.3",
     "date": "2026-09-17",
-    "current": true,
     "highlights": [
       "Attendees sign in with an email code or Telegram only, no password",
       "Sessions expire after 1 day instead of 30",

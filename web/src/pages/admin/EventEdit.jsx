@@ -65,7 +65,12 @@ export default function EventEdit() {
           <p className="eyebrow">Event</p>
           <h1 style={{ margin: 0 }}>{e.title}</h1>
         </div>
-        {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
+        <div className="row">
+          <a className="btn" href={`/e/${e.slug}`} target="_blank" rel="noreferrer">
+            {e.published ? 'View public page' : 'Preview (unpublished)'}
+          </a>
+          {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
+        </div>
       </div>
       <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}

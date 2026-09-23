@@ -24,7 +24,9 @@ const AdminKiosk = lazy(() => import('./pages/admin/Kiosk.jsx'));
 const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
 const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
 const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
+const AdminCheckInSelect = lazy(() => import('./pages/admin/CheckInSelect.jsx'));
 const AdminScanner = lazy(() => import('./pages/admin/Scanner.jsx'));
+const AdminCheckInDisplay = lazy(() => import('./pages/admin/CheckInDisplay.jsx'));
 const AdminBadges = lazy(() => import('./pages/admin/Badges.jsx'));
 const AdminEmail = lazy(() => import('./pages/admin/Email.jsx'));
 const AdminStaff = lazy(() => import('./pages/admin/Staff.jsx'));
@@ -80,6 +82,9 @@ export default function App() {
             <Route path="/legal/terms" element={<Terms />} />
             <Route path="/legal/privacy" element={<Privacy />} />
             <Route path="/changelog" element={isStaff ? <Changelog /> : <Navigate to="/" />} />
+            {/* Outside AdminLayout on purpose — a fullscreen second-monitor
+                view has no business showing the admin sidebar/nav. */}
+            <Route path="/admin/scan/:eventId/display" element={isStaff ? <AdminCheckInDisplay /> : <Navigate to="/login" />} />
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<AdminEvents />} />
               <Route path="events/:id" element={<AdminEventEdit />} />
@@ -88,7 +93,8 @@ export default function App() {
               <Route path="events/:id/merch" element={<AdminMerch />} />
               <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
               <Route path="events/:id/vouchers" element={<AdminVouchers />} />
-              <Route path="scan" element={<AdminScanner />} />
+              <Route path="scan" element={<AdminCheckInSelect />} />
+              <Route path="scan/:eventId" element={<AdminScanner />} />
               <Route path="badges" element={<AdminBadges />} />
               <Route path="email" element={<AdminEmail />} />
               <Route path="staff" element={<AdminStaff />} />
@@ -108,7 +114,7 @@ export default function App() {
         <div className="hero-rule" />
         <p className="small muted">
           PawPass • Mobile Event Management<br />
-          PROD-2026.1.0.3 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
+          PROD-2026.1.1.4 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
           <br />
           <Link to="/legal/terms">Terms of Service</Link> • <Link to="/legal/privacy">Privacy Policy</Link>
           {isStaff && <> • <Link to="/changelog">Changelog</Link></>}

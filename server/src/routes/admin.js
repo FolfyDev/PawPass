@@ -597,6 +597,8 @@ adminRouter.post('/checkin', async (req, res) => {
     return res.status(409).json({ error: `That ticket is for ${reg.event.title}.`, registration: shapeReg(reg) });
   if (reg.status === 'CANCELLED')
     return res.status(409).json({ error: 'This ticket was cancelled.', registration: shapeReg(reg) });
+  if (reg.status === 'WAITLIST')
+    return res.status(409).json({ error: 'This registration is on the waitlist and has no confirmed spot.', registration: shapeReg(reg) });
 
   const already = reg.checkedInAt;
   const updated = already

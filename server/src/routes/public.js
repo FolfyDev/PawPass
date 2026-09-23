@@ -17,6 +17,10 @@ import { verifyTurnstile } from '../lib/turnstile.js';
 
 export const publicRouter = Router();
 
+// Lets staff open an unpublished event's own page to proof-read it before
+// going live, without opening it up to registration or to the public.
+const isStaff = (user) => !!user && (user.role === 'ADMIN' || user.role === 'OWNER');
+
 // Unauthenticated and the only public write endpoint that creates rows
 // (users + registrations) — without this, a script can hammer it far faster
 // than any human filling out the form, ahead of the duplicate-email check.
@@ -56,7 +60,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     where: { slug: req.params.slug },
     include: { _count: { select: { registrations: { where: { status: 'CONFIRMED' } } } } },
   });
-  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
   const state = registrationWindowState(event, event._count.registrations);
   let mine = null;
   if (req.user) {
@@ -76,7 +80,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
 /// People who RSVP'd No are omitted outright, not just hidden client-side.
 publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
-  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
   const regs = await prisma.registration.findMany({
     where: { eventId: event.id, status: 'CONFIRMED', rsvp: { in: ['YES', 'MAYBE'] } },
     include: { user: true },
@@ -94,7 +98,7 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
 
 publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
-  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
   const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
   res.json(items.map((i) => ({ id: i.id, name: i.name, price: i.price, remaining: Math.max(i.maxCount - i.soldCount, 0) })));
 });
