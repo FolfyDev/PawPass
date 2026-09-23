@@ -216,7 +216,10 @@ function ScannerView({ event, warnings, overridden }) {
           <span className="muted small">· {fmtDate(event.startsAt, event.timezone)}</span>{' '}
           {overridden && <Pill tone="wait">Override active</Pill>}
         </p>
-        <Link className="btn sm" to="/admin/scan">Change event</Link>
+        <div className="row">
+          <Link className="btn sm" to={`/admin/scan/${eventId}/display`} target="_blank" rel="noreferrer">Open display ↗</Link>
+          <Link className="btn sm" to="/admin/scan">Change event</Link>
+        </div>
       </div>
 
       {warnings.map((w) => <p key={w.id} className="note" style={{ marginBottom: 12 }}>{w.detail}</p>)}

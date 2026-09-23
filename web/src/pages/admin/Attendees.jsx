@@ -159,8 +159,6 @@ export default function Attendees() {
     setPrintPicker(false);
   };
 
-  const setStatus = async (code, status) => { await api.patch(`/api/admin/registrations/${code}`, { status }); load(); };
-
   const checkedIn = rows?.filter((r) => r.checkedInAt).length || 0;
 
   const [editing, setEditing] = useState(null);
@@ -179,6 +177,7 @@ export default function Attendees() {
       paymentMethod: r.paymentMethod || '',
       paymentAmount: r.paymentAmount != null ? String(r.paymentAmount) : '',
       paymentNote: r.paymentNote || '',
+      status: r.status || 'CONFIRMED',
       answers: { ...(r.answers || {}) },
     });
     setEditMsg('');
@@ -198,6 +197,7 @@ export default function Attendees() {
         paymentMethod: editForm.paymentMethod || null,
         paymentAmount: editForm.paymentAmount === '' ? null : Number(editForm.paymentAmount),
         paymentNote: editForm.paymentNote,
+        status: editForm.status,
         answers: editForm.answers,
       });
       setEditing(null);
@@ -338,10 +338,7 @@ export default function Attendees() {
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
                     <button className="btn sm" onClick={() => openEdit(r)}>Edit</button>{' '}
-                    <button className="btn sm" onClick={() => setPreviewCode(r.code)}>Print</button>{' '}
-                    {r.status !== 'CANCELLED'
-                      ? <button className="btn sm danger" onClick={() => setStatus(r.code, 'CANCELLED')}>Cancel</button>
-                      : <button className="btn sm" onClick={() => setStatus(r.code, 'CONFIRMED')}>Restore</button>}
+                    <button className="btn sm" onClick={() => setPreviewCode(r.code)}>Print</button>
                   </td>
                 </tr>
               ))}
@@ -447,6 +444,16 @@ export default function Attendees() {
           <div className="stack">
             <p className="mono small muted" style={{ margin: 0 }}>{editing.code}</p>
             {editMsg && <p className={`note ${editMsgOk ? 'good' : 'bad'}`}>{editMsg}</p>}
+            <Field label="Registration status">
+              <div className="row">
+                <button type="button" className={`btn sm ${editForm.status === 'CONFIRMED' ? 'primary' : ''}`}
+                  onClick={() => setEditForm({ ...editForm, status: 'CONFIRMED' })}>Confirmed</button>
+                <button type="button" className={`btn sm ${editForm.status === 'WAITLIST' ? 'primary' : ''}`}
+                  onClick={() => setEditForm({ ...editForm, status: 'WAITLIST' })}>Waitlisted</button>
+                <button type="button" className={`btn sm danger ${editForm.status === 'CANCELLED' ? 'primary' : ''}`}
+                  onClick={() => setEditForm({ ...editForm, status: 'CANCELLED' })}>Cancelled</button>
+              </div>
+            </Field>
             <div className="grid-2">
               <Field label="Preferred name">
                 <input value={editForm.legalName} onChange={(e) => setEditForm({ ...editForm, legalName: e.target.value })} />
