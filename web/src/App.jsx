@@ -116,7 +116,7 @@ export default function App() {
         <div className="hero-rule" />
         <p className="small muted">
           PawPass • Mobile Event Management<br />
-          PROD-2026.1.1.4 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
+          PROD-2026.2.0.0 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
           <br />
           <Link to="/legal/terms">Terms of Service</Link> • <Link to="/legal/privacy">Privacy Policy</Link>
           {isStaff && <> • <Link to="/changelog">Changelog</Link></>}

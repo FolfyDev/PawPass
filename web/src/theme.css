@@ -130,7 +130,10 @@ input, select, textarea {
   background: var(--card); color: var(--ink); width: 100%;
 }
 textarea { min-height: 110px; resize: vertical; }
-input[type='checkbox'] { width: auto; }
+input[type='checkbox'], input[type='radio'] { width: auto; }
+div.field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.choice { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; font-weight: 400; color: var(--ink); cursor: pointer; }
+.choice input { margin-top: 3px; }
 input[type='file'] { border: 1px dashed var(--rule); padding: 9px 10px; font-size: 13px; }
 .help { font-weight: 400; color: var(--ink-3); font-size: 12.5px; }
 .grid-2 { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; min-width: 0; }
@@ -339,3 +342,64 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 
 /* ---- payment disclosure ---- */
 .payment-notice { display: flex; gap: 6px; align-items: flex-start; margin: 0; text-align: left; }
+
+/* ---- busy buttons ----
+   aria-busy is set automatically by lib/busy.js while a click's API requests
+   are in flight; data-busy is for buttons that stay busy past their request
+   (e.g. while redirecting to Stripe). Either one shows a spinner and stops
+   double-submits. */
+.btn[aria-busy='true'], .btn[data-busy='true'] { pointer-events: none; cursor: progress; }
+.btn[aria-busy='true']::before, .btn[data-busy='true']::before {
+  content: ''; width: 1em; height: 1em; flex: 0 0 auto; box-sizing: border-box;
+  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+  animation: btn-spin .7s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  /* The global rule above stops the rotation; a pulsing ring still reads as "working". */
+  .btn[aria-busy='true']::before, .btn[data-busy='true']::before { animation: btn-pulse 1.2s ease-in-out infinite !important; }
+}
+@keyframes btn-pulse { 50% { opacity: .35; } }
+
+/* ---- seat-hold countdown ---- */
+.hold-countdown { font-size: 14px; color: var(--ink-2); }
+.hold-countdown strong { font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hold-countdown.urgent strong { color: var(--signal); }
+.hold-countdown.expired { color: var(--stop); font-weight: 600; }
+
+/* ---- refunded payments: greyed out, clearly finished ---- */
+.refunded-box {
+  display: inline-block; font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: 6px; white-space: nowrap;
+  color: var(--ink-3); background: color-mix(in srgb, var(--ink-3) 14%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--ink-3) 30%, var(--rule));
+}
+tr.refunded-row td { color: var(--ink-3); }
+tr.refunded-row td .mono { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--ink-3) 60%, transparent); }
+
+/* ---- register popup ---- */
+.reg-section { display: grid; gap: 12px; padding-top: 4px; }
+.reg-section + .reg-section { border-top: 1px solid var(--rule); padding-top: 16px; }
+.reg-heading { font: 700 13px/1.2 var(--body); letter-spacing: 0; color: var(--ink); margin: 0; }
+.reg-heading .help { font-weight: 400; }
+
+/* Choice chips — same selected look as the ticket cards. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font: 600 14px/1 var(--body); padding: 10px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--card); color: var(--ink);
+  transition: border-color .12s ease, background .12s ease;
+}
+.chip:hover { border-color: var(--ink-3); }
+.chip.selected { border-color: var(--signal); background: color-mix(in srgb, var(--signal) 10%, var(--card)); }
+.chip-input { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px 0 14px; cursor: text; }
+.chip-input input { border: 0; background: transparent; padding: 9px 4px; width: 72px; font: inherit; color: inherit; }
+.chip-input input:focus { outline: none; }
+
+.reg-summary {
+  display: grid; gap: 8px; padding: 14px 16px; border-radius: 10px;
+  background: color-mix(in srgb, var(--ink-3) 7%, var(--card)); border: 1px solid var(--rule); font-size: 14px;
+}
+.reg-summary .reg-discount { color: var(--go); }
+.reg-summary .reg-total { border-top: 1px solid var(--rule); padding-top: 8px; font-size: 15px; }
+.link-btn { background: none; border: 0; padding: 0; font: 600 13px/1.4 var(--body); color: var(--platform); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

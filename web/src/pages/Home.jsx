@@ -22,7 +22,7 @@ export default function Home() {
         {settings?.telegramBot && (
           <p className="small muted">
             Prefer chat? Register through{' '}
-            <a href={`https://t.me/${settings.telegramBot}`}>@{settings.telegramBot}</a> — send <code className="mono">/register</code>.
+            <a href={`https://t.me/${settings.telegramBot}`}>@{settings.telegramBot}</a>: send <code className="mono">/register</code>.
           </p>
         )}
       </header>

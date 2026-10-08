@@ -175,7 +175,7 @@ function ScannerView({ event, warnings, overridden }) {
         registration: reg,
         scanned: value,
         printError,
-        notice: reg?.balanceDueCents > 0 ? `${reg.tierName || 'Ticket'}: ${fmtMoney(reg.balanceDueCents, reg.currency)} still to collect — record it in Attendees.` : '',
+        notice: reg?.balanceDueCents > 0 ? `${reg.tierName || 'Ticket'}: ${fmtMoney(reg.balanceDueCents, reg.currency)} still to collect.` : '',
         canReprint: !!reg,
         canUndo: mode !== 'print' && !!reg,
       });

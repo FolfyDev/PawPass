@@ -39,6 +39,25 @@ enum PaymentMethod {
   OTHER
 }
 
+/// What happens when an attendee cancels a ticket they paid for. Free and
+/// unpaid tickets can always be cancelled directly.
+enum CancelPolicy {
+  /// They cancel and get refunded straight away (Stripe payments go back to
+  /// the card automatically).
+  AUTO_REFUND
+  /// They ask to cancel; an owner approves (which refunds) or declines.
+  REQUEST
+}
+
+enum MerchOrderStatus {
+  /// Stock is held while the buyer is on Stripe Checkout.
+  PENDING
+  PAID
+  /// Checkout expired or failed; the held stock went back.
+  CANCELLED
+  REFUNDED
+}
+
 enum PaymentStatus {
   PENDING
   PAID
@@ -79,6 +98,8 @@ model User {
   sales            Sale[]         @relation("SalesProcessedBy")
   donationsProcessed Donation[]   @relation("DonationsProcessedBy")
   paymentsProcessed Payment[]     @relation("PaymentsProcessedBy")
+  merchOrders      MerchOrder[]
+  merchPickups     MerchOrder[]   @relation("MerchPickedUpBy")
   bansCreated      Ban[]          @relation("BansCreatedBy")
 }
 
@@ -105,12 +126,21 @@ model Event {
   badgeTemplateId  String?
   badgeTemplate    BadgeTemplate? @relation(fields: [badgeTemplateId], references: [id])
   accentColor      String         @default("#FF5B04")
+  cancelPolicy     CancelPolicy   @default(REQUEST)
+  /// Optional "add a donation" step at online checkout, on top of the ticket.
+  /// Charged as its own line on the same Stripe session.
+  donationAddonEnabled Boolean    @default(false)
+  donationAddonLabel   String     @default("Add a donation")
+  /// Preset amounts in cents; attendees can also type their own.
+  donationAddonPresets Int[]      @default([500, 1000, 2500])
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
 
   registrations    Registration[]
   ticketTiers      TicketTier[]
+  discountCodes    DiscountCode[]
+  merchOrders      MerchOrder[]
   campaigns        EmailCampaign[]
   merchItems       MerchItem[]
   voucherCodes     VoucherCode[]
@@ -151,6 +181,18 @@ model Registration {
   /// keeps printing it even if the tier is later renamed or deleted — same
   /// reasoning as badgeTier below.
   tierName      String?
+  /// Discount applied to the ticket price, in cents, and the code it came
+  /// from. Snapshotted, so editing the code later doesn't change what this
+  /// registration owes.
+  discountCodeId String?
+  discountCode  DiscountCode?      @relation(fields: [discountCodeId], references: [id], onDelete: SetNull)
+  discountCents Int                @default(0)
+  /// Donation add-on the attendee chose, in cents — reused if they retry checkout.
+  donationCents Int                @default(0)
+  /// Set while a cancellation request (Event.cancelPolicy REQUEST) waits on
+  /// an owner; cleared when it's approved or declined.
+  cancelRequestedAt DateTime?
+  cancelRequestNote String?
   /// Assigned once the registration holds a confirmed or waitlisted spot —
   /// never while PENDING_PAYMENT, so abandoned checkouts don't burn numbers.
   badgeNumber   Int?
@@ -196,6 +238,9 @@ model TicketTier {
   /// Counts CONFIRMED + PENDING_PAYMENT, same as the event capacity does.
   capacity        Int?
   sortOrder       Int            @default(0)
+  /// Optional sale window. Outside it the tier shows but can't be bought.
+  salesStartAt    DateTime?
+  salesEndAt      DateTime?
   /// Inactive tiers are hidden from sale but kept, so existing registrations
   /// still point at them. Tiers with registrations can't be deleted.
   active          Boolean        @default(true)
@@ -217,13 +262,22 @@ model TicketTier {
 /// data is ever stored; Stripe rows only hold Stripe's own IDs.
 model Payment {
   id                    String        @id @default(cuid())
-  registrationId        String
-  registration          Registration  @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  /// Exactly one of registrationId / merchOrderId is set.
+  registrationId        String?
+  registration          Registration? @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  merchOrderId          String?
+  merchOrder            MerchOrder?   @relation(fields: [merchOrderId], references: [id], onDelete: Cascade)
   method                PaymentMethod
   status                PaymentStatus @default(PENDING)
   /// Integer cents.
   amountCents           Int
   amountRefundedCents   Int           @default(0)
+  /// Part of amountCents that was the donation add-on, for reporting.
+  donationCents         Int           @default(0)
+  /// Stripe's processing fee and what actually lands in the account, from
+  /// the charge's balance transaction. Null until fetched (or not Stripe).
+  feeCents              Int?
+  netCents              Int?
   currency              String        @default("usd")
   note                  String?
   stripeSessionId       String?       @unique
@@ -238,7 +292,71 @@ model Payment {
   updatedAt             DateTime      @updatedAt
 
   @@index([registrationId])
+  @@index([merchOrderId])
   @@index([status, expiresAt])
+}
+
+/// A percent- or amount-off code for ticket tiers, applied by PawPass before
+/// checkout (not a Stripe coupon, so the charged amount is always exactly
+/// what PawPass computed).
+model DiscountCode {
+  id             String         @id @default(cuid())
+  eventId        String
+  event          Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  code           String
+  /// Exactly one of percentOff (1-100) / amountOffCents is set.
+  percentOff     Int?
+  amountOffCents Int?
+  /// null = unlimited. usedCount is claimed with a compare-and-swap, and
+  /// given back if a checkout hold lapses unpaid.
+  maxUses        Int?
+  usedCount      Int            @default(0)
+  /// Tier IDs it applies to; empty = every tier.
+  tierIds        String[]       @default([])
+  active         Boolean        @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime       @default(now())
+
+  registrations  Registration[]
+
+  @@unique([eventId, code])
+}
+
+/// An online merch pre-order, picked up at the event.
+model MerchOrder {
+  id            String           @id @default(cuid())
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        MerchOrderStatus @default(PENDING)
+  totalCents    Int
+  currency      String           @default("usd")
+  pickedUpAt    DateTime?
+  pickedUpById  String?
+  pickedUpBy    User?            @relation("MerchPickedUpBy", fields: [pickedUpById], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  items         MerchOrderItem[]
+  payments      Payment[]
+
+  @@index([eventId, status])
+  @@index([userId])
+}
+
+model MerchOrderItem {
+  id             String     @id @default(cuid())
+  orderId        String
+  order          MerchOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId         String
+  item           MerchItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// Snapshots, so a later price or name change doesn't rewrite the order.
+  name           String
+  unitPriceCents Int
+  quantity       Int
+
+  @@index([orderId])
 }
 
 /// Stripe webhook event IDs already applied. Stripe retries deliveries and
@@ -290,9 +408,12 @@ model MerchItem {
   /// Atomically incremented on each sale via a compare-and-swap update, so
   /// concurrent sales at the table can never oversell past maxCount.
   soldCount Int      @default(0)
+  /// Can be pre-ordered online through Stripe (needs a price and Stripe set up).
+  preorder  Boolean  @default(false)
   createdAt DateTime @default(now())
 
   sales     Sale[]
+  orderItems MerchOrderItem[]
 
   @@index([eventId])
 }

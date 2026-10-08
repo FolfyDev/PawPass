@@ -6,7 +6,9 @@ import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { requireUser, issueToken, setSessionCookie, audit } from '../lib/auth.js';
 import { createRegistration, RegistrationError, registrationWindowState, findOrCreateHeadlessUser, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier } from '../lib/registrations.js';
-import { startCheckout, syncSessionForUser, PaymentError, paymentSummary } from '../lib/payments.js';
+import { startCheckout, startOrderCheckout, syncSessionForUser, PaymentError, paymentSummary, selfCancel } from '../lib/payments.js';
+import { tierSaleState, checkDiscount, normalizeCode, registrationCharge, PricingError } from '../lib/pricing.js';
+import { createMerchOrder, MerchOrderError, shapeOrder, itemPriceCents } from '../lib/merch.js';
 import { stripeEnabled } from '../lib/stripe.js';
 import { findMatchingBan, normHandle } from '../lib/bans.js';
 import { ticketCode, ticketSecret } from '../lib/codes.js';
@@ -35,6 +37,16 @@ const registerLimiter = rateLimit({
   message: { error: 'Too many registration attempts from this connection. Wait a while and try again.' },
 });
 
+// Stops anyone guessing discount codes by brute force through the preview.
+const discountLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { error: 'Too many discount code attempts. Wait a while and try again.' },
+});
+
 publicRouter.get('/settings', async (_req, res) => {
   const s = await getSettings();
   res.json({
@@ -53,7 +65,7 @@ publicRouter.get('/events', async (_req, res) => {
   const events = await prisma.event.findMany({
     where: { published: true },
     orderBy: { startsAt: 'asc' },
-    include: { _count: { select: { registrations: { where: { status: { in: HOLDS_SEAT } } } } } },
+    include: { _count: { select: { registrations: { where: { status: 'CONFIRMED' } } } } },
   });
   res.json(events.map(summarize));
 });
@@ -61,10 +73,14 @@ publicRouter.get('/events', async (_req, res) => {
 publicRouter.get('/events/:slug', async (req, res) => {
   const event = await prisma.event.findUnique({
     where: { slug: req.params.slug },
-    include: { _count: { select: { registrations: { where: { status: { in: HOLDS_SEAT } } } } } },
+    include: { _count: { select: { registrations: { where: { status: 'CONFIRMED' } } } } },
   });
   if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
-  const state = registrationWindowState(event, event._count.registrations);
+  // Capacity counts confirmed spots plus ones held for someone mid-checkout
+  // (released if that checkout expires); the "registered" number shown is
+  // confirmed only.
+  const held = await prisma.registration.count({ where: { eventId: event.id, status: { in: HOLDS_SEAT } } });
+  const state = registrationWindowState(event, held);
   let mine = null;
   if (req.user) {
     mine = await prisma.registration.findUnique({
@@ -72,12 +88,39 @@ publicRouter.get('/events/:slug', async (req, res) => {
       include: REG_INCLUDE,
     });
   }
-  const [tiers, held] = await Promise.all([activeTiers(event.id), heldByTier(event.id)]);
+  const [tiers, heldPerTier] = await Promise.all([activeTiers(event.id), heldByTier(event.id)]);
   res.json({
     ...summarize(event), description: event.description, tosTitle: event.tosTitle, tosBody: event.tosBody,
     customFields: event.customFields, state, registration: mine && shapeReg(mine),
-    tiers: tiers.map((t) => publicTier(t, held[t.id] || 0)),
+    // Tiers whose sale has ended drop off; ones not on sale yet show with a date.
+    tiers: tiers.filter((t) => tierSaleState(t).reason !== 'ended').map((t) => publicTier(t, heldPerTier[t.id] || 0)),
+    donationAddon: event.donationAddonEnabled && stripeEnabled()
+      ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
+      : null,
   });
+});
+
+/// Checks a discount code against a tier and returns the new price, without
+/// using it up — the registration itself claims it.
+publicRouter.post('/events/:slug/discount', discountLimiter, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  const tier = await prisma.ticketTier.findFirst({ where: { id: String(req.body?.ticketTierId || ''), eventId: event.id, active: true } });
+  if (!tier) return res.status(400).json({ error: 'Choose a ticket first.' });
+  const code = normalizeCode(req.body?.code);
+  if (!code) return res.status(400).json({ error: 'Enter a discount code.' });
+  const discount = await prisma.discountCode.findUnique({ where: { eventId_code: { eventId: event.id, code } } });
+  try {
+    const discountCents = checkDiscount(discount, tier);
+    const { ticketCents } = registrationCharge({ tierPriceCents: tier.priceCents, discountCents });
+    res.json({
+      code, discountCents, ticketCents, currency: tier.currency,
+      label: discount.percentOff ? `${discount.percentOff}% off` : `${(discount.amountOffCents / 100).toFixed(2)} off`,
+    });
+  } catch (e) {
+    if (e instanceof PricingError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
 });
 
 /// Who's going — signed-in only, since it surfaces Telegram usernames/photos.
@@ -104,7 +147,24 @@ publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
   const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
-  res.json(items.map((i) => ({ id: i.id, name: i.name, price: i.price, remaining: Math.max(i.maxCount - i.soldCount, 0) })));
+  res.json(items.map((i) => ({
+    id: i.id, name: i.name, price: i.price, priceCents: itemPriceCents(i),
+    remaining: Math.max(i.maxCount - i.soldCount, 0),
+    preorder: i.preorder && stripeEnabled() && itemPriceCents(i) > 0,
+  })));
+});
+
+/// Starts a merch pre-order: holds the stock and returns a Stripe Checkout URL.
+publicRouter.post('/events/:slug/merch/orders', requireUser, registerLimiter, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  try {
+    const order = await createMerchOrder({ event, user: req.user, items: req.body?.items });
+    res.json({ ...shapeOrder(order), checkoutUrl: await startOrderCheckout(order.id) });
+  } catch (e) {
+    if (e instanceof MerchOrderError || e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
 });
 
 
@@ -112,7 +172,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
-  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode } = req.body || {};
+  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode, discountCode, donationCents } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your preferred name.' });
@@ -140,7 +200,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   try {
     const reg = await createRegistration({
       event, user,
-      legalName, fursonaName, email, answers, ticketTierId, voucherCode,
+      legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });
@@ -181,12 +241,32 @@ publicRouter.post('/my/tickets/:code/pay', requireUser, async (req, res) => {
   }
 });
 
-/// Called by the Stripe success page so the ticket shows as confirmed right
-/// away, without waiting on the webhook.
+/// Called by the Stripe success page so the ticket (or pre-order) shows as
+/// paid right away, without waiting on the webhook.
 publicRouter.post('/my/payments/sync', requireUser, async (req, res) => {
-  const reg = await syncSessionForUser(req.body?.sessionId, req.user.id);
-  if (!reg) return res.status(404).json({ error: 'Payment not found.' });
-  res.json({ code: reg.code, status: reg.status });
+  const result = await syncSessionForUser(req.body?.sessionId, req.user.id);
+  if (!result) return res.status(404).json({ error: 'Payment not found.' });
+  res.json(result);
+});
+
+publicRouter.get('/my/merch-orders', requireUser, async (req, res) => {
+  const orders = await prisma.merchOrder.findMany({
+    where: { userId: req.user.id, status: { in: ['PENDING', 'PAID', 'REFUNDED'] } },
+    include: { items: true, payments: true, event: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(orders.map(shapeOrder));
+});
+
+publicRouter.post('/my/merch-orders/:id/pay', requireUser, async (req, res) => {
+  const order = await prisma.merchOrder.findUnique({ where: { id: req.params.id } });
+  if (!order || order.userId !== req.user.id) return res.status(404).json({ error: 'Order not found.' });
+  try {
+    res.json({ url: await startOrderCheckout(order.id) });
+  } catch (e) {
+    if (e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
 });
 
 publicRouter.get('/my/tickets', requireUser, async (req, res) => {
@@ -208,12 +288,19 @@ publicRouter.post('/my/tickets/:code/rsvp', requireUser, async (req, res) => {
   res.json(shapeReg(updated));
 });
 
+/// Follows the event's cancellation policy for paid tickets — see selfCancel.
+/// `outcome` tells the page what actually happened.
 publicRouter.post('/my/tickets/:code/cancel', requireUser, async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
-  const promoted = await cancelRegistration(reg);
-  await notifyWaitlistPromotion(promoted);
-  res.json({ ok: true });
+  try {
+    const { outcome, promoted } = await selfCancel(reg.id, req.body?.note);
+    await notifyWaitlistPromotion(promoted);
+    res.json({ ok: true, outcome });
+  } catch (e) {
+    if (e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
 });
 
 
@@ -231,7 +318,7 @@ publicRouter.post('/my/tickets/:code/transfer', requireUser, async (req, res) =>
   let target;
   if (telegramUsername) {
     target = await prisma.user.findFirst({ where: { telegramUsername: { equals: telegramUsername, mode: 'insensitive' } } });
-    if (!target) return res.status(404).json({ error: 'That Telegram username has not messaged the bot yet — ask them to send /start first.' });
+    if (!target) return res.status(404).json({ error: 'That Telegram user has not messaged the bot yet. Ask them to send /start.' });
   } else {
     target = await prisma.user.findUnique({ where: { emailIndex: blindIndex(emailInput) } });
     if (!target) target = await prisma.user.create({ data: { displayName: emailInput, email: emailInput } });
@@ -310,6 +397,7 @@ export function summarize(e) {
     startsAt: e.startsAt, endsAt: e.endsAt, timezone: e.timezone,
     capacity: e.capacity, accentColor: e.accentColor, published: e.published,
     confirmed: e._count?.registrations,
+    cancelPolicy: e.cancelPolicy,
   };
 }
 
@@ -325,15 +413,19 @@ export function shapeReg(r) {
     tierPriceCents: r.ticketTier?.priceCents ?? null,
     currency: r.ticketTier?.currency ?? null,
     badgeTier: r.badgeTier,
+    cancelRequestedAt: r.cancelRequestedAt, cancelRequestNote: r.cancelRequestNote,
     ...paymentSummary(r),
   };
 }
 
 export function publicTier(t, held) {
   const remaining = t.capacity != null ? Math.max(t.capacity - held, 0) : null;
+  const sale = tierSaleState(t);
   return {
     id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, currency: t.currency,
     remaining, soldOut: remaining === 0,
+    // A tier can be listed but not yet buyable (its sale hasn't opened).
+    onSale: sale.buyable, salesStartAt: t.salesStartAt, salesEndAt: t.salesEndAt,
   };
 }
 

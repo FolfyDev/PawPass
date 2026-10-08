@@ -88,15 +88,15 @@ export default function Account() {
 
       {params.get('justRegistered') === '1' && (
         <p className="note good" style={{ marginBottom: 20 }}>
-          You're registered! Your email works to sign back in any time — we'll send a one-time code, no password needed.
-          {!user.telegramId && ' You can also link Telegram above for one-tap sign-in.'}
+          You're registered! Sign back in any time with an emailed code.
+          {!user.telegramId && ' Or link Telegram above.'}
         </p>
       )}
 
       {settings?.askFursonaName !== false && (
         <form className="card stack" style={{ marginBottom: 20 }} onSubmit={saveFursonaName}>
           <h2 style={{ margin: 0 }}>Badge name</h2>
-          <p className="small muted">Updates any event you're currently registered for, not just future ones.</p>
+          <p className="small muted">Applies to all your current registrations.</p>
           <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="The big name on your badge">
             <input value={fursonaName} onChange={(e) => setFursonaName(e.target.value)} />
           </Field>
@@ -108,7 +108,7 @@ export default function Account() {
       {isStaff ? (
         <form className="card stack" onSubmit={savePassword}>
           <h2 style={{ margin: 0 }}>Password sign-in</h2>
-          <p className="small muted">Staff can sign in with a password as a Telegram-independent fallback.</p>
+          <p className="small muted">For staff sign-in.</p>
           <Field label="Email"><input type="email" value={pw.email} onChange={(e) => setPw({ ...pw, email: e.target.value })} /></Field>
           <Field label="New password" help="At least 10 characters">
             <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
@@ -119,7 +119,7 @@ export default function Account() {
       ) : (
         <form className="card stack" onSubmit={saveEmail}>
           <h2 style={{ margin: 0 }}>Email</h2>
-          <p className="small muted">This is where a sign-in code goes if you use the "Email code" option on the sign-in page.</p>
+          <p className="small muted">Sign-in codes are sent here.</p>
           <Field label="Email"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
           {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
           <button className="btn primary">Save email</button>

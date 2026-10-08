@@ -50,8 +50,7 @@ export default function Vouchers() {
       </div>
       <EventTabs id={id} />
       <p className="small muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        Redeeming a valid code on the public event page registers someone for free with a guaranteed spot,
-        regardless of tier or capacity, and prints the badge tier label on their badge.
+        Free entry with a guaranteed spot. The badge tier prints on their badge.
       </p>
 
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
@@ -76,7 +75,7 @@ export default function Vouchers() {
                         style={{ width: 60 }} /> ({v.usedCount} used, {v.remaining} left)
                     </td>
                     <td className="small muted">
-                      {v.redemptions.length === 0 ? '—' : v.redemptions.map((r) => r.fursonaName || r.legalName).join(', ')}
+                      {v.redemptions.length === 0 ? '-' : v.redemptions.map((r) => r.fursonaName || r.legalName).join(', ')}
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <button className="btn sm danger" onClick={() => remove(v)}>Delete</button>
@@ -88,7 +87,7 @@ export default function Vouchers() {
           </div>
         )}
         <div className="row" style={{ alignItems: 'flex-end' }}>
-          <input placeholder="Code (optional — auto-generated)" value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} style={{ flex: 1 }} />
+          <input placeholder="Code (blank = auto)" value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} style={{ flex: 1 }} />
           <input placeholder="Badge tier, e.g. Organizer" value={draft.badgeTier} onChange={(e) => setDraft({ ...draft, badgeTier: e.target.value })} style={{ flex: 1 }} />
           <input type="number" min="1" placeholder="Max uses" value={draft.maxUses} onChange={(e) => setDraft({ ...draft, maxUses: e.target.value })} style={{ width: 100 }} />
           <button className="btn primary" onClick={create}>Add voucher</button>

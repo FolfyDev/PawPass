@@ -58,7 +58,7 @@ export default function Email() {
           <button className="btn" onClick={() => send(true)}>Count recipients</button>
           <button className="btn signal" disabled={!draft.subject || !draft.body} onClick={() => send(false)}>Send now</button>
         </div>
-        <p className="small muted" style={{ margin: 0 }}>Only people who gave an email address receive these. Telegram-only attendees will not.</p>
+        <p className="small muted" style={{ margin: 0 }}>Only sent to people with an email address.</p>
       </div>
 
       <h2>Sent</h2>

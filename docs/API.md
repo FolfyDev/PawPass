@@ -9,7 +9,9 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET | `/api/settings` | Branding, wording, which wallet backends are live |
 | GET | `/api/events` | Published events |
 | GET | `/api/events/:slug` | Event, terms, custom fields, ticket `tiers` on sale, your registration if any |
-| POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, ticketTierId, voucherCode, acceptedTos }`. A paid tier with Stripe configured returns `status: PENDING_PAYMENT` and a `checkoutUrl` to redirect to |
+| POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, acceptedTos }`. A paid tier with Stripe configured returns `status: PENDING_PAYMENT` and a `checkoutUrl` to redirect to |
+| POST | `/api/events/:slug/discount` | `{ code, ticketTierId }` — preview the discounted price without using the code |
+| POST | `/api/events/:slug/merch/orders` | Signed in, confirmed attendee. `{ items: [{ itemId, quantity }] }` → `checkoutUrl` |
 | POST | `/api/stripe/webhook` | Stripe only — signature-verified against `STRIPE_WEBHOOK_SECRET` |
 | GET | `/t/:secret` | The URL inside every QR — human-readable landing page |
 
@@ -34,9 +36,10 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET | `/api/my/tickets/:code/qr.png` |
 | GET | `/api/my/tickets/:code/apple.pkpass` |
 | GET | `/api/my/tickets/:code/google` |
-| POST | `/api/my/tickets/:code/cancel` |
+| POST | `/api/my/tickets/:code/cancel` — `{ note }`. Follows the event's cancel policy; returns `outcome`: `cancelled`, `refunded`, `requested` |
 | POST | `/api/my/tickets/:code/pay` — `{ url }` of a Stripe Checkout for a ticket awaiting payment |
 | POST | `/api/my/payments/sync` — `{ sessionId }` from the Stripe success redirect; settles it from Stripe |
+| GET | `/api/my/merch-orders` · POST `/api/my/merch-orders/:id/pay` |
 
 ## Admin — requires ADMIN or OWNER
 
@@ -54,6 +57,11 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | PATCH | `/api/admin/registrations/:code` | |
 | POST | `/api/admin/registrations/:code/payments` | Record an in-person payment `{ method, amount, note }` |
 | DELETE | `/api/admin/payments/:id` | Remove a mistaken in-person payment (not Stripe ones) |
+| POST | `/api/admin/registrations/:code/cancel-request` | **Owner only.** `{ approve }` — approve refunds and cancels |
+| POST | `/api/admin/payments/:id/refund` | **Owner only.** `{ amount }` (dollars; omit for all of it). Stripe payments refund to the card |
+| GET/POST | `/api/admin/events/:id/discounts` | Discount codes. POST is **owner only**: `{ code, percentOff \| amountOff, maxUses, tierIds, expiresAt }` |
+| PATCH/DELETE | `/api/admin/discounts/:id` | **Owner only** |
+| POST | `/api/admin/merch-orders/:id/pickup` | `{ pickedUp }` |
 | GET | `/api/admin/events/:id/reconciliation` | Totals by method: tickets, in-person donations, merch |
 | POST | `/api/admin/checkin` | `{ value }` — a ticket URL, a secret, or a typed code |
 | POST | `/api/admin/checkin/:code/undo` | |

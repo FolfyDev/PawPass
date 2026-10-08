@@ -152,7 +152,7 @@ export default function Badges() {
             ))}
           </div>
           <p className="small muted" style={{ maxWidth: t.widthMm * SCALE }}>
-            Drag the outlines to position. The rendered preview on the right is produced by the same code that drives the printer.
+            Drag to position. The preview matches what prints.
           </p>
           <div className="row">
             {Object.keys(NEW_ELEMENT).map((k) => <button key={k} className="btn sm" onClick={() => add(k)}>+ {k}</button>)}

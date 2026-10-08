@@ -38,8 +38,8 @@ export default function Staff() {
             {staff.map((u) => (
               <tr key={u.id}>
                 <td><strong>{u.displayName}</strong></td>
-                <td className="small muted">{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId || '—'}</td>
-                <td className="small muted">{u.email || '—'}</td>
+                <td className="small muted">{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId || '-'}</td>
+                <td className="small muted">{u.email || '-'}</td>
                 <td><Pill tone={u.role === 'OWNER' ? 'wait' : 'go'}>{u.role}</Pill></td>
                 <td style={{ textAlign: 'right' }}>
                   {isOwner && u.id !== user.id && (

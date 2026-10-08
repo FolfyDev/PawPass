@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 export const Pill = ({ tone = '', children }) => <span className={`pill ${tone}`}>{children}</span>;
 
 export const StatusPill = ({ status, checkedInAt }) => {
@@ -11,7 +13,7 @@ export const StatusPill = ({ status, checkedInAt }) => {
 export function Field({ label, help, children }) {
   return (
     <label className="field">
-      <span>{label}{help && <span className="help"> — {help}</span>}</span>
+      <span>{label}{help && <span className="help"> · {help}</span>}</span>
       {children}
     </label>
   );
@@ -83,5 +85,30 @@ export function PaymentButtons({ value, onChange }) {
         </button>
       ))}
     </div>
+  );
+}
+
+/// Live "29:41 left" for a held seat. Calls onExpire once when it hits zero.
+export function HoldCountdown({ until, onExpire }) {
+  const end = until ? new Date(until).getTime() : null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!end) return undefined;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [end]);
+  const left = end ? Math.max(0, Math.ceil((end - now) / 1000)) : null;
+  useEffect(() => {
+    if (left === 0) onExpire?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left === 0]);
+  if (left === null) return null;
+  if (left === 0) return <span className="hold-countdown expired">Your hold has expired</span>;
+  const m = Math.floor(left / 60);
+  const sec = String(left % 60).padStart(2, '0');
+  return (
+    <span className={`hold-countdown${left <= 120 ? ' urgent' : ''}`} role="timer" aria-live="off">
+      Spot held for <strong className="mono">{m}:{sec}</strong>
+    </span>
   );
 }

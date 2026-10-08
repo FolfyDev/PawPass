@@ -49,8 +49,8 @@ export default function Privacy() {
           <p>
             We use this information to register you for events, verify your identity at check-in, print your
             badge, generate your ticket (including Apple/Google Wallet passes if you add one), show you who else
-            has RSVP'd to an event you're attending, and  only if you provided an email and the organizer sends
-            one  email you updates about events you registered for.
+            has RSVP'd to an event you're attending, and (only if you provided an email and the organizer sends
+            one) email you updates about events you registered for.
           </p>
         </section>
 

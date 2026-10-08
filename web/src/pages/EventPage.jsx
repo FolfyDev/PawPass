@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill } from '../components/Bits.jsx';
+import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import Turnstile from '../components/Turnstile.jsx';
@@ -39,9 +39,13 @@ function AnswerInput({ f, answers, setAnswer }) {
 }
 
 const tierPrice = (t) => (t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free');
-const tierAvailability = (t, payOnline) => [
-  t.soldOut ? 'Sold out' : t.remaining != null ? `${t.remaining} left` : '',
-  t.priceCents > 0 && !payOnline && !t.soldOut ? 'Pay at the door' : '',
+const shortDate = (d, tz) => new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: tz || undefined });
+const buyable = (t) => t.onSale !== false && !t.soldOut;
+const tierAvailability = (t, payOnline, tz) => [
+  t.onSale === false && t.salesStartAt ? `On sale ${shortDate(t.salesStartAt, tz)}` : '',
+  t.onSale !== false && t.soldOut ? 'Sold out' : t.onSale !== false && t.remaining != null ? `${t.remaining} left` : '',
+  t.onSale !== false && t.salesEndAt ? `Until ${shortDate(t.salesEndAt, tz)}` : '',
+  t.priceCents > 0 && !payOnline && buyable(t) ? 'Pay at the door' : '',
 ].filter(Boolean).join(' · ');
 
 export default function EventPage() {
@@ -51,7 +55,15 @@ export default function EventPage() {
   const { user, settings, refresh } = useSession();
   const [event, setEvent] = useState(null);
   usePageMeta({ title: event?.title, description: event?.tagline || event?.description });
-  const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, ticketTierId: '', voucherCode: '' });
+  const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, ticketTierId: '', voucherCode: '', discountCode: '', donationCents: 0 });
+  // A discount code that's been checked against the chosen tier: { code, tierId, ticketCents, label }.
+  const [discount, setDiscount] = useState(null);
+  const [discountInput, setDiscountInput] = useState('');
+  const [discountMsg, setDiscountMsg] = useState('');
+  const [customDonation, setCustomDonation] = useState('');
+  const [customOpen, setCustomOpen] = useState(false);
+  const [showDiscount, setShowDiscount] = useState(false);
+  const [preorder, setPreorder] = useState({});
   // null = closed; 'details' -> 'terms' inside the registration popup.
   const [step, setStep] = useState(null);
   const [showVoucher, setShowVoucher] = useState(false);
@@ -70,7 +82,7 @@ export default function EventPage() {
       fursonaName: e.registration?.fursonaName || user?.fursonaName || '',
       email: e.registration?.email || user?.email || '',
       // Preselect when there's nothing to choose between.
-      ticketTierId: f.ticketTierId || (e.tiers?.filter((t) => !t.soldOut).length === 1 ? e.tiers.find((t) => !t.soldOut).id : ''),
+      ticketTierId: f.ticketTierId || (e.tiers?.filter(buyable).length === 1 ? e.tiers.find(buyable).id : ''),
     }));
   }).catch((err) => setError(err.message));
 
@@ -86,7 +98,7 @@ export default function EventPage() {
   // Back from Stripe's "cancel" link.
   useEffect(() => {
     if (params.get('payment') === 'cancelled') {
-      setPageNote('Payment was cancelled. Your spot is still held for a little while — complete payment below, or cancel it from your tickets.');
+      setPageNote('Payment cancelled. Your spot is held until the timer runs out.');
       setParams({}, { replace: true });
     }
   }, [params, setParams]);
@@ -113,12 +125,42 @@ export default function EventPage() {
   const registered = reg && reg.status !== 'CANCELLED';
   const selectedTier = tiers.find((t) => t.id === form.ticketTierId);
   const usingVoucher = Boolean(form.voucherCode.trim());
+  // Only counts while it's still for the tier it was checked against.
+  const appliedDiscount = discount && discount.tierId === form.ticketTierId ? discount : null;
+  const ticketCents = selectedTier ? (appliedDiscount ? appliedDiscount.ticketCents : selectedTier.priceCents) : 0;
+  const donationAddon = !usingVoucher && event.donationAddon && settings?.payments?.online ? event.donationAddon : null;
+  const donationCents = donationAddon ? form.donationCents : 0;
+  const totalCents = ticketCents + donationCents;
   const payOnline = settings?.payments?.online;
-  const goesToPayment = !usingVoucher && selectedTier?.priceCents > 0 && payOnline;
+  const goesToPayment = !usingVoucher && totalCents > 0 && payOnline;
+
+  const applyDiscount = async () => {
+    setDiscountMsg('');
+    if (!form.ticketTierId) return setDiscountMsg('Choose a ticket first.');
+    try {
+      const r = await api.post(`/api/events/${slug}/discount`, { code: discountInput, ticketTierId: form.ticketTierId });
+      setDiscount({ ...r, tierId: form.ticketTierId });
+      setForm((f) => ({ ...f, discountCode: r.code }));
+    } catch (e) {
+      setDiscount(null);
+      setForm((f) => ({ ...f, discountCode: '' }));
+      setDiscountMsg(e.message);
+    }
+  };
+  const removeDiscount = () => { setDiscount(null); setDiscountInput(''); setDiscountMsg(''); setForm((f) => ({ ...f, discountCode: '' })); };
+
+  const placePreorder = async () => {
+    const items = Object.entries(preorder).filter(([, q]) => q > 0).map(([itemId, quantity]) => ({ itemId, quantity }));
+    setPageNote('');
+    try { window.location.href = (await api.post(`/api/events/${slug}/merch/orders`, { items })).checkoutUrl; }
+    catch (e) { setPageNote(e.message); }
+  };
   // Only the guest (no signed-in session) path is challenged — see the
   // matching guard server-side in public.js's /register handler.
   const captchaRequired = !user && settings?.turnstile?.enabled;
   const setAnswer = (key, value) => setForm((f) => ({ ...f, answers: { ...f.answers, [key]: value } }));
+  const canPreorder = reg?.status === 'CONFIRMED' && settings?.payments?.online;
+  const preorderCents = (merch || []).reduce((sum, m) => sum + (preorder[m.id] || 0) * (m.priceCents || 0), 0);
 
   const openRegister = ({ voucher = false } = {}) => {
     setError('');
@@ -142,15 +184,19 @@ export default function EventPage() {
 
   const accept = async () => {
     const wasGuest = !user;
+    let redirecting = false;
     setBusy(true);
     setError('');
     try {
       const created = await api.post(`/api/events/${slug}/register`, {
         ...form, ticketTierId: form.ticketTierId || undefined, acceptedTos: true, turnstileToken: captchaToken,
+        discountCode: appliedDiscount && !usingVoucher ? form.discountCode : undefined,
+        donationCents: donationCents || undefined,
       });
       // Gate on the server's result, not the form — a voucher code can turn
       // a paid pick into a free confirmed spot.
       if (created.checkoutUrl) {
+        redirecting = true;
         window.location.href = created.checkoutUrl;
         return;
       }
@@ -166,19 +212,19 @@ export default function EventPage() {
     } catch (e) {
       setError(e.message);
       setStep('details');
-    } finally { setBusy(false); }
+    } finally { if (!redirecting) setBusy(false); }
   };
 
   const tierPicker = (
     <div className="tiers">
       {tiers.map((t) => (
-        <button key={t.id} type="button" disabled={t.soldOut}
+        <button key={t.id} type="button" disabled={!buyable(t)}
           className={`tier${form.ticketTierId === t.id ? ' selected' : ''}`}
           onClick={() => setForm({ ...form, ticketTierId: t.id })}>
           <span className="tier-name">{t.name}</span>
           <span className="tier-price">{tierPrice(t)}</span>
           {t.description && <span className="tier-help">{t.description}</span>}
-          <span className="tier-help">{tierAvailability(t, payOnline)}</span>
+          <span className="tier-help">{tierAvailability(t, payOnline, event.timezone)}</span>
         </button>
       ))}
     </div>
@@ -191,7 +237,7 @@ export default function EventPage() {
         {!event.published && (
           <p className="note" style={{ marginBottom: 14 }}>
             <strong>Staff preview</strong>
-            This event is not published. Attendees can't see or register for this page yet.
+            Not published yet. Only staff can see this page.
           </p>
         )}
         <p className="eyebrow">{fmtDate(event.startsAt, event.timezone)} · {event.venue}</p>
@@ -219,8 +265,9 @@ export default function EventPage() {
                 Your {reg.tierName || 'ticket'} spot is held while you pay. It's confirmed as soon as the payment goes through.
               </p>
               <p className="row" style={{ margin: 0 }}><StatusPill status={reg.status} /> {reg.tierPriceCents != null && <strong>{fmtMoney(reg.tierPriceCents, reg.currency)}</strong>}</p>
+              <HoldCountdown until={reg.holdExpiresAt} onExpire={() => setTimeout(load, 10_000)} />
               <div className="row">
-                <button className="btn signal" disabled={busy} onClick={pay}>{busy ? 'Opening payment…' : 'Complete payment'}</button>
+                <button className="btn signal" disabled={busy} data-busy={busy ? 'true' : undefined} onClick={pay}>{busy ? 'Opening payment…' : 'Complete payment'}</button>
                 <Link className="btn ghost" to="/tickets">Manage in tickets</Link>
               </div>
               <PaymentNotice />
@@ -255,15 +302,15 @@ export default function EventPage() {
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <strong>{tierPrice(t)}</strong>
-                        <div className="small muted">{tierAvailability(t, payOnline)}</div>
+                        <div className="small muted">{tierAvailability(t, payOnline, event.timezone)}</div>
                       </div>
                     </li>
                   ))}
                 </ul>
               ) : <p className="muted" style={{ margin: 0 }}>No tickets are on sale yet.</p>)}
-              {event.state.open && tiers.some((t) => t.priceCents > 0 && !t.soldOut) && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
+              {event.state.open && tiers.some((t) => t.priceCents > 0 && buyable(t)) && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
 
-              {event.state.open && tiers.some((t) => !t.soldOut) && (
+              {event.state.open && tiers.some(buyable) && (
                 user ? (
                   <button className="btn signal" style={{ justifySelf: 'start' }} onClick={() => openRegister()}>Register</button>
                 ) : (
@@ -316,9 +363,22 @@ export default function EventPage() {
                 <strong>{m.name}</strong>
                 <span className="small muted">{m.price != null ? `$${Number(m.price).toFixed(2)}` : ''}</span>
                 {m.remaining > 0 ? <span className="small muted">{m.remaining} left</span> : <Pill tone="stop">Sold out</Pill>}
+                {canPreorder && m.preorder && m.remaining > 0 && (
+                  <input type="number" min="0" max={Math.min(m.remaining, 10)} placeholder="Qty" aria-label={`How many ${m.name}`}
+                    value={preorder[m.id] || ''} style={{ width: 90, marginTop: 6 }}
+                    onChange={(e) => setPreorder({ ...preorder, [m.id]: Math.max(0, Math.min(Number(e.target.value) || 0, m.remaining, 10)) })} />
+                )}
               </div>
             ))}
           </div>
+          {canPreorder && merch.some((m) => m.preorder && m.remaining > 0) && (
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="btn signal" disabled={!preorderCents} onClick={placePreorder}>
+                {preorderCents ? `Pre-order · ${fmtMoney(preorderCents)}` : 'Pre-order'}
+              </button>
+              <span className="small muted">Paid online, picked up at the merch table.</span>
+            </div>
+          )}
         </section>
       )}
 
@@ -331,52 +391,125 @@ export default function EventPage() {
             <button className="btn signal" onClick={toTerms}>Review terms</button>
           </> : <>
             <button className="btn ghost" disabled={busy} onClick={() => setStep('details')}>Back</button>
-            <button className="btn signal" disabled={busy || (captchaRequired && !captchaToken)} onClick={accept}>
+            <button className="btn signal" disabled={busy || (captchaRequired && !captchaToken)} data-busy={busy ? 'true' : undefined} onClick={accept}>
               {busy ? 'Registering…'
-                : goesToPayment ? `I accept — pay ${fmtMoney(selectedTier.priceCents, selectedTier.currency)}`
-                : 'I accept — register me'}
+                : goesToPayment ? `I accept · pay ${fmtMoney(totalCents, selectedTier?.currency)}`
+                : 'I accept · register me'}
             </button>
           </>}
         >
           {step === 'details' ? (
             <form className="stack" onSubmit={toTerms}>
-              {!event.state.open && <p className="note">Registration is normally closed ({event.state.reason}) — a valid voucher code will still get you in.</p>}
+              {!event.state.open && <p className="note">Registration is closed ({event.state.reason}). A voucher code still gets you in.</p>}
 
-              {event.state.open && tiers.length > 0 && !usingVoucher && <Field label="Ticket">{tierPicker}</Field>}
-              {!usingVoucher && selectedTier?.priceCents > 0 && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
-
-              <Field label={settings?.legalNameLabel || 'Preferred name'} help={settings?.legalNameHelp}>
-                <input value={form.legalName} required autoComplete="name" autoFocus
-                  onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
-              </Field>
-
-              {settings?.askFursonaName !== false && (
-                <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="The big name on your badge">
-                  <input value={form.fursonaName}
-                    onChange={(e) => setForm({ ...form, fursonaName: e.target.value })} />
-                </Field>
+              {event.state.open && tiers.length > 0 && !usingVoucher && (
+                <section className="reg-section">
+                  <h3 className="reg-heading">Ticket</h3>
+                  {tierPicker}
+                </section>
               )}
 
-              <Field label="Email" help={user ? 'For event updates — optional' : 'Required — this is how you\'ll get back into your account'}>
-                <input type="email" value={form.email} autoComplete="email" required={!user}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </Field>
-
-              {fields.map((f) => (
-                <Field key={f.key} label={f.label + (f.required ? '' : ' (optional)')} help={f.help}>
-                  <AnswerInput f={f} answers={form.answers} setAnswer={setAnswer} />
+              <section className="reg-section">
+                <h3 className="reg-heading">Your details</h3>
+                <Field label={settings?.legalNameLabel || 'Preferred name'} help={settings?.legalNameHelp}>
+                  <input value={form.legalName} required autoComplete="name" autoFocus
+                    onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
                 </Field>
-              ))}
+                {settings?.askFursonaName !== false && (
+                  <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="The big name on your badge">
+                    <input value={form.fursonaName} onChange={(e) => setForm({ ...form, fursonaName: e.target.value })} />
+                  </Field>
+                )}
+                <Field label="Email" help={user ? 'Optional' : 'Used to sign back in'}>
+                  <input type="email" value={form.email} autoComplete="email" required={!user}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                </Field>
+                {fields.map((f) => (
+                  <Field key={f.key} label={f.label + (f.required ? '' : ' (optional)')} help={f.help}>
+                    <AnswerInput f={f} answers={form.answers} setAnswer={setAnswer} />
+                  </Field>
+                ))}
+              </section>
 
-              {(showVoucher || !event.state.open) ? (
+              {donationAddon && selectedTier && (
+                <section className="reg-section">
+                  <h3 className="reg-heading">{donationAddon.label} <span className="help">(optional)</span></h3>
+                  <div className="chips" role="radiogroup" aria-label={donationAddon.label}>
+                    <button type="button" role="radio" aria-checked={!form.donationCents && !customOpen}
+                      className={`chip${!form.donationCents && !customOpen ? ' selected' : ''}`}
+                      onClick={() => { setCustomOpen(false); setCustomDonation(''); setForm({ ...form, donationCents: 0 }); }}>No thanks</button>
+                    {donationAddon.presets.map((c) => {
+                      const on = !customOpen && form.donationCents === c;
+                      return (
+                        <button key={c} type="button" role="radio" aria-checked={on} className={`chip${on ? ' selected' : ''}`}
+                          onClick={() => { setCustomOpen(false); setCustomDonation(''); setForm({ ...form, donationCents: c }); }}>
+                          {fmtMoney(c, selectedTier.currency)}
+                        </button>
+                      );
+                    })}
+                    {customOpen ? (
+                      <span className="chip selected chip-input">
+                        <span>$</span>
+                        <input inputMode="decimal" autoFocus placeholder="0.00" value={customDonation} aria-label="Other donation amount"
+                          onChange={(e) => {
+                            const v = e.target.value.replace(/[^0-9.]/g, '');
+                            setCustomDonation(v);
+                            const cents = Math.round(Number(v) * 100);
+                            setForm({ ...form, donationCents: Number.isFinite(cents) && cents > 0 ? cents : 0 });
+                          }} />
+                      </span>
+                    ) : (
+                      <button type="button" className="chip" onClick={() => { setCustomOpen(true); setForm({ ...form, donationCents: 0 }); }}>Other</button>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {selectedTier && !usingVoucher && selectedTier.priceCents + donationCents > 0 && (
+                <section className="reg-summary">
+                  <div className="spread"><span>{selectedTier.name}</span><span className="mono">{fmtMoney(selectedTier.priceCents, selectedTier.currency)}</span></div>
+                  {appliedDiscount && (
+                    <div className="spread reg-discount">
+                      <span>
+                        Code <strong className="mono">{appliedDiscount.code}</strong> ({appliedDiscount.label})
+                        {' '}<button type="button" className="link-btn" onClick={removeDiscount}>Remove</button>
+                      </span>
+                      <span className="mono">−{fmtMoney(selectedTier.priceCents - appliedDiscount.ticketCents, selectedTier.currency)}</span>
+                    </div>
+                  )}
+                  {donationCents > 0 && (
+                    <div className="spread"><span>Donation</span><span className="mono">{fmtMoney(donationCents, selectedTier.currency)}</span></div>
+                  )}
+                  <div className="spread reg-total"><strong>Total</strong><strong className="mono">{fmtMoney(totalCents, selectedTier.currency)}</strong></div>
+                  {totalCents > 0 && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
+                </section>
+              )}
+
+              {/* Codes: discount (money off a paid ticket) and voucher (free entry). */}
+              {!usingVoucher && selectedTier?.priceCents > 0 && !appliedDiscount && showDiscount && (
+                <Field label="Discount code">
+                  <div className="row" style={{ flexWrap: 'nowrap' }}>
+                    <input value={discountInput} autoFocus onChange={(e) => setDiscountInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyDiscount(); } }} />
+                    <button type="button" className="btn" disabled={!discountInput.trim()} onClick={applyDiscount}>Apply</button>
+                  </div>
+                  {discountMsg && <span className="small" style={{ color: 'var(--stop)' }}>{discountMsg}</span>}
+                </Field>
+              )}
+              {(showVoucher || !event.state.open) && (
                 <Field label="Voucher code" help="Grants free entry and a guaranteed spot">
-                  <input value={form.voucherCode}
-                    onChange={(e) => setForm({ ...form, voucherCode: e.target.value })} />
+                  <input value={form.voucherCode} onChange={(e) => setForm({ ...form, voucherCode: e.target.value })} />
                 </Field>
-              ) : (
-                <button type="button" className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => setShowVoucher(true)}>
-                  Have a voucher code?
-                </button>
+              )}
+              {((!showDiscount && !appliedDiscount && !usingVoucher && selectedTier?.priceCents > 0) || (!showVoucher && event.state.open)) && (
+                <div className="row" style={{ gap: 18 }}>
+                  {!showDiscount && !appliedDiscount && !usingVoucher && selectedTier?.priceCents > 0 && (
+                    <button type="button" className="link-btn" onClick={() => setShowDiscount(true)}>Have a discount code?</button>
+                  )}
+                  {!showVoucher && event.state.open && (
+                    <button type="button" className="link-btn" onClick={() => setShowVoucher(true)}>Have a voucher code?</button>
+                  )}
+                </div>
               )}
 
               {error && <p className="note bad">{error}</p>}

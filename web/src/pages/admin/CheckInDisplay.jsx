@@ -73,7 +73,7 @@ export default function CheckInDisplay() {
           fresh.forEach((r, i) => queueRef.current.push({ name: r.fursonaName || r.legalName, number: startNumber + i }));
           advanceQueue();
         }
-      } catch { /* a missed poll just tries again in POLL_MS — nothing to show for it */ }
+      } catch { /* a missed poll just tries again in POLL_MS; nothing to show for it */ }
       finally { inFlight = false; }
     };
 

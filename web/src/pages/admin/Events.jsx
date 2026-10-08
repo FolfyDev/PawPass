@@ -38,7 +38,10 @@ export default function Events() {
               <tr key={e.id}>
                 <td><Link to={`/admin/events/${e.id}`}><strong>{e.title}</strong></Link><br /><span className="small muted mono">/{e.slug}</span></td>
                 <td className="small">{fmtDate(e.startsAt, e.timezone)}</td>
-                <td>{e.registrationCount}{e.capacity ? ` / ${e.capacity}` : ''}</td>
+                <td>
+                  {e.registrationCount}{e.capacity ? ` / ${e.capacity}` : ''}
+                  {e.awaitingPayment > 0 && <span className="small muted"> ({e.awaitingPayment} awaiting payment)</span>}
+                </td>
                 <td>{e.published ? <Pill tone="go">Live</Pill> : <Pill>Draft</Pill>}</td>
                 <td style={{ textAlign: 'right' }}>
                   <Link className="btn sm" to={`/admin/events/${e.id}/attendees`}>Attendees</Link>

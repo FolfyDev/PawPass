@@ -32,7 +32,7 @@ export async function syncTier(tier, event) {
   try {
     const sellable = tier.active && tier.priceCents > 0;
     const product = {
-      name: `${event.title} — ${tier.name}`,
+      name: `${event.title}: ${tier.name}`,
       description: tier.description || '',
       active: sellable,
       metadata: { pawpassTierId: tier.id, pawpassEventId: event.id },

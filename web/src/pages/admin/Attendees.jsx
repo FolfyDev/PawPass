@@ -57,7 +57,8 @@ function compareRows(a, b, key, dir) {
 
 export default function Attendees() {
   const { id } = useParams();
-  const { settings } = useSession();
+  const { settings, user } = useSession();
+  const isOwner = user?.role === 'OWNER';
   const [rows, setRows] = useState(null);
   const [q, setQ] = useState('');
   const [event, setEvent] = useState(null);
@@ -200,6 +201,37 @@ export default function Attendees() {
       load();
     } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
   };
+  const refund = async (p) => {
+    const left = p.amountCents - p.amountRefundedCents;
+    const input = prompt(
+      `Refund how much? Up to ${fmtMoney(left, p.currency)}.` +
+      (p.method === 'STRIPE' ? ' This goes back to their card through Stripe.' : ` Record the ${p.method.toLowerCase()} you hand back.`) +
+      ' Refunding everything also cancels the ticket.',
+      (left / 100).toFixed(2),
+    );
+    if (input == null) return;
+    setEditMsg('');
+    try {
+      const r = await api.post(`/api/admin/payments/${p.id}/refund`, { amount: input });
+      setEditing((e) => ({ ...e, ...r.registration }));
+      setEditForm((f) => ({ ...f, status: r.registration.status }));
+      setEditMsg('Refund done.'); setEditMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+  };
+
+  const decideCancel = async (approve) => {
+    if (approve && !confirm(`Refund ${fmtMoney(editing.paidCents, editing.currency)} and cancel this ticket? They'll be told by Telegram or email.`)) return;
+    setEditMsg('');
+    try {
+      const updated = await api.post(`/api/admin/registrations/${editing.code}/cancel-request`, { approve });
+      setEditing((e) => ({ ...e, ...updated }));
+      setEditForm((f) => ({ ...f, status: updated.status }));
+      setEditMsg(approve ? 'Refunded and cancelled.' : 'Declined. They have been told.'); setEditMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+  };
+
   const undoPayment = async (p) => {
     if (!confirm(`Remove the ${fmtMoney(p.amountCents, p.currency)} ${p.method.toLowerCase()} payment?`)) return;
     try {
@@ -276,7 +308,7 @@ export default function Attendees() {
     try {
       const r = await api.post('/api/admin/registrations/combine', { keepCode, dropCode });
       setMsg(r.skipped?.length
-        ? `Combined — ${r.skipped.length} other registration${r.skipped.length === 1 ? '' : 's'} couldn't be moved: ${r.skipped.join(', ')}.`
+        ? `Combined. ${r.skipped.length} other registration${r.skipped.length === 1 ? '' : 's'} couldn't be moved: ${r.skipped.join(', ')}.`
         : 'Registrations combined.');
       setMsgOk(true);
       setCombining(null);
@@ -344,21 +376,27 @@ export default function Attendees() {
                 <tr key={r.code}>
                   <td><input type="checkbox" checked={selected.has(r.code)} onChange={() => toggleRow(r.code)} /></td>
                   <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.code}</td>
-                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.badgeNumber ?? '—'}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}><strong>{r.fursonaName || '—'}</strong></td>
+                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.badgeNumber ?? '-'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}><strong>{r.fursonaName || '-'}</strong></td>
                   <td style={{ whiteSpace: 'nowrap' }}>{r.legalName}</td>
                   <td className="small muted">{r.telegram ? `@${r.telegram}` : ''}{r.email ? <><br />{r.email}</> : ''}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}><StatusPill status={r.status} checkedInAt={r.checkedInAt} /></td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{r.tierName ? <Pill tone={r.tierPriceCents ? 'go' : ''}>{r.tierName}</Pill> : '—'}</td>
-                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <StatusPill status={r.status} checkedInAt={r.checkedInAt} />
+                    {r.cancelRequestedAt && <> <Pill tone="wait">Cancel requested</Pill></>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{r.tierName ? <Pill tone={r.tierPriceCents ? 'go' : ''}>{r.tierName}</Pill> : '-'}</td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '-'}</td>
                   <td className="small muted">
                     {r.status === 'PENDING_PAYMENT' ? <Pill tone="wait">Checkout open</Pill>
+                      // A refunded ticket doesn't "owe" anything — it's done.
+                      : r.payments?.some((p) => p.status === 'REFUNDED') && !r.paidCents ? <span className="refunded-box">Refunded</span>
+                      : r.status === 'CANCELLED' ? '-'
                       : r.balanceDueCents > 0 ? <Pill tone="wait">Owes {fmtMoney(r.balanceDueCents, r.currency)}</Pill>
+                      : r.payments?.some((p) => p.amountRefundedCents > 0) ? <>{r.paymentMethod} · {fmtMoney(r.paidCents, r.currency)} <span className="refunded-box">Part refunded</span></>
                       : r.paidCents > 0 ? <>{r.paymentMethod} · {fmtMoney(r.paidCents, r.currency)}</>
-                      : r.payments?.some((p) => p.status === 'REFUNDED') ? <Pill>Refunded</Pill>
-                      : '—'}
+                      : '-'}
                   </td>
-                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.printCount ? `${r.printCount}×` : '—'}</td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.printCount ? `${r.printCount}×` : '-'}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.createdAt, event?.timezone)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
@@ -424,10 +462,10 @@ export default function Attendees() {
             </div>
 
             <div className="grid-2">
-              <Field label="From" help={bulkSortKey === 'badgeNumber' ? 'Leave blank for no lower bound' : 'e.g. "A" — leave blank for no lower bound'}>
+              <Field label="From" help={bulkSortKey === 'badgeNumber' ? 'Optional' : 'e.g. "A", or blank'}>
                 <input value={bulkFrom} onChange={(e) => setBulkFrom(e.target.value)} placeholder={bulkSortKey === 'badgeNumber' ? '1' : 'A'} />
               </Field>
-              <Field label="To" help={bulkSortKey === 'badgeNumber' ? 'Leave blank for no upper bound' : 'e.g. "M" — leave blank for no upper bound'}>
+              <Field label="To" help={bulkSortKey === 'badgeNumber' ? 'Optional' : 'e.g. "M", or blank'}>
                 <input value={bulkTo} onChange={(e) => setBulkTo(e.target.value)} placeholder={bulkSortKey === 'badgeNumber' ? '50' : 'M'} />
               </Field>
             </div>
@@ -469,8 +507,22 @@ export default function Attendees() {
           <div className="stack">
             <p className="mono small muted" style={{ margin: 0 }}>{editing.code}</p>
             {editMsg && <p className={`note ${editMsgOk ? 'good' : 'bad'}`}>{editMsg}</p>}
+            {editing.cancelRequestedAt && (
+              <div className="note stack" style={{ margin: 0, gap: 8 }}>
+                <span>
+                  <strong>Cancellation requested</strong> {fmtDate(editing.cancelRequestedAt, event?.timezone)}
+                  {editing.cancelRequestNote && <>: “{editing.cancelRequestNote}”</>}
+                </span>
+                {isOwner ? (
+                  <div className="row">
+                    <button className="btn sm danger" onClick={() => decideCancel(true)}>Approve and refund {fmtMoney(editing.paidCents, editing.currency)}</button>
+                    <button className="btn sm" onClick={() => decideCancel(false)}>Decline</button>
+                  </div>
+                ) : <span className="small muted">An owner needs to approve or decline it.</span>}
+              </div>
+            )}
             {editing.status === 'PENDING_PAYMENT' && (
-              <p className="note" style={{ margin: 0 }}>This person is partway through paying online. Their spot is held until Stripe confirms the payment or the checkout expires — marking them Confirmed here gives them the spot without payment.</p>
+              <p className="note" style={{ margin: 0 }}>Paying online right now. Marking them Confirmed gives them the spot without payment.</p>
             )}
             <Field label="Registration status">
               <div className="row">
@@ -499,7 +551,7 @@ export default function Attendees() {
               </div>
             </Field>
 
-            <Field label="Telegram account" help="Search by name or username to link or replace">
+            <Field label="Telegram account" help="Search to link">
               <div className="stack" style={{ gap: 6 }}>
                 <p className="small muted" style={{ margin: 0 }}>{editing.telegram ? `Currently @${editing.telegram}` : 'Not linked'}</p>
                 <input placeholder="Search name or username" value={telegramQuery} onChange={(e) => setTelegramQuery(e.target.value)} />
@@ -550,7 +602,7 @@ export default function Attendees() {
                 <select value={editForm.ticketTierId} onChange={(e) => setEditForm({ ...editForm, ticketTierId: e.target.value })}>
                   <option value="">None</option>
                   {tiers.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name} — {t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free'}{t.active ? '' : ' (not on sale)'}</option>
+                    <option key={t.id} value={t.id}>{t.name} · {t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free'}{t.active ? '' : ' (not on sale)'}</option>
                   ))}
                 </select>
               </Field>
@@ -569,24 +621,32 @@ export default function Attendees() {
                 <table>
                   <tbody>
                     {editing.payments.map((p) => (
-                      <tr key={p.id}>
+                      <tr key={p.id} className={p.status === 'REFUNDED' ? 'refunded-row' : undefined}>
                         <td className="small">{fmtDate(p.paidAt || p.createdAt, event?.timezone)}</td>
                         <td className="small">{p.method}</td>
                         <td className="mono small">
                           {fmtMoney(p.amountCents, p.currency)}
                           {p.amountRefundedCents > 0 && <span className="muted"> ({fmtMoney(p.amountRefundedCents, p.currency)} refunded)</span>}
                         </td>
-                        <td>{p.status === 'PAID' ? <Pill tone="go">Paid</Pill> : <Pill tone={p.status === 'PENDING' ? 'wait' : ''}>{p.status.replace('_', ' ').toLowerCase()}</Pill>}</td>
+                        <td>
+                          {p.status === 'PAID' ? <Pill tone="go">Paid</Pill>
+                            : p.status === 'REFUNDED' ? <span className="refunded-box">Refunded</span>
+                            : p.status === 'PARTIALLY_REFUNDED' ? <span className="refunded-box">Part refunded</span>
+                            : <Pill tone={p.status === 'PENDING' ? 'wait' : ''}>{p.status.replace('_', ' ').toLowerCase()}</Pill>}
+                        </td>
                         <td className="small muted">{p.note}</td>
                         <td style={{ textAlign: 'right' }}>
-                          {p.method !== 'STRIPE' && <button className="btn sm ghost" onClick={() => undoPayment(p)}>Remove</button>}
+                          {isOwner && ['PAID', 'PARTIALLY_REFUNDED'].includes(p.status) && (
+                            <button className="btn sm ghost" onClick={() => refund(p)}>Refund</button>
+                          )}
+                          {p.method !== 'STRIPE' && p.amountRefundedCents === 0 && <button className="btn sm ghost" onClick={() => undoPayment(p)}>Remove</button>}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : <p className="small muted" style={{ margin: 0 }}>No payments recorded.</p>}
-              <p className="small muted" style={{ margin: 0 }}>Stripe payments are refunded from the Stripe dashboard; the refund shows up here automatically.</p>
+              <p className="small muted" style={{ margin: 0 }}>Stripe refunds go back to the card.</p>
               <div className="row" style={{ alignItems: 'end' }}>
                 <PaymentButtons value={paymentDraft.method} onChange={(v) => setPaymentDraft({ ...paymentDraft, method: v })} />
                 <input type="number" step="0.01" min="0" placeholder="Amount" value={paymentDraft.amount} style={{ width: 100 }}
@@ -605,8 +665,7 @@ export default function Attendees() {
           footer={<button className="btn ghost" onClick={() => setCombining(null)}>Cancel</button>}>
           <div className="stack">
             <p className="small muted" style={{ margin: 0 }}>
-              Pick which registration to keep — the other is cancelled, and any Telegram account or email the kept one is
-              missing gets copied over from it.
+              Pick the one to keep. The other is cancelled.
             </p>
             {combining.map((r) => (
               <div key={r.code} className="spread card" style={{ padding: 12, alignItems: 'center' }}>

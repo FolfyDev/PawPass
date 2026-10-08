@@ -4,24 +4,51 @@ import { api } from '../../lib/api.js';
 import EventTabs from '../../components/EventTabs.jsx';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+const minus = (n) => (n ? `−${money(n)}` : money(0));
+const METHOD_LABEL = { CASH: 'Cash', CARD: 'Card', PAYPAL: 'PayPal', STRIPE: 'Stripe (online)', OTHER: 'Other' };
+const CATEGORIES = [['tickets', 'Tickets'], ['donations', 'Donations'], ['merch', 'Merch']];
 
-function MethodTable({ title, methods, byMethod, total }) {
+function Stat({ label, value, big }) {
   return (
-    <div className="card" style={{ padding: 0, overflow: 'auto' }}>
-      <p className="eyebrow" style={{ padding: '14px 16px 0' }}>{title}</p>
+    <div className="stack" style={{ gap: 2 }}>
+      <span className="eyebrow">{label}</span>
+      <strong className="mono" style={{ fontSize: big ? 30 : 20 }}>{value}</strong>
+    </div>
+  );
+}
+
+/// One table: a row per payment method that actually has money on it, a
+/// column per kind of income. Count shown small next to each amount.
+function Breakdown({ data }) {
+  const rows = data.methods.filter((m) => CATEGORIES.some(([k]) => data[k][m]?.count));
+  if (!rows.length) return <p className="muted" style={{ margin: 0 }}>Nothing collected yet.</p>;
+  const cell = (k, m) => {
+    const v = data[k][m];
+    if (!v?.count) return <span className="muted">-</span>;
+    return <>{money(v.total)} <span className="small muted">×{v.count}</span></>;
+  };
+  const rowTotal = (m) => CATEGORIES.reduce((sum, [k]) => sum + (data[k][m]?.total || 0), 0);
+  return (
+    <div style={{ overflow: 'auto' }}>
       <table>
-        <thead><tr><th>Method</th><th>Count</th><th>Total</th></tr></thead>
+        <thead>
+          <tr><th>Method</th>{CATEGORIES.map(([k, label]) => <th key={k} style={{ textAlign: 'right' }}>{label}</th>)}<th style={{ textAlign: 'right' }}>Total</th></tr>
+        </thead>
         <tbody>
-          {methods.filter((m) => m !== 'STRIPE' || byMethod.STRIPE?.count).map((m) => (
+          {rows.map((m) => (
             <tr key={m}>
-              <td>{m}</td>
-              <td className="mono">{byMethod[m]?.count ?? 0}</td>
-              <td className="mono">{money(byMethod[m]?.total)}</td>
+              <td>{METHOD_LABEL[m] || m}</td>
+              {CATEGORIES.map(([k]) => <td key={k} className="mono" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{cell(k, m)}</td>)}
+              <td className="mono" style={{ textAlign: 'right' }}><strong>{money(rowTotal(m))}</strong></td>
             </tr>
           ))}
         </tbody>
         <tfoot>
-          <tr><td><strong>Total</strong></td><td /><td className="mono"><strong>{money(total)}</strong></td></tr>
+          <tr>
+            <td><strong>Total</strong></td>
+            {CATEGORIES.map(([k]) => <td key={k} className="mono" style={{ textAlign: 'right' }}><strong>{money(data[`${k}Total`])}</strong></td>)}
+            <td className="mono" style={{ textAlign: 'right' }}><strong>{money(data.grandTotal)}</strong></td>
+          </tr>
         </tfoot>
       </table>
     </div>
@@ -51,18 +78,21 @@ export default function Reconciliation() {
       </div>
       <EventTabs id={id} />
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <p className="eyebrow" style={{ marginBottom: 4 }}>Grand total collected</p>
-        <p style={{ fontSize: 32, fontWeight: 700, margin: 0 }}>{money(data.grandTotal)}</p>
-        <p className="small muted" style={{ margin: '6px 0 0' }}>
-          {money(data.ticketsTotal)} from tickets · {money(data.donationsTotal)} from donations · {money(data.merchTotal)} from merch
-        </p>
-        {data.tickets.STRIPE?.count > 0 && (
-          <p className="small muted" style={{ margin: '4px 0 0' }}>
-            {money(data.tickets.STRIPE.total)} of that was paid online through Stripe (net of refunds, before Stripe's fees) and is not in the cash box.
-          </p>
-        )}
+      <div className="card row" style={{ marginBottom: 20, gap: 40, alignItems: 'flex-end' }}>
+        <Stat label="Grand total" value={money(data.grandTotal)} big />
+        <Stat label="Tickets" value={money(data.ticketsTotal)} />
+        <Stat label="Donations" value={money(data.donationsTotal)} />
+        <Stat label="Merch" value={money(data.merchTotal)} />
       </div>
+
+      {data.stripe?.count > 0 && (
+        <div className="card row" style={{ marginBottom: 20, gap: 40, alignItems: 'flex-end' }}>
+          <Stat label="Stripe charged" value={money(data.stripe.grossCents / 100)} />
+          <Stat label="Refunded" value={minus(data.stripe.refundedCents / 100)} />
+          <Stat label="Stripe fees" value={minus(data.stripe.feeCents / 100)} />
+          <Stat label="Net payout" value={money(data.stripe.netCents / 100)} />
+        </div>
+      )}
 
       {data.unpaidTickets > 0 && (
         <p className="note" style={{ marginBottom: 20 }}>
@@ -72,10 +102,8 @@ export default function Reconciliation() {
         </p>
       )}
 
-      <div className="grid-2" style={{ gap: 20 }}>
-        <MethodTable title="Tickets" methods={data.methods} byMethod={data.tickets} total={data.ticketsTotal} />
-        <MethodTable title="In-person donations" methods={data.methods} byMethod={data.donations} total={data.donationsTotal} />
-        <MethodTable title="Merch sales" methods={data.methods} byMethod={data.merch} total={data.merchTotal} />
+      <div className="card">
+        <Breakdown data={data} />
       </div>
     </>
   );

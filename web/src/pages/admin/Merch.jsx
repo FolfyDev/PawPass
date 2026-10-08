@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
-import { Empty, PaymentButtons } from '../../components/Bits.jsx';
+import { useSession } from '../../lib/session.jsx';
+import { Empty, PaymentButtons, Pill, fmtMoney } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 
-const money = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
+const money = (n) => (n == null ? '-' : `$${Number(n).toFixed(2)}`);
 
 export default function Merch() {
   const { id } = useParams();
@@ -18,8 +19,16 @@ export default function Merch() {
   const [newItem, setNewItem] = useState({ name: '', price: '', maxCount: '' });
   const [sellDrafts, setSellDrafts] = useState({}); // itemId -> { quantity, paymentMethod, paymentNote }
   const [msg, setMsg] = useState('');
+  const { user } = useSession();
+  const isOwner = user?.role === 'OWNER';
+  const [preorders, setPreorders] = useState([]);
+  const [preorderTotal, setPreorderTotal] = useState(0);
+  const [stripeOn, setStripeOn] = useState(false);
 
   const load = () => api.get(`/api/admin/events/${id}/merch`).then((r) => {
+    setPreorders(r.preorders);
+    setPreorderTotal(r.preorderTotal);
+    setStripeOn(r.stripe);
     setItems(r.items);
     setSales(r.sales);
     setRevenueTotal(r.revenueTotal);
@@ -67,6 +76,19 @@ export default function Merch() {
     } catch (e) { setMsg(e.message); }
   };
 
+  const pickup = async (order, pickedUp) => {
+    setMsg('');
+    try { await api.post(`/api/admin/merch-orders/${order.id}/pickup`, { pickedUp }); load(); }
+    catch (e) { setMsg(e.message); }
+  };
+
+  const refundOrder = async (order) => {
+    if (!confirm(`Refund ${fmtMoney(order.totalCents)} to ${order.buyer?.name || 'the buyer'}?`)) return;
+    setMsg('');
+    try { await api.post(`/api/admin/payments/${order.paymentId}/refund`, {}); load(); }
+    catch (e) { setMsg(e.message); }
+  };
+
   const undo = async (sale) => {
     if (!confirm(`Undo the sale of ${sale.quantity} × ${sale.itemName}?`)) return;
     setMsg('');
@@ -102,7 +124,7 @@ export default function Merch() {
           <h1 style={{ margin: 0 }}>Merch</h1>
         </div>
         <div className="row">
-          <span className="small muted">Merch: {money(revenueTotal)} · Donations: {money(donationsTotal)}</span>
+          <span className="small muted">Merch: {money(revenueTotal)}{preorderTotal ? ` · Pre-orders: ${money(preorderTotal)}` : ''} · Donations: {money(donationsTotal)}</span>
           <a className="btn" href={`${api.base}/api/admin/events/${id}/merch.csv`}>Export CSV</a>
         </div>
       </div>
@@ -116,7 +138,7 @@ export default function Merch() {
         {items.length > 0 && (
           <div style={{ overflow: 'auto' }}>
             <table>
-              <thead><tr><th>Name</th><th>Price</th><th>Max</th><th>Sold</th><th>Remaining</th><th /></tr></thead>
+              <thead><tr><th>Name</th><th>Price</th><th>Max</th><th>Sold</th><th>Remaining</th><th title="Sell online before the event">Pre-order</th><th /></tr></thead>
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id}>
@@ -124,7 +146,7 @@ export default function Merch() {
                       <input defaultValue={item.name} onBlur={(e) => e.target.value !== item.name && editItem(item, { name: e.target.value })} style={{ minWidth: 120 }} />
                     </td>
                     <td>
-                      <input type="number" step="0.01" defaultValue={item.price ?? ''} placeholder="—"
+                      <input type="number" step="0.01" defaultValue={item.price ?? ''} placeholder="-"
                         onBlur={(e) => Number(e.target.value || 0) !== (item.price || 0) && editItem(item, { price: e.target.value })}
                         style={{ width: 80 }} />
                     </td>
@@ -135,6 +157,11 @@ export default function Merch() {
                     </td>
                     <td className="mono">{item.soldCount}</td>
                     <td className="mono">{item.remaining}</td>
+                    <td>
+                      <input type="checkbox" checked={item.preorder} disabled={!stripeOn && !item.preorder}
+                        title={stripeOn ? 'Let attendees pre-order this online' : 'Needs Stripe set up'}
+                        onChange={(e) => editItem(item, { preorder: e.target.checked })} />
+                    </td>
                     <td style={{ textAlign: 'right' }}>
                       <button className="btn sm danger" onClick={() => removeItem(item)}>Delete</button>
                     </td>
@@ -151,6 +178,34 @@ export default function Merch() {
           <button className="btn primary" onClick={addItem}>Add item</button>
         </div>
       </div>
+
+      {preorders.length > 0 && (
+        <div className="card stack" style={{ marginBottom: 24 }}>
+          <h2 style={{ margin: 0 }}>Pre-orders</h2>
+          <p className="small muted" style={{ margin: 0 }}>Paid online. Mark them picked up as you hand them over.</p>
+          <div style={{ overflow: 'auto' }}>
+            <table>
+              <thead><tr><th>Buyer</th><th>Items</th><th>Paid</th><th>Status</th><th /></tr></thead>
+              <tbody>
+                {preorders.map((o) => (
+                  <tr key={o.id}>
+                    <td>{o.buyer?.name}{o.buyer?.telegramUsername && <span className="small muted"> @{o.buyer.telegramUsername}</span>}</td>
+                    <td className="small">{o.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')}</td>
+                    <td className="mono">{fmtMoney(o.totalCents, o.currency)}</td>
+                    <td>{o.status === 'REFUNDED' ? <Pill>Refunded</Pill> : o.pickedUpAt ? <Pill tone="go">Picked up</Pill> : <Pill tone="wait">Waiting</Pill>}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {o.status === 'PAID' && (o.pickedUpAt
+                        ? <button className="btn sm ghost" onClick={() => pickup(o, false)}>Undo pickup</button>
+                        : <button className="btn sm primary" onClick={() => pickup(o, true)}>Mark picked up</button>)}
+                      {isOwner && o.status === 'PAID' && o.paymentId && <button className="btn sm ghost" onClick={() => refundOrder(o)}>Refund</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {items.length > 0 && (
         <div className="card stack" style={{ marginBottom: 24 }}>
@@ -175,7 +230,7 @@ export default function Merch() {
 
       <div className="card stack" style={{ marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>Record a donation</h2>
-        <p className="small muted" style={{ margin: 0 }}>For cash/card given in person that isn't tied to a ticket or an item — tracked in Cash reconciliation.</p>
+        <p className="small muted" style={{ margin: 0 }}>Cash or card given in person.</p>
         <div className="row" style={{ alignItems: 'flex-end' }}>
           <input type="number" step="0.01" min="0.01" placeholder="Amount" value={donationDraft.amount}
             onChange={(e) => setDonationDraft({ ...donationDraft, amount: e.target.value })} style={{ width: 100 }} />
@@ -199,7 +254,7 @@ export default function Merch() {
                     <td className="small muted">{new Date(d.createdAt).toLocaleString()}</td>
                     <td className="mono">{money(d.amount)}</td>
                     <td>{d.paymentMethod}</td>
-                    <td className="small muted">{d.note || '—'}</td>
+                    <td className="small muted">{d.note || '-'}</td>
                     <td className="small muted">{d.processedByName}</td>
                     <td style={{ textAlign: 'right' }}>
                       <button className="btn sm danger" onClick={() => undoDonation(d)}>Undo</button>
@@ -225,7 +280,7 @@ export default function Merch() {
                     <td>{s.itemName}</td>
                     <td className="mono">{s.quantity}</td>
                     <td>{s.paymentMethod}</td>
-                    <td className="small muted">{s.paymentNote || '—'}</td>
+                    <td className="small muted">{s.paymentNote || '-'}</td>
                     <td className="small muted">{s.processedByName}</td>
                     <td style={{ textAlign: 'right' }}>
                       <button className="btn sm danger" onClick={() => undo(s)}>Undo</button>

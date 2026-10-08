@@ -7,7 +7,7 @@ const esc = (s) => String(s ?? '')
   function openPrintWindow(tail) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
-    if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
+    if (!win) return reject(new Error('Your browser blocked the print window. Allow pop-ups for this site.'));
     win.document.write(`<!doctype html><title>${esc(tail)}</title>
 <style>@page{size:auto;margin:0} html,body{margin:0;padding:0;height:100%} img{width:100%;height:100%;object-fit:contain;display:block}</style>
 <img id="badge" src="${esc(`${api.base}/api/badges/registration/${tail}.png`)}">`);
@@ -30,7 +30,7 @@ export async function printBadge(value, mode) {
 function openPrintWindowMulti(tails) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
-    if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
+    if (!win) return reject(new Error('Your browser blocked the print window. Allow pop-ups for this site.'));
     const imgs = tails.map((t) => `<img class="badge" src="${esc(`${api.base}/api/badges/registration/${t}.png`)}">`).join('');
     win.document.write(`<!doctype html><title>${tails.length} badges</title>
 <style>@page{size:auto;margin:0} html,body{margin:0;padding:0}
@@ -82,7 +82,7 @@ function sortRows(rows, key) {
 
 export function printAttendeeList(rows, eventTitle, columnKeys, sortKey = 'badgeNumber') {
   const win = window.open('', '_blank', 'width=900,height=700');
-  if (!win) throw new Error('Your browser blocked the print window — allow pop-ups for this site.');
+  if (!win) throw new Error('Your browser blocked the print window. Allow pop-ups for this site.');
 
   const cols = columnKeys?.length
     ? ATTENDEE_LIST_COLUMNS.filter(([key]) => columnKeys.includes(key))
@@ -100,7 +100,7 @@ export function printAttendeeList(rows, eventTitle, columnKeys, sortKey = 'badge
   const head = cols.map(([, label]) => `<th>${esc(label)}</th>`).join('');
   const body = sorted.map((r) => `<tr>${cols.map(([key]) => `<td>${esc(cell(r, key))}</td>`).join('')}</tr>`).join('');
 
-  win.document.write(`<!doctype html><title>${esc(eventTitle || 'Attendees')} — attendee list</title>
+  win.document.write(`<!doctype html><title>${esc(eventTitle || 'Attendees')} attendee list</title>
 <style>
 @page { size: 8.5in 11in; margin: 0.5in; }
 * { box-sizing: border-box; }

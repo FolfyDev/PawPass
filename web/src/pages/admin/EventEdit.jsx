@@ -1,24 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
-
-// Renders a stored UTC instant as the wall-clock string an
-// <input type="datetime-local"> expects — in the event's own timezone, not
-// the browser's. Editing and re-saving that string goes back through the
-// same zone server-side (see zonedTimeToUtc in server/src/lib/tz.js), so the
-// round trip is consistent regardless of what timezone the admin is sitting in.
-const DT_PARTS = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false };
-const localInZone = (d, tz) => {
-  if (!d) return '';
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { ...DT_PARTS, timeZone: tz || 'UTC' }).formatToParts(new Date(d)).map((p) => [p.type, p.value]),
-  );
-  const hour = parts.hour === '24' ? '00' : parts.hour;
-  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
-};
+import { localInZone } from '../../lib/tz.js';
 
 export default function EventEdit() {
   const { id } = useParams();
@@ -109,22 +95,27 @@ export default function EventEdit() {
             <Field label="Closes"><input type="datetime-local" value={e.closesAt} onChange={(ev) => set('closesAt', ev.target.value || null)} /></Field>
           </div>
           <div className="row">
-            <label className="row small"><input type="checkbox" checked={e.published} onChange={(ev) => set('published', ev.target.checked)} /> Published — visible and open for sign-ups</label>
+            <label className="row small"><input type="checkbox" checked={e.published} onChange={(ev) => set('published', ev.target.checked)} /> Published</label>
             <label className="row small"><input type="checkbox" checked={e.waitlistEnabled} onChange={(ev) => set('waitlistEnabled', ev.target.checked)} /> Waitlist once full</label>
+          </div>
+          {/* A div, not <Field>: Field is a <label>, and labels can't nest. */}
+          <div className="field" role="radiogroup" aria-label="Cancelling a paid ticket">
+            <span>Cancelling a paid ticket</span>
+            <label className="choice">
+              <input type="radio" name="cancelPolicy" checked={e.cancelPolicy === 'AUTO_REFUND'} onChange={() => set('cancelPolicy', 'AUTO_REFUND')} />
+              <span><strong>Self-cancel and auto-refund</strong></span>
+            </label>
+            <label className="choice">
+              <input type="radio" name="cancelPolicy" checked={e.cancelPolicy !== 'AUTO_REFUND'} onChange={() => set('cancelPolicy', 'REQUEST')} />
+              <span><strong>Request a cancellation</strong> (an owner approves it)</span>
+            </label>
           </div>
           <Field label="Accent colour"><input type="color" value={e.accentColor} onChange={(ev) => set('accentColor', ev.target.value)} style={{ width: 70, padding: 4 }} /></Field>
         </section>
 
         <section className="card stack">
-          <h2 style={{ margin: 0 }}>Tickets</h2>
-          <p className="small muted" style={{ margin: 0 }}>
-            Free and paid ticket types, their prices, and Stripe sync live on the <Link to={`/admin/events/${id}/tickets`}>Tickets</Link> tab.
-          </p>
-        </section>
-
-        <section className="card stack">
           <h2 style={{ margin: 0 }}>Terms</h2>
-          <p className="small muted">Shown in a sheet on the web form before anyone can submit, and sent by the bot before <code className="mono">/accept</code>.</p>
+          <p className="small muted">Shown before anyone registers.</p>
           <Field label="Heading"><input value={e.tosTitle} onChange={(ev) => set('tosTitle', ev.target.value)} /></Field>
           <Field label="Body"><textarea style={{ minHeight: 220 }} value={e.tosBody} onChange={(ev) => set('tosBody', ev.target.value)} /></Field>
         </section>
@@ -134,7 +125,7 @@ export default function EventEdit() {
             <h2 style={{ margin: 0 }}>Extra questions</h2>
             <button className="btn sm" onClick={() => set('customFields', [...fields, { key: `q${fields.length + 1}`, label: 'New question', type: 'text', required: false }])}>Add question</button>
           </div>
-          <p className="small muted">These appear on the web form and the bot asks them in order.</p>
+          <p className="small muted">Asked on the web form and by the bot.</p>
           {fields.map((f, i) => (
             <div key={i} className="card" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
               <div className="grid-2">
@@ -147,14 +138,14 @@ export default function EventEdit() {
                   </select>
                 </Field>
                 <Field label="Options" help={f.type === 'qualifier'
-                  ? 'Comma separated, in priority order — the highest one an attendee picks is what prints on the badge'
+                  ? 'Comma separated, highest priority first'
                   : 'Comma separated, for select'}>
                   <input value={(f.options || []).join(', ')} onChange={(ev) => setField(i, { options: ev.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
               </div>
               {f.type === 'qualifier' && (
                 <p className="small muted" style={{ marginTop: 6 }}>
-                  Attendees can pick more than one of these. Only one "Special qualifier" field is used per event — the badge shows whichever picked option is listed first above.
+                  Attendees can pick several. The badge shows the highest one.
                 </p>
               )}
               <div className="spread" style={{ marginTop: 10 }}>

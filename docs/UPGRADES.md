@@ -111,6 +111,8 @@ The schema is versioned in `server/prisma/migrations/`, one folder per change:
 |---|---|
 | `0001_v1_baseline` | The final PawPass v1 schema, exactly. |
 | `0002_v2_ticket_tiers_stripe` | v2: configurable ticket tiers synced to Stripe, a `Payment` ledger, and seat holds during checkout. Converts v1 data in place (below). |
+| `0003_payments_addons` | Donation add-on, discount codes, tier sale windows, Stripe fees, merch pre-orders. Additive only; no data conversion. |
+| `0004_cancel_policy` | Per-event cancellation policy for paid tickets (auto-refund or request), and pending cancellation requests. Additive only; existing events start on "request". |
 
 v1 instances never had a migration history — they were kept in sync with
 `prisma db push`. The first time a v2 container starts against one,

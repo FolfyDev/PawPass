@@ -60,7 +60,7 @@ export default function Login() {
 
       {tab === null && config && (
         <p className="note bad">
-          No sign-in method is configured on this instance. Set a Telegram bot token, SMTP credentials, or ask an organizer for access.
+          No sign-in method is set up yet. Ask an organizer for access.
         </p>
       )}
 
@@ -81,7 +81,7 @@ export default function Login() {
 
       {tab === 'email' && emailStep === 'enter' && (
         <form className="card stack" onSubmit={requestEmailCode}>
-          <p className="muted small">We'll email you a one-time code — no password to remember.</p>
+          <p className="muted small">We'll email you a one-time code. No password needed.</p>
           <Field label="Email"><input type="email" autoComplete="username" autoFocus value={email}
             onChange={(e) => setEmail(e.target.value)} /></Field>
           {error && <p className="note bad">{error}</p>}
@@ -104,7 +104,7 @@ export default function Login() {
 
       {tab === 'dev' && (
         <form className="card stack" onSubmit={(e) => { e.preventDefault(); run(() => api.post('/api/auth/dev', { name: devName, role: devRole })); }}>
-          <p className="note">Local development sign-in. This is refused unless the server is running on http and localhost.</p>
+          <p className="note">Local development sign-in (localhost only).</p>
           <Field label="Name"><input value={devName} onChange={(e) => setDevName(e.target.value)} /></Field>
           <Field label="Role">
             <select value={devRole} onChange={(e) => setDevRole(e.target.value)}>
@@ -118,7 +118,7 @@ export default function Login() {
 
       {!config?.telegram?.enabled && config?.emailCodeEnabled && tab !== 'dev' && (
         <p className="small muted" style={{ marginTop: 14 }}>
-          Telegram sign-in is off. You can still register for events and sign in with an emailed code.
+          Telegram sign-in is off. Use an emailed code instead.
         </p>
       )}
     </div>

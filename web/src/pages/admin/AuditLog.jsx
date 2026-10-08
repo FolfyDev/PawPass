@@ -41,7 +41,7 @@ export default function AuditLog() {
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{new Date(r.createdAt).toLocaleString()}</td>
                   <td>{r.actor?.displayName || <span className="small muted">system</span>}</td>
                   <td className="mono small">{r.action}</td>
-                  <td className="small muted mono">{r.target || '—'}</td>
+                  <td className="small muted mono">{r.target || '-'}</td>
                   <td className="small muted" style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {r.meta && Object.keys(r.meta).length ? JSON.stringify(r.meta) : ''}
                   </td>

@@ -73,7 +73,7 @@ export default function Settings() {
       const allowed = Object.keys(s);
       const clean = Object.fromEntries(Object.entries(parsed).filter(([k]) => allowed.includes(k)));
       setS((cur) => ({ ...cur, ...clean }));
-      setMsg('Loaded — review the fields below, then Save settings to apply.');
+      setMsg('Loaded. Review, then Save settings.');
     } catch (err) {
       setMsg(err instanceof SyntaxError ? 'That file is not valid JSON.' : err.message);
     }
@@ -83,15 +83,13 @@ export default function Settings() {
     <>
       <p className="eyebrow">Instance</p>
       <h1>Settings</h1>
-      <p className="muted">Wording and branding for this deployment. Anything infrastructural — SMTP, printer address, wallet certificates — lives in <code className="mono">.env</code>.</p>
+      <p className="muted">Wording and branding. Server config lives in <code className="mono">.env</code>.</p>
       {msg && <p className="note good">{msg}</p>}
 
       <div className="card stack" style={{ marginBottom: 20 }}>
         <h2 style={{ margin: 0 }}>Import / export</h2>
         <p className="small muted" style={{ margin: 0 }}>
-          Download this instance's settings as JSON, edit the values, and re-upload to configure a new deployment in
-          one shot instead of retyping every field — the same idea as this repo's <code className="mono">.env.example</code>.
-          A starter file with sample values is checked in as <code className="mono">settings.example.json</code>.
+          Copy settings between instances as JSON. Starter file: <code className="mono">settings.example.json</code>.
         </p>
         <div className="row">
           <button className="btn" onClick={downloadSettings}>Download current settings</button>
@@ -103,16 +101,16 @@ export default function Settings() {
       </div>
 
       <div className="card stack">
-        <Field label="Banner" help="PNG, ~1170×123 — replaces the org name in the nav">
+        <Field label="Banner" help="PNG, about 1170×123">
           <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBanner} />
           {s.logoUrl && <img src={s.logoUrl} alt="Banner preview" style={{ height: 32, marginTop: 10, display: 'block' }} />}
         </Field>
         <label className="row small">
           <input type="checkbox" checked={!!s.useLightBanner} onChange={(e) => setS({ ...s, useLightBanner: e.target.checked })} />
-          Use a different banner when a visitor's site is in light mode
+          Different banner for light mode
         </label>
         {s.useLightBanner && (
-          <Field label="Light mode banner" help="Shown instead of the banner above only while the viewer has light mode on — switching back to dark shows the original">
+          <Field label="Light mode banner" help="Used in light mode">
             <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBannerLight} />
             {s.logoUrlLight && <img src={s.logoUrlLight} alt="Light mode banner preview" style={{ height: 32, marginTop: 10, display: 'block', background: '#fff', padding: 4 }} />}
           </Field>

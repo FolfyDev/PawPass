@@ -1,6 +1,17 @@
+import { trackRequest } from './busy.js';
+
 const BASE = import.meta.env.VITE_API_BASE || '';
 
 async function request(method, path, body) {
+  const done = trackRequest();
+  try {
+    return await send(method, path, body);
+  } finally {
+    done();
+  }
+}
+
+async function send(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: 'include',
@@ -14,6 +25,15 @@ async function request(method, path, body) {
 }
 
 async function upload(path, file) {
+  const done = trackRequest();
+  try {
+    return await sendFile(path, file);
+  } finally {
+    done();
+  }
+}
+
+async function sendFile(path, file) {
   const form = new FormData();
   form.append('file', file);
   const res = await fetch(`${BASE}${path}`, { method: 'POST', credentials: 'include', body: form });

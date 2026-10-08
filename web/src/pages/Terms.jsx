@@ -48,7 +48,7 @@ export default function Terms() {
           <p>
             You may sign in with a Telegram account or with an email and password. You are responsible for keeping
             your credentials secure. The preferred name you provide at registration must match the photo ID you bring
-            to check-in  providing false identity information may result in your registration being cancelled at
+            to check-in. Providing false identity information may result in your registration being cancelled at
             the door.
           </p>
         </section>
@@ -87,7 +87,7 @@ export default function Terms() {
         <section>
           <h2>5. Acceptable use</h2>
           <p>
-            You agree not to misuse the platform  including attempting to access another attendee's ticket or
+            You agree not to misuse the platform, including attempting to access another attendee's ticket or
             account, submitting fraudulent registrations, or interfering with check-in or badge printing at an
             event. We may suspend or cancel a registration or account that violates these Terms.
           </p>

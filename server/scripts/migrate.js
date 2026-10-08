@@ -14,14 +14,21 @@
 //                            baseline as applied, then deploy runs 0002+,
 //                            which converts the v1 data into the v2 shape.
 //
-// A database someone already `db push`ed with the v2 schema (local dev) is
-// detected by its TicketTier table and adopted without re-running 0002.
+// A database someone already `db push`ed with a newer schema (local dev) is
+// detected by the tables later migrations create (MARKERS) and adopted
+// without re-running them.
 
 import { execFileSync } from 'child_process';
 import { PrismaClient } from '@prisma/client';
 
 const BASELINE = '0001_v1_baseline';
-const V2 = '0002_v2_ticket_tiers_stripe';
+/// Each later migration and a table (or table + column) it creates — how a
+/// `db push`ed dev database reveals which migrations its schema already includes.
+const MARKERS = [
+  ['0002_v2_ticket_tiers_stripe', 'TicketTier'],
+  ['0003_payments_addons', 'DiscountCode'],
+  ['0004_cancel_policy', 'Event', 'cancelPolicy'],
+];
 
 const prisma = new PrismaClient();
 const prismaCli = (...args) => execFileSync('npx', ['prisma', ...args], { stdio: 'inherit' });
@@ -31,16 +38,26 @@ async function tableExists(name) {
   return row.exists;
 }
 
+async function columnExists(table, column) {
+  const [row] = await prisma.$queryRaw`
+    SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${table} AND column_name = ${column}) AS "exists"`;
+  return row.exists;
+}
+
 async function probe() {
   try {
+    const pushed = [];
+    for (const [migration, table, column] of MARKERS) {
+      if (column ? await columnExists(table, column) : await tableExists(table)) pushed.push(migration);
+    }
     return {
       adopted: await tableExists('_prisma_migrations'),
       hasData: await tableExists('Event'),
-      pushedV2: await tableExists('TicketTier'),
+      pushed,
     };
   } catch (e) {
     // P1003: the database itself doesn't exist yet — `migrate deploy` creates it.
-    if (e.errorCode === 'P1003' || /does not exist/.test(e.message)) return { adopted: false, hasData: false, pushedV2: false };
+    if (e.errorCode === 'P1003' || /does not exist/.test(e.message)) return { adopted: false, hasData: false, pushed: [] };
     throw e;
   } finally {
     await prisma.$disconnect();
@@ -48,13 +65,13 @@ async function probe() {
 }
 
 async function main() {
-  const { adopted, hasData, pushedV2 } = await probe();
+  const { adopted, hasData, pushed } = await probe();
 
   if (!adopted && hasData) {
-    if (pushedV2) {
+    if (pushed.length) {
       console.log('Found a v2 database created by `prisma db push` — adopting it into the migration history.');
       prismaCli('migrate', 'resolve', '--applied', BASELINE);
-      prismaCli('migrate', 'resolve', '--applied', V2);
+      for (const migration of pushed) prismaCli('migrate', 'resolve', '--applied', migration);
     } else {
       console.log('Found a v1 database with no migration history — syncing it to the final v1 schema, then upgrading to v2.');
       // No --accept-data-loss: if an older v1 database somehow can't reach the

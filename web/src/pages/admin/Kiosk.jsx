@@ -98,7 +98,7 @@ export default function Kiosk() {
         {result ? (
           <div className="stack">
             <h2 style={{ margin: 0 }}>Registered</h2>
-            <p style={{ margin: 0 }}><strong>{result.fursonaName || result.legalName}</strong> — {result.status === 'WAITLIST' ? 'waitlisted' : 'confirmed'}</p>
+            <p style={{ margin: 0 }}><strong>{result.fursonaName || result.legalName}</strong> · {result.status === 'WAITLIST' ? 'waitlisted' : 'confirmed'}</p>
             <p className="row" style={{ margin: 0 }}>
               <span className="code">{result.code}</span>
               {result.badgeNumber != null && <span className="small muted">Badge #{result.badgeNumber}</span>}
@@ -107,7 +107,7 @@ export default function Kiosk() {
             {result.paidCents > 0 && (
               <p className="small muted" style={{ margin: 0 }}>
                 Paid {fmtMoney(result.paidCents, result.currency)} via {result.paymentMethod}
-                {result.payments?.at(-1)?.note ? ` — ${result.payments.at(-1).note}` : ''}
+                {result.payments?.at(-1)?.note ? ` (${result.payments.at(-1).note})` : ''}
               </p>
             )}
             {printMsg && <p className={`note ${printMsgOk ? 'good' : 'bad'}`}>{printMsg}</p>}
@@ -166,7 +166,7 @@ export default function Kiosk() {
               </Field>
             ))}
 
-            {tiers.length === 0 && <p className="note bad">This event has no ticket types on sale — add one on the Tickets tab.</p>}
+            {tiers.length === 0 && <p className="note bad">No ticket types on sale. Add one on the Tickets tab.</p>}
             {tiers.length > 1 && (
               <Field label="Ticket">
                 <div className="tiers">
@@ -191,7 +191,7 @@ export default function Kiosk() {
                   <input type="number" step="0.01" min="0" value={amount}
                     onChange={(e) => setForm({ ...form, paymentAmount: e.target.value })} />
                 </Field>
-                <Field label="Payment note" help="Optional — change given, etc.">
+                <Field label="Payment note" help="Optional">
                   <input value={form.paymentNote} onChange={(e) => setForm({ ...form, paymentNote: e.target.value })} />
                 </Field>
               </>

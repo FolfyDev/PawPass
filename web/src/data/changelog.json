@@ -1,11 +1,23 @@
 [
   {
-    "version": "2.0.0",
+    "version": "2.1.0",
     "date": "2026-10-08",
     "current": true,
     "highlights": [
+      "Optional donation add-on at checkout, with suggested amounts or a custom one",
+      "Discount codes: percent or amount off, limited by tier, uses, and expiry",
+      "Sale windows per ticket type, e.g. early bird until a date",
+      "Refund button in the attendee editor (Stripe and in-person payments)",
+      "Stripe fees and net payout on the Cash page",
+      "Merch pre-orders paid online and picked up at the event"
+    ]
+  },
+  {
+    "version": "2.0.0",
+    "date": "2026-10-08",
+    "highlights": [
       "Ticket types: create any number of free or paid tiers per event, each with its own price, limit, and description",
-      "Online payment through Stripe Checkout — seats are held during checkout and confirmed automatically once paid",
+      "Online payment through Stripe Checkout, seats are held during checkout and confirmed automatically once paid",
       "Paid tiers sync to Stripe as products and prices; refunds issued in Stripe cancel the ticket here",
       "Without Stripe configured, paid tiers are paid at the door and recorded at the kiosk",
       "Registration on the website now happens in a popup",

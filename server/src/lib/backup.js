@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 /// Version of the data.json inside a backup zip. Bump it alongside any schema
 /// migration that changes the shape of a backed-up model, and add a step to
 /// UPGRADES below so older backups still restore.
-export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION = 3;
 
 /// Each step converts a backup from version N to N + 1. They mirror the SQL
 /// migrations in prisma/migrations — a restore of an old backup should end up
@@ -59,6 +59,10 @@ const UPGRADES = {
 
     return { ...data, ticketTier: tiers, payment: payments };
   },
+  /// v2 -> v3 (0003_payments_addons): only new tables and defaulted columns.
+  2(data) {
+    return { discountCode: [], merchOrder: [], merchOrderItem: [], ...data };
+  },
 };
 
 /// Takes a parsed data.json ({ meta, data }) of any supported version and
@@ -66,7 +70,7 @@ const UPGRADES = {
 export function upgradeBackup(parsed) {
   let version = parsed?.meta?.version;
   if (!Number.isInteger(version) || version < 1 || version > BACKUP_VERSION) {
-    throw new Error(`Unsupported backup version (${version ?? 'unknown'}) — this instance reads versions 1 to ${BACKUP_VERSION}.`);
+    throw new Error(`Unsupported backup version (${version ?? 'unknown'}). This instance reads versions 1 to ${BACKUP_VERSION}.`);
   }
   let data = parsed.data || {};
   while (version < BACKUP_VERSION) {

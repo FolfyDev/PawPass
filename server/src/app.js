@@ -35,11 +35,11 @@ if (env.encryptionKey === 'insecure-dev-encryption-key-change-me' && !isLocalDev
 
 const MIN_SECRET_LENGTH = 32;
 if (env.jwtSecret.length < MIN_SECRET_LENGTH && !isLocalDev()) {
-  console.error(`Refusing to start: JWT_SECRET is too short (${env.jwtSecret.length} chars) — use at least ${MIN_SECRET_LENGTH} random characters.`);
+  console.error(`Refusing to start: JWT_SECRET is too short (${env.jwtSecret.length} chars). Use at least ${MIN_SECRET_LENGTH} random characters.`);
   process.exit(1);
 }
 if (env.encryptionKey.length < MIN_SECRET_LENGTH && !isLocalDev()) {
-  console.error(`Refusing to start: ENCRYPTION_KEY is too short (${env.encryptionKey.length} chars) — use at least ${MIN_SECRET_LENGTH} random characters.`);
+  console.error(`Refusing to start: ENCRYPTION_KEY is too short (${env.encryptionKey.length} chars). Use at least ${MIN_SECRET_LENGTH} random characters.`);
   process.exit(1);
 }
 if ((env.owner.password || 'change-me-now') === 'change-me-now' && !isLocalDev()) {
@@ -148,7 +148,7 @@ app.get('/l/:code', loginLimiter, async (req, res) => {
 });
 
 app.use((err, req, res, _next) => {
-  console.error(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} — user ${req.user?.id ?? 'anon'}`, err);
+  console.error(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} user ${req.user?.id ?? 'anon'}`, err);
   res.status(500).json({ error: 'Something went wrong on our end.' });
 });
 

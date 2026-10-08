@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import { downloadEventIcs } from '../lib/ics.js';
-import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field } from '../components/Bits.jsx';
+import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
 import PaymentNotice from '../components/PaymentNotice.jsx';
 
@@ -60,16 +60,23 @@ export default function Tickets() {
   const [params, setParams] = useSearchParams();
   const [payNote, setPayNote] = useState('');
   const [payBusy, setPayBusy] = useState('');
-  const load = () => api.get('/api/my/tickets').then(setTickets);
+  const [orders, setOrders] = useState([]);
+  const load = () => {
+    api.get('/api/my/merch-orders').then(setOrders).catch(() => setOrders([]));
+    return api.get('/api/my/tickets').then(setTickets);
+  };
 
   // Back from Stripe Checkout: settle the session from Stripe right away
   // instead of waiting on the webhook, then show the confirmed ticket.
   useEffect(() => {
     const sessionId = params.get('session_id');
     if (params.get('paid') && sessionId) {
-      setPayNote('Payment received — confirming your ticket…');
+      setPayNote('Payment received. Confirming your ticket…');
       api.post('/api/my/payments/sync', { sessionId })
-        .then((r) => setPayNote(r.status === 'CONFIRMED' ? 'Payment received. You are registered!' : 'Payment received. Your ticket will update in a moment.'))
+        .then((r) => setPayNote(
+          r.kind === 'merch'
+            ? (r.status === 'PAID' ? 'Payment received. Your pre-order is confirmed. Pick it up at the merch table.' : 'Payment received. Your pre-order will update in a moment.')
+            : (r.status === 'CONFIRMED' ? 'Payment received. You are registered!' : 'Payment received. Your ticket will update in a moment.')))
         .catch(() => setPayNote('Payment received. Your ticket will update in a moment.'))
         .finally(() => { setParams({}, { replace: true }); load(); });
     } else {
@@ -77,6 +84,12 @@ export default function Tickets() {
     }
     // eslint-disable-next-line
   }, []);
+
+  const payOrder = async (id) => {
+    setPayBusy(id);
+    try { window.location.href = (await api.post(`/api/my/merch-orders/${id}/pay`)).url; }
+    catch (e) { setPayNote(e.message); setPayBusy(''); load(); }
+  };
 
   const pay = async (code) => {
     setPayBusy(code);
@@ -136,17 +149,33 @@ export default function Tickets() {
   const cancelTicket = async (code) => {
     const t = tickets.find((x) => x.code === code);
     const paid = t?.paidCents > 0;
-    if (!confirm(paid
-      ? 'Cancel this registration? This cannot be undone, and it does not refund your payment automatically — contact the organizers about a refund.'
-      : 'Cancel this registration? This cannot be undone.')) return;
+    const auto = t?.event?.cancelPolicy === 'AUTO_REFUND';
+    let note;
+    if (!paid) {
+      if (!confirm('Cancel this registration? This cannot be undone.')) return;
+    } else if (auto) {
+      if (!confirm(`Cancel this registration and get ${fmtMoney(t.paidCents, t.currency)} refunded? This cannot be undone.`)) return;
+    } else {
+      note = prompt('Ask to cancel and refund this ticket? Add a reason (optional):', '');
+      if (note == null) return;
+    }
     setCancelBusy(true);
     try {
-      await api.post(`/api/my/tickets/${code}/cancel`);
+      const { outcome } = await api.post(`/api/my/tickets/${code}/cancel`, { note });
+      setPayNote({
+        cancelled: 'Your registration has been cancelled.',
+        refunded: "Cancelled and refunded. It's back on your card in 5 to 10 business days.",
+        requested: "Request sent. We'll message you when it's approved.",
+        already_requested: "You've already asked to cancel this one.",
+      }[outcome]);
       closeModify();
       load();
     } catch (e) { alert(e.message); }
     finally { setCancelBusy(false); }
   };
+  const cancelLabel = (t) => (t?.paidCents > 0
+    ? (t.event?.cancelPolicy === 'AUTO_REFUND' ? 'Cancel and refund' : 'Request cancellation')
+    : 'Cancel registration');
 
   const submitTransfer = async () => {
     setTransferBusy(true);
@@ -186,8 +215,9 @@ export default function Tickets() {
               {t.status === 'PENDING_PAYMENT' ? (
                 // No QR until it's paid — it wouldn't get them in anyway.
                 <div className="stack" style={{ margin: '18px 0 6px', justifyItems: 'center', textAlign: 'center' }}>
-                  <p className="muted" style={{ margin: 0 }}>Your spot is held while you pay{t.tierPriceCents != null ? ` ${fmtMoney(t.tierPriceCents, t.currency)}` : ''}.</p>
-                  <button className="btn signal" disabled={payBusy === t.code} onClick={() => pay(t.code)}>
+                  <p className="muted" style={{ margin: 0 }}>Pay{t.tierPriceCents != null ? ` ${fmtMoney(t.tierPriceCents, t.currency)}` : ''} to confirm your spot.</p>
+                  <HoldCountdown until={t.holdExpiresAt} onExpire={() => setTimeout(load, 10_000)} />
+                  <button className="btn signal" disabled={payBusy === t.code} data-busy={payBusy === t.code ? 'true' : undefined} onClick={() => pay(t.code)}>
                     {payBusy === t.code ? 'Opening payment…' : 'Complete payment'}
                   </button>
                   <PaymentNotice />
@@ -201,7 +231,7 @@ export default function Tickets() {
                   <p className="code" style={{ textAlign: 'center', margin: 0 }}>{t.code}</p>
                 </>
               )}
-              <p className="small muted" style={{ textAlign: 'center' }}>{settings?.ticketFooter}</p>
+              {t.status !== 'PENDING_PAYMENT' && <p className="small muted" style={{ textAlign: 'center' }}>{settings?.ticketFooter}</p>}
             </div>
             <div className="stub-tear" />
             <div className="stub-foot stack">
@@ -209,24 +239,52 @@ export default function Tickets() {
                 <span className="small muted">{t.fursonaName || t.legalName}{t.tierName ? ` · ${t.tierName}` : ''}</span>
                 <StatusPill status={t.status} checkedInAt={t.checkedInAt} />
               </div>
+              {t.cancelRequestedAt && <p className="note" style={{ margin: 0 }}>Cancellation requested. Waiting on the organizers.</p>}
               {t.balanceDueCents > 0 && t.status !== 'PENDING_PAYMENT' && (
                 <p className="small muted" style={{ margin: 0 }}>Pay {fmtMoney(t.balanceDueCents, t.currency)} at the door.</p>
               )}
-              {t.status !== 'CANCELLED' && (
+              {t.status !== 'CANCELLED' && t.status !== 'PENDING_PAYMENT' && (
                 <button className="btn sm" onClick={() => openModify(t)}>Modify ticket</button>
               )}
-              <div className="row">
+              {/* No wallet pass for an unpaid ticket — its QR wouldn't get them in. */}
+              {t.status !== 'PENDING_PAYMENT' && <div className="row">
                 {settings?.wallet?.apple && (
                   <a className="btn sm" href={`${api.base}/api/my/tickets/${t.code}/apple.pkpass`}>Add to Apple Wallet</a>
                 )}
                 {settings?.wallet?.google && (
                   <button className="btn sm" onClick={() => google(t.code)}>Add to Google Wallet</button>
                 )}
-              </div>
+              </div>}
             </div>
           </div>
         ))}
       </div>
+
+      {orders.length > 0 && (
+        <section style={{ marginTop: 32 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Your pre-orders</p>
+          <div className="stack">
+            {orders.map((o) => (
+              <div key={o.id} className="card spread" style={{ alignItems: 'flex-start' }}>
+                <div className="stack" style={{ gap: 4 }}>
+                  <strong>{o.event?.title}</strong>
+                  <span className="small muted">{o.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')} · {fmtMoney(o.totalCents, o.currency)}</span>
+                  {o.status === 'PENDING' && <HoldCountdown until={o.holdExpiresAt} onExpire={() => setTimeout(load, 10_000)} />}
+                </div>
+                <div className="stack" style={{ gap: 6, justifyItems: 'end' }}>
+                  {o.status === 'PENDING' ? (
+                    <button className="btn signal sm" disabled={payBusy === o.id} data-busy={payBusy === o.id ? 'true' : undefined} onClick={() => payOrder(o.id)}>
+                      {payBusy === o.id ? 'Opening payment…' : 'Complete payment'}
+                    </button>
+                  ) : o.status === 'REFUNDED' ? <span className="pill">Refunded</span>
+                    : o.pickedUpAt ? <span className="pill go">Picked up</span>
+                    : <span className="pill go">Paid · pick up at merch</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {modifying && (
         <Modal title={`Modify · ${modifying.event.title}`} onClose={closeModify}
@@ -251,9 +309,9 @@ export default function Tickets() {
 
             {showTransferNudge && !transferOpen && (
               <div className="card stack" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
-                <p className="small muted" style={{ margin: 0 }}>Since you can't make it, cancel your spot, or hand it to someone else?</p>
+                <p className="small muted" style={{ margin: 0 }}>Can't make it? Cancel or transfer your spot.</p>
                 <div className="row">
-                  <button className="btn sm danger" disabled={cancelBusy} onClick={() => cancelTicket(modifying.code)}>Cancel registration</button>
+                  {!modifying.cancelRequestedAt && <button className="btn sm danger" disabled={cancelBusy} onClick={() => cancelTicket(modifying.code)}>{cancelLabel(modifying)}</button>}
                   <button className="btn sm" onClick={() => setTransferOpen(true)}>Transfer to someone else</button>
                 </div>
               </div>
@@ -268,8 +326,7 @@ export default function Tickets() {
               {transferOpen && !transferConfirm && (
                 <>
                   <p className="small muted" style={{ margin: 0 }}>
-                    Give this spot to someone else. They'll need to sign in with the Telegram account or email you provided.
-                    For Telegram, they need to have messaged the bot at least once already.
+                    Give this spot to someone else. Telegram users must have messaged the bot once.
                   </p>
                   <div className="segmented">
                     <button type="button" className={transferMethod === 'telegram' ? 'selected' : ''} onClick={() => setTransferMethod('telegram')}>Telegram username</button>
@@ -289,7 +346,7 @@ export default function Tickets() {
                 <>
                   <p className="note bad" style={{ margin: 0 }}>
                     Transfer this ticket to {transferMethod === 'telegram' ? `@${transferValue.replace(/^@/, '')}` : transferValue}?
-                    You will lose access to it, and any badge already printed for it will stop working at check-in. This cannot be undone.
+                    You'll lose it, and any printed badge stops working. This can't be undone.
                   </p>
                   {transferMsg && <p className="note bad" style={{ margin: 0 }}>{transferMsg}</p>}
                   <div className="row">
@@ -302,9 +359,13 @@ export default function Tickets() {
               )}
             </div>
 
-            <button className="btn danger sm" style={{ justifySelf: 'start' }} disabled={cancelBusy} onClick={() => cancelTicket(modifying.code)}>
-              Cancel this registration
-            </button>
+            {modifying.cancelRequestedAt ? (
+              <p className="small muted" style={{ margin: 0 }}>Cancellation requested. Waiting on the organizers.</p>
+            ) : (
+              <button className="btn danger sm" style={{ justifySelf: 'start' }} disabled={cancelBusy} onClick={() => cancelTicket(modifying.code)}>
+                {cancelLabel(modifying)}
+              </button>
+            )}
           </div>
         </Modal>
       )}

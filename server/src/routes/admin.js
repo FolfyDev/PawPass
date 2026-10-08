@@ -10,8 +10,10 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
-import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier } from '../lib/registrations.js';
-import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents } from '../lib/payments.js';
+import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier, HOLDS_SEAT } from '../lib/registrations.js';
+import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest } from '../lib/payments.js';
+import { normalizeCode, MAX_DONATION_CENTS } from '../lib/pricing.js';
+import { shapeOrder } from '../lib/merch.js';
 import { syncTier, archiveTierProduct, stripeEnabled } from '../lib/stripe.js';
 import { upgradeBackup, BACKUP_VERSION } from '../lib/backup.js';
 import { norm, normHandle } from '../lib/bans.js';
@@ -27,12 +29,20 @@ adminRouter.use(requireAdmin);
 
 /* ---------------- events ---------------- */
 
+/// `registrationCount` is spots taken against capacity: confirmed, plus spots
+/// held for someone mid-checkout (`awaitingPayment`, released if it expires).
+/// Cancelled and waitlisted registrations don't count.
 adminRouter.get('/events', async (_req, res) => {
-  const events = await prisma.event.findMany({
-    orderBy: { startsAt: 'desc' },
-    include: { _count: { select: { registrations: true } } },
-  });
-  res.json(events.map((e) => ({ ...summarize(e), registrationCount: e._count.registrations, published: e.published })));
+  const events = await prisma.event.findMany({ orderBy: { startsAt: 'desc' } });
+  const counts = await prisma.registration.groupBy({ by: ['eventId', 'status'], where: { status: { in: HOLDS_SEAT } }, _count: { _all: true } });
+  const count = (eventId, status) => counts.find((c) => c.eventId === eventId && c.status === status)?._count._all || 0;
+  res.json(events.map((e) => ({
+    ...summarize(e),
+    confirmed: count(e.id, 'CONFIRMED'),
+    awaitingPayment: count(e.id, 'PENDING_PAYMENT'),
+    registrationCount: count(e.id, 'CONFIRMED') + count(e.id, 'PENDING_PAYMENT'),
+    published: e.published,
+  })));
 });
 
 adminRouter.get('/events/:id', async (req, res) => {
@@ -41,7 +51,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -53,6 +63,18 @@ function eventPayload(body, timeZone) {
     if (body[k] === undefined) continue;
     if (['startsAt','endsAt','opensAt','closesAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
+    else if (k === 'donationAddonEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'cancelPolicy') {
+      if (!['AUTO_REFUND', 'REQUEST'].includes(body[k])) throw new RegistrationError('Choose how cancellations of paid tickets work.');
+      data[k] = body[k];
+    }
+    else if (k === 'donationAddonLabel') data[k] = String(body[k] || '').trim() || 'Add a donation';
+    else if (k === 'donationAddonPresets') {
+      const presets = (Array.isArray(body[k]) ? body[k] : []).map(Number);
+      if (presets.some((c) => !Number.isInteger(c) || c < 100 || c > MAX_DONATION_CENTS))
+        throw new RegistrationError(`Donation amounts must be between $1 and $${MAX_DONATION_CENTS / 100}.`);
+      data[k] = [...new Set(presets)].sort((a, b) => a - b).slice(0, 6);
+    }
     else data[k] = body[k];
   }
   return data;
@@ -60,7 +82,9 @@ function eventPayload(body, timeZone) {
 
 adminRouter.post('/events', requireOwner, async (req, res) => {
   const timeZone = req.body.timezone || env.defaultTimezone;
-  const data = eventPayload(req.body, timeZone);
+  let data;
+  try { data = eventPayload(req.body, timeZone); }
+  catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
   if (!data.slug || !data.title) return res.status(400).json({ error: 'A title and URL slug are required.' });
   const event = await prisma.event.create({ data: { startsAt: new Date(), endsAt: new Date(), timezone: timeZone, ...data } });
   await audit(req.user.id, 'event.create', event.id, { title: event.title });
@@ -71,7 +95,10 @@ adminRouter.patch('/events/:id', requireOwner, async (req, res) => {
   const before = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true, title: true } });
   if (!before) return res.status(404).json({ error: 'Event not found.' });
   const timeZone = req.body.timezone || before.timezone || env.defaultTimezone;
-  const event = await prisma.event.update({ where: { id: req.params.id }, data: eventPayload(req.body, timeZone) });
+  let data;
+  try { data = eventPayload(req.body, timeZone); }
+  catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
+  const event = await prisma.event.update({ where: { id: req.params.id }, data });
   // Stripe product names include the event title — keep them matching.
   if (event.title !== before.title) {
     const tiers = await prisma.ticketTier.findMany({ where: { eventId: event.id, stripeProductId: { not: null } } });
@@ -88,8 +115,16 @@ const CURRENCY = /^[a-z]{3}$/;
 
 /// Validates a tier create/update body into Prisma data. `existing` is the
 /// current row on update, so partial bodies only touch what they include.
-function tierPayload(body, existing) {
+/// Sale-window times arrive as wall-clock strings in the event's timezone,
+/// same as the event's own dates.
+function tierPayload(body, existing, timeZone) {
   const data = {};
+  for (const k of ['salesStartAt', 'salesEndAt']) {
+    if (body[k] !== undefined) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
+  }
+  const start = data.salesStartAt !== undefined ? data.salesStartAt : existing?.salesStartAt;
+  const end = data.salesEndAt !== undefined ? data.salesEndAt : existing?.salesEndAt;
+  if (start && end && end <= start) throw new RegistrationError('The sale has to end after it starts.');
   if (body.name !== undefined || !existing) {
     const name = String(body.name ?? '').trim();
     if (!name) throw new RegistrationError('Give the ticket type a name.');
@@ -99,7 +134,7 @@ function tierPayload(body, existing) {
   if (body.price !== undefined) {
     const cents = toCents(body.price) ?? 0;
     if (!Number.isInteger(cents) || cents < 0) throw new RegistrationError('Price must be zero or more.');
-    if (cents > 0 && cents < 50) throw new RegistrationError('Paid tickets must cost at least $0.50 — Stripe\'s minimum charge.');
+    if (cents > 0 && cents < 50) throw new RegistrationError('Paid tickets must cost at least $0.50.');
     data.priceCents = cents;
   }
   if (body.currency !== undefined) {
@@ -124,8 +159,10 @@ adminRouter.get('/events/:id/tiers', async (req, res) => {
   ]);
   const counts = await prisma.registration.groupBy({ by: ['ticketTierId'], where: { eventId: req.params.id }, _count: { _all: true } });
   const total = Object.fromEntries(counts.map((c) => [c.ticketTierId, c._count._all]));
+  const event = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true } });
   res.json({
     stripe: stripeEnabled(),
+    timezone: event?.timezone,
     tiers: tiers.map((t) => ({ ...shapeTier(t, held[t.id] || 0), registrationCount: total[t.id] || 0 })),
   });
 });
@@ -134,7 +171,7 @@ adminRouter.post('/events/:id/tiers', requireOwner, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   let data;
-  try { data = tierPayload(req.body || {}, null); }
+  try { data = tierPayload(req.body || {}, null, event.timezone); }
   catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
   if (data.sortOrder === undefined) data.sortOrder = await prisma.ticketTier.count({ where: { eventId: event.id } });
   const tier = await syncTier(await prisma.ticketTier.create({ data: { ...data, eventId: event.id } }), event);
@@ -146,7 +183,7 @@ adminRouter.patch('/tiers/:id', requireOwner, async (req, res) => {
   const existing = await prisma.ticketTier.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!existing) return res.status(404).json({ error: 'Ticket type not found.' });
   let data;
-  try { data = tierPayload(req.body || {}, existing); }
+  try { data = tierPayload(req.body || {}, existing, existing.event.timezone); }
   catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
   if (data.capacity != null) {
     const held = (await heldByTier(existing.eventId))[existing.id] || 0;
@@ -164,10 +201,84 @@ adminRouter.delete('/tiers/:id', requireOwner, async (req, res) => {
   const tier = await prisma.ticketTier.findUnique({ where: { id: req.params.id }, include: { _count: { select: { registrations: true } } } });
   if (!tier) return res.status(404).json({ error: 'Ticket type not found.' });
   if (tier._count.registrations > 0)
-    return res.status(400).json({ error: 'People have registered on this ticket type — turn off "On sale" instead of deleting it.' });
+    return res.status(400).json({ error: 'People are registered on this ticket type. Turn off "On sale" instead.' });
   await prisma.ticketTier.delete({ where: { id: tier.id } });
   await archiveTierProduct(tier);
   await audit(req.user.id, 'tier.delete', tier.id, { name: tier.name });
+  res.json({ ok: true });
+});
+
+/* ---------------- discount codes ---------------- */
+
+/// Validates a discount code body. Exactly one of percentOff / amountOff.
+function discountPayload(body, existing, timeZone) {
+  const data = {};
+  if (body.code !== undefined || !existing) {
+    const code = normalizeCode(body.code);
+    if (!/^[A-Z0-9_-]{3,32}$/.test(code)) throw new RegistrationError('Codes are 3–32 letters, numbers, dashes or underscores.');
+    data.code = code;
+  }
+  if (body.percentOff !== undefined || body.amountOff !== undefined) {
+    const pct = body.percentOff === '' || body.percentOff == null ? null : Number(body.percentOff);
+    const amt = body.amountOff === '' || body.amountOff == null ? null : toCents(body.amountOff);
+    if ((pct == null) === (amt == null)) throw new RegistrationError('Set either a percent off or an amount off, not both.');
+    if (pct != null && (!Number.isInteger(pct) || pct < 1 || pct > 100)) throw new RegistrationError('Percent off must be a whole number from 1 to 100.');
+    if (amt != null && (!Number.isInteger(amt) || amt <= 0)) throw new RegistrationError('Amount off must be more than zero.');
+    data.percentOff = pct;
+    data.amountOffCents = amt;
+  } else if (!existing) {
+    throw new RegistrationError('Set a percent off or an amount off.');
+  }
+  if (body.maxUses !== undefined) {
+    const max = body.maxUses === '' || body.maxUses == null ? null : Number(body.maxUses);
+    if (max != null && (!Number.isInteger(max) || max < 1)) throw new RegistrationError('Max uses must be a whole number, or blank for unlimited.');
+    if (max != null && existing && max < existing.usedCount) throw new RegistrationError(`Max uses cannot be below the ${existing.usedCount} already used.`);
+    data.maxUses = max;
+  }
+  if (body.tierIds !== undefined) data.tierIds = Array.isArray(body.tierIds) ? body.tierIds.map(String) : [];
+  if (body.active !== undefined) data.active = Boolean(body.active);
+  if (body.expiresAt !== undefined) data.expiresAt = body.expiresAt ? zonedTimeToUtc(body.expiresAt, timeZone) : null;
+  return data;
+}
+
+adminRouter.get('/events/:id/discounts', async (req, res) => {
+  res.json(await prisma.discountCode.findMany({ where: { eventId: req.params.id }, orderBy: { createdAt: 'desc' } }));
+});
+
+adminRouter.post('/events/:id/discounts', requireOwner, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  try {
+    const code = await prisma.discountCode.create({ data: { ...discountPayload(req.body || {}, null, event.timezone), eventId: event.id } });
+    await audit(req.user.id, 'discount.create', code.id, { code: code.code, percentOff: code.percentOff, amountOffCents: code.amountOffCents });
+    res.json(code);
+  } catch (e) {
+    if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That code already exists for this event.' });
+    throw e;
+  }
+});
+
+adminRouter.patch('/discounts/:id', requireOwner, async (req, res) => {
+  const existing = await prisma.discountCode.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!existing) return res.status(404).json({ error: 'Discount code not found.' });
+  try {
+    const code = await prisma.discountCode.update({ where: { id: existing.id }, data: discountPayload(req.body || {}, existing, existing.event.timezone) });
+    await audit(req.user.id, 'discount.update', code.id, req.body);
+    res.json(code);
+  } catch (e) {
+    if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
+    if (e.code === 'P2002') return res.status(400).json({ error: 'That code already exists for this event.' });
+    throw e;
+  }
+});
+
+/// Registrations that used it keep their discount (it's snapshotted).
+adminRouter.delete('/discounts/:id', requireOwner, async (req, res) => {
+  const code = await prisma.discountCode.findUnique({ where: { id: req.params.id } });
+  if (!code) return res.status(404).json({ error: 'Discount code not found.' });
+  await prisma.discountCode.delete({ where: { id: code.id } });
+  await audit(req.user.id, 'discount.delete', code.id, { code: code.code });
   res.json({ ok: true });
 });
 
@@ -314,10 +425,43 @@ adminRouter.post('/registrations/:code/payments', async (req, res) => {
 adminRouter.delete('/payments/:id', async (req, res) => {
   const payment = await prisma.payment.findUnique({ where: { id: req.params.id }, include: { registration: true } });
   if (!payment) return res.status(404).json({ error: 'Payment not found.' });
-  if (payment.method === 'STRIPE') return res.status(400).json({ error: 'Refund Stripe payments from the Stripe dashboard — PawPass updates automatically.' });
+  if (payment.method === 'STRIPE') return res.status(400).json({ error: 'Use Refund for Stripe payments instead.' });
   await prisma.payment.delete({ where: { id: payment.id } });
   await audit(req.user.id, 'payment.undo', payment.id, { code: payment.registration.code, amountCents: payment.amountCents });
   res.json(shapeReg(await prisma.registration.findUnique({ where: { id: payment.registrationId }, include: REG_INCLUDE })));
+});
+
+/// Refunds a payment, in full or part. Stripe payments go back to the card
+/// through the Stripe API; in-person ones are recorded as handed back. A full
+/// refund cancels the ticket (or pre-order), same as a refund in the Stripe
+/// dashboard would. Owner-only: it moves real money.
+adminRouter.post('/payments/:id/refund', requireOwner, async (req, res) => {
+  const amountCents = req.body?.amount === undefined || req.body?.amount === '' ? undefined : toCents(req.body.amount);
+  try {
+    const payment = await refundPayment({ paymentId: req.params.id, amountCents, actorId: req.user.id });
+    if (payment.registrationId) {
+      return res.json({ registration: shapeReg(await prisma.registration.findUnique({ where: { id: payment.registrationId }, include: REG_INCLUDE })) });
+    }
+    res.json({ order: shapeOrder(await prisma.merchOrder.findUnique({ where: { id: payment.merchOrderId }, include: { items: true, payments: true, user: true } })) });
+  } catch (e) {
+    if (e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Approve (refund + cancel) or decline an attendee's cancellation request.
+/// Owner-only, since approving moves money.
+adminRouter.post('/registrations/:code/cancel-request', requireOwner, async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
+  if (!reg) return res.status(404).json({ error: 'Registration not found.' });
+  try {
+    const { promoted } = await decideCancelRequest({ registrationId: reg.id, approve: req.body?.approve === true, actorId: req.user.id });
+    await notifyWaitlistPromotion(promoted);
+    res.json(shapeReg(await prisma.registration.findUnique({ where: { id: reg.id }, include: REG_INCLUDE })));
+  } catch (e) {
+    if (e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
 });
 
 /// Manual re-send for "I never got the confirmation email" — awaited rather
@@ -441,9 +585,17 @@ adminRouter.get('/events/:id/merch', async (req, res) => {
     orderBy: { createdAt: 'desc' },
     take: 100,
   });
+  const orders = await prisma.merchOrder.findMany({
+    where: { eventId: req.params.id, status: { in: ['PAID', 'REFUNDED'] } },
+    include: { items: true, payments: true, user: true },
+    orderBy: [{ pickedUpAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
+  });
   const revenueTotal = sales.reduce((sum, s) => sum + (s.item.price || 0) * s.quantity, 0);
   const donationsTotal = donations.reduce((sum, d) => sum + d.amount, 0);
   res.json({
+    stripe: stripeEnabled(),
+    preorders: orders.map(shapeOrder),
+    preorderTotal: orders.filter((o) => o.status === 'PAID').reduce((sum, o) => sum + o.totalCents, 0) / 100,
     items: items.map((i) => ({ ...i, remaining: Math.max(i.maxCount - i.soldCount, 0) })),
     sales: sales.map((s) => ({
       id: s.id, itemId: s.itemId, itemName: s.item.name, quantity: s.quantity,
@@ -494,12 +646,12 @@ adminRouter.delete('/donations/:id', async (req, res) => {
 adminRouter.post('/events/:id/merch', async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
-  const { name, price, maxCount } = req.body;
+  const { name, price, maxCount, preorder } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Give the item a name.' });
   const max = Number(maxCount);
   if (!Number.isInteger(max) || max < 0) return res.status(400).json({ error: 'Max count must be a whole number, zero or more.' });
   const item = await prisma.merchItem.create({
-    data: { eventId: req.params.id, name: String(name).trim(), price: price != null && price !== '' ? Number(price) : null, maxCount: max },
+    data: { eventId: req.params.id, name: String(name).trim(), price: price != null && price !== '' ? Number(price) : null, maxCount: max, preorder: Boolean(preorder) },
   });
   await audit(req.user.id, 'merch.create', item.id, { name: item.name, maxCount: item.maxCount });
   res.json({ ...item, remaining: item.maxCount });
@@ -511,6 +663,7 @@ adminRouter.patch('/merch/:id', async (req, res) => {
   const data = {};
   if (req.body.name !== undefined) data.name = String(req.body.name).trim();
   if (req.body.price !== undefined) data.price = req.body.price !== '' && req.body.price !== null ? Number(req.body.price) : null;
+  if (req.body.preorder !== undefined) data.preorder = Boolean(req.body.preorder);
   if (req.body.maxCount !== undefined) {
     const max = Number(req.body.maxCount);
     if (!Number.isInteger(max) || max < item.soldCount)
@@ -522,10 +675,25 @@ adminRouter.patch('/merch/:id', async (req, res) => {
   res.json({ ...updated, remaining: Math.max(updated.maxCount - updated.soldCount, 0) });
 });
 
+/// Hands over (or un-hands) a paid pre-order at the merch table.
+adminRouter.post('/merch-orders/:id/pickup', async (req, res) => {
+  const order = await prisma.merchOrder.findUnique({ where: { id: req.params.id } });
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (order.status !== 'PAID') return res.status(400).json({ error: 'Only paid orders can be picked up.' });
+  const pickedUp = req.body?.pickedUp !== false;
+  const updated = await prisma.merchOrder.update({
+    where: { id: order.id },
+    data: pickedUp ? { pickedUpAt: new Date(), pickedUpById: req.user.id } : { pickedUpAt: null, pickedUpById: null },
+    include: { items: true, payments: true, user: true },
+  });
+  await audit(req.user.id, pickedUp ? 'merch_order.pickup' : 'merch_order.pickup_undo', order.id, {});
+  res.json(shapeOrder(updated));
+});
+
 adminRouter.delete('/merch/:id', async (req, res) => {
   const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
   if (!item) return res.status(404).json({ error: 'Item not found.' });
-  if (item.soldCount > 0) return res.status(400).json({ error: 'This item has recorded sales — cannot delete.' });
+  if (item.soldCount > 0) return res.status(400).json({ error: 'This item has sales, so it cannot be deleted.' });
   await prisma.merchItem.delete({ where: { id: item.id } });
   await audit(req.user.id, 'merch.delete', item.id, { name: item.name });
   res.json({ ok: true });
@@ -577,15 +745,30 @@ adminRouter.delete('/merch/sales/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+/// A payment's money net of refunds, split into ticket and donation add-on.
+/// Refunds come off the ticket part first.
+function splitPayment(p) {
+  const net = p.amountCents - p.amountRefundedCents;
+  const donation = Math.min(p.donationCents || 0, Math.max(net, 0));
+  return { net, donation, ticket: net - donation };
+}
+
+const SETTLED = ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'];
+const eventPayments = (eventId, include) => prisma.payment.findMany({
+  where: { status: { in: SETTLED }, OR: [{ registration: { eventId } }, { merchOrder: { eventId } }] },
+  include,
+});
+
 /// Combines every place money gets recorded — ticket payments (Stripe and
-/// in-person), in-person donations, and merch sales — into one end-of-shift
-/// total, broken out by payment method. Ticket payments are net of refunds.
-/// Registrations on a paid tier that still owe money (pay-at-the-door tiers
-/// nobody has collected on yet) are called out separately, not counted.
+/// in-person), donations (the online add-on and in person), and merch (table
+/// sales and online pre-orders) — into one end-of-shift total, broken out by
+/// payment method, net of refunds. Stripe also gets gross / fees / net, since
+/// that's what actually lands in the bank. Registrations on a paid tier that
+/// still owe money are called out separately, not counted.
 adminRouter.get('/events/:id/reconciliation', async (req, res) => {
   const eventId = req.params.id;
   const [payments, sales, donationEntries, owing] = await Promise.all([
-    prisma.payment.findMany({ where: { registration: { eventId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] } } }),
+    eventPayments(eventId),
     prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true } }),
     prisma.donation.findMany({ where: { eventId } }),
     prisma.registration.findMany({
@@ -596,20 +779,40 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
 
   const byMethod = () => Object.fromEntries(ALL_PAYMENT_METHODS.map((m) => [m, { count: 0, total: 0 }]));
   const sumTotals = (obj) => Object.values(obj).reduce((sum, m) => sum + m.total, 0);
-
   const tickets = byMethod();
-  for (const p of payments) {
-    tickets[p.method].count++;
-    tickets[p.method].total += (p.amountCents - p.amountRefundedCents) / 100;
-  }
-
   const donations = byMethod();
+  const merch = byMethod();
+
+  const stripe = { count: 0, grossCents: 0, refundedCents: 0, feeCents: 0, netCents: 0, missingFees: 0 };
+  for (const p of payments) {
+    const { ticket, donation, net } = splitPayment(p);
+    if (p.merchOrderId) {
+      merch[p.method].count++;
+      merch[p.method].total += net / 100;
+    } else {
+      tickets[p.method].count++;
+      tickets[p.method].total += ticket / 100;
+      if (donation) {
+        donations[p.method].count++;
+        donations[p.method].total += donation / 100;
+      }
+    }
+    if (p.method === 'STRIPE') {
+      stripe.count++;
+      stripe.grossCents += p.amountCents;
+      stripe.refundedCents += p.amountRefundedCents;
+      if (p.feeCents == null) stripe.missingFees++;
+      else stripe.feeCents += p.feeCents;
+    }
+  }
+  // Stripe keeps its fee on a refunded charge, so the payout is gross minus
+  // fees minus whatever went back to the buyer.
+  stripe.netCents = stripe.grossCents - stripe.feeCents - stripe.refundedCents;
+
   for (const d of donationEntries) {
     donations[d.paymentMethod].count++;
     donations[d.paymentMethod].total += d.amount;
   }
-
-  const merch = byMethod();
   for (const s of sales) {
     merch[s.paymentMethod].count += s.quantity;
     merch[s.paymentMethod].total += (s.item.price || 0) * s.quantity;
@@ -621,7 +824,7 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
   const merchTotal = sumTotals(merch);
   res.json({
     methods: ALL_PAYMENT_METHODS,
-    tickets, donations, merch,
+    tickets, donations, merch, stripe,
     unpaidTickets: unpaid.length,
     unpaidTotal: unpaid.reduce((sum, r) => sum + r.balanceDueCents, 0) / 100,
     ticketsTotal, donationsTotal, merchTotal,
@@ -656,22 +859,30 @@ adminRouter.get('/events/:id/merch.csv', async (req, res) => {
 adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
   const eventId = req.params.id;
   const [payments, sales, donationEntries] = await Promise.all([
-    prisma.payment.findMany({
-      where: { registration: { eventId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] } },
-      include: { registration: true, processedBy: true },
-    }),
+    eventPayments(eventId, { registration: true, merchOrder: { include: { items: true, user: true } }, processedBy: true }),
     prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true, processedBy: true } }),
     prisma.donation.findMany({ where: { eventId }, include: { processedBy: true } }),
   ]);
 
-  const rows = [
-    ...payments.map((p) => ({
-      createdAt: p.paidAt || p.createdAt, type: 'Ticket',
-      description: `${p.registration.tierName || 'Ticket'} — ${p.registration.legalName} (${p.registration.code})`,
-      amount: (p.amountCents - p.amountRefundedCents) / 100, paymentMethod: p.method,
-      note: [p.note, p.amountRefundedCents ? `refunded ${(p.amountRefundedCents / 100).toFixed(2)}` : ''].filter(Boolean).join('; '),
-      processedBy: p.processedBy?.displayName || '',
-    })),
+  const rows = [];
+  for (const p of payments) {
+    const { ticket, donation, net } = splitPayment(p);
+    const note = [
+      p.note,
+      p.amountRefundedCents ? `refunded ${(p.amountRefundedCents / 100).toFixed(2)}` : '',
+      p.feeCents != null ? `Stripe fee ${(p.feeCents / 100).toFixed(2)}` : '',
+    ].filter(Boolean).join('; ');
+    const base = { createdAt: p.paidAt || p.createdAt, paymentMethod: p.method, note, processedBy: p.processedBy?.displayName || '' };
+    if (p.merchOrderId) {
+      const o = p.merchOrder;
+      rows.push({ ...base, type: 'Merch pre-order', description: `${o.items.map((i) => `${i.quantity} x ${i.name}`).join(', ')}: ${o.user.displayName}`, amount: net / 100 });
+      continue;
+    }
+    const who = `${p.registration.legalName} (${p.registration.code})`;
+    rows.push({ ...base, type: 'Ticket', description: `${p.registration.tierName || 'Ticket'}: ${who}`, amount: ticket / 100 });
+    if (donation) rows.push({ ...base, type: 'Donation', description: `Online donation: ${who}`, amount: donation / 100, note: '' });
+  }
+  rows.push(
     ...sales.map((s) => ({
       createdAt: s.createdAt, type: 'Merch', description: `${s.quantity} x ${s.item.name}`,
       amount: (s.item.price || 0) * s.quantity, paymentMethod: s.paymentMethod, note: s.paymentNote || '', processedBy: s.processedBy.displayName,
@@ -680,7 +891,8 @@ adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
       createdAt: d.createdAt, type: 'Donation', description: 'In-person donation',
       amount: d.amount, paymentMethod: d.paymentMethod, note: d.note || '', processedBy: d.processedBy.displayName,
     })),
-  ].sort((a, b) => a.createdAt - b.createdAt);
+  );
+  rows.sort((a, b) => a.createdAt - b.createdAt);
 
   const keys = ['createdAt', 'type', 'description', 'amount', 'paymentMethod', 'note', 'processedBy'];
   const csvRows = rows.map((r) => keys.map((k) => csv(k === 'createdAt' ? r.createdAt.toISOString() : k === 'amount' ? r.amount.toFixed(2) : r[k])).join(','));
@@ -1019,7 +1231,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'voucherCode', 'merchItem', 'registration', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 
@@ -1055,7 +1267,7 @@ adminRouter.post('/restore', requireOwner, restoreUpload.single('file'), async (
   try { zip = new AdmZip(req.file.buffer); } catch { return res.status(400).json({ error: 'That file is not a valid zip archive.' }); }
 
   const dataEntry = zip.getEntry('data.json');
-  if (!dataEntry) return res.status(400).json({ error: 'That zip does not look like a PawPass backup — no data.json inside.' });
+  if (!dataEntry) return res.status(400).json({ error: 'That zip is not a PawPass backup.' });
 
   let parsed;
   try { parsed = JSON.parse(dataEntry.getData().toString('utf8'), reviveDates); }

@@ -4,15 +4,22 @@ import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, Pill, fmtMoney } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
+import { localInZone } from '../../lib/tz.js';
 
-const BLANK = { name: '', price: '', currency: 'usd', capacity: '', description: '' };
+const BLANK = { name: '', price: '', currency: 'usd', capacity: '', description: '', salesStartAt: '', salesEndAt: '' };
+const BLANK_CODE = { code: '', kind: 'percent', value: '', maxUses: '', tierIds: [], expiresAt: '' };
 
 // Edits keep price as a dollars string; the API takes either and stores cents.
-const toDraft = (t) => ({
+// Sale-window times are wall-clock strings in the event's timezone.
+const toDraft = (t, tz) => ({
   name: t.name, description: t.description, currency: t.currency, active: t.active,
   price: t.priceCents ? (t.priceCents / 100).toFixed(2) : '',
   capacity: t.capacity ?? '',
+  salesStartAt: localInZone(t.salesStartAt, tz),
+  salesEndAt: localInZone(t.salesEndAt, tz),
 });
+
+const discountLabel = (d) => (d.percentOff ? `${d.percentOff}% off` : `${fmtMoney(d.amountOffCents)} off`);
 
 function SyncStatus({ tier, stripe }) {
   if (!stripe || !tier.priceCents) return null;
@@ -31,11 +38,22 @@ export default function Tiers() {
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
   const [busy, setBusy] = useState('');
+  const [codes, setCodes] = useState([]);
+  // Donation add-on settings live on the event; edited here next to the prices.
+  const [donation, setDonation] = useState(null);
+  const [newCode, setNewCode] = useState(BLANK_CODE);
 
-  const load = () => api.get(`/api/admin/events/${id}/tiers`).then((r) => {
-    setData(r);
-    setDrafts(Object.fromEntries(r.tiers.map((t) => [t.id, toDraft(t)])));
-  });
+  const load = () => Promise.all([
+    api.get(`/api/admin/events/${id}/tiers`).then((r) => {
+      setData(r);
+      setDrafts(Object.fromEntries(r.tiers.map((t) => [t.id, toDraft(t, r.timezone)])));
+    }),
+    api.get(`/api/admin/events/${id}/discounts`).then(setCodes),
+    api.get(`/api/admin/events/${id}`).then((e) => setDonation({
+      enabled: e.donationAddonEnabled, label: e.donationAddonLabel,
+      presets: (e.donationAddonPresets || []).map((c) => c / 100).join(', '),
+    })),
+  ]);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
 
   const say = (text, ok = true) => { setMsg(text); setMsgOk(ok); if (ok) setTimeout(() => setMsg(''), 2500); };
@@ -69,6 +87,33 @@ export default function Tiers() {
     e.preventDefault();
     run('add', async () => { await api.post(`/api/admin/events/${id}/tiers`, adding); setAdding(BLANK); }, 'Ticket type added.');
   };
+  const addCode = (e) => {
+    e.preventDefault();
+    run('code', async () => {
+      await api.post(`/api/admin/events/${id}/discounts`, {
+        code: newCode.code,
+        percentOff: newCode.kind === 'percent' ? newCode.value : null,
+        amountOff: newCode.kind === 'amount' ? newCode.value : null,
+        maxUses: newCode.maxUses, tierIds: newCode.tierIds, expiresAt: newCode.expiresAt,
+      });
+      setNewCode(BLANK_CODE);
+    }, 'Discount code added.');
+  };
+  const toggleCode = (d) => run(d.id, () => api.patch(`/api/admin/discounts/${d.id}`, { active: !d.active }));
+  const removeCode = (d) => {
+    if (!confirm(`Delete the code ${d.code}? People who already used it keep their discount.`)) return;
+    run(d.id, () => api.del(`/api/admin/discounts/${d.id}`), 'Deleted.');
+  };
+
+  const saveDonation = (e) => {
+    e.preventDefault();
+    run('donation', () => api.patch(`/api/admin/events/${id}`, {
+      donationAddonEnabled: donation.enabled,
+      donationAddonLabel: donation.label,
+      donationAddonPresets: donation.presets.split(',').map((x) => Math.round(Number(x.trim()) * 100)).filter((c) => c > 0),
+    }), 'Saved.');
+  };
+
   const resync = () => run('sync', async () => {
     const r = await api.post(`/api/admin/events/${id}/tiers/sync`);
     if (r.errors.length) throw new Error(`Some tiers didn't sync: ${r.errors.map((x) => `${x.name} (${x.error})`).join('; ')}`);
@@ -86,24 +131,19 @@ export default function Tiers() {
       <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
-      <p className="small muted" style={{ marginTop: 0 }}>
-        {stripe
-          ? 'Paid tickets are sold through Stripe Checkout and confirmed automatically once paid. Each paid ticket type is kept in sync as a Stripe product; changing a price creates a new Stripe price and archives the old one.'
-          : 'Stripe isn\'t set up on this instance (STRIPE_SECRET_KEY), so paid tickets are paid at the door — record the payment at the kiosk or in the attendee editor.'}
-        {' '}Vouchers skip ticket types entirely.
-      </p>
+      {!stripe && <p className="small muted" style={{ marginTop: 0 }}>Stripe isn't set up, so paid tickets are paid at the door.</p>}
 
       <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
         <div className="stack">
           {tiers.length === 0 && (
-            <p className="note bad" style={{ margin: 0 }}>This event has no ticket types, so nobody can register. Add at least one below — a free one if it's free to attend.</p>
+            <p className="note bad" style={{ margin: 0 }}>No ticket types yet, so nobody can register. Add one below.</p>
           )}
           {tiers.length > 0 && !tiers.some((t) => t.active) && (
             <p className="note bad" style={{ margin: 0 }}>No ticket type is on sale, so nobody can register right now.</p>
           )}
 
           {tiers.map((t, i) => {
-            const d = drafts[t.id] || toDraft(t);
+            const d = drafts[t.id] || toDraft(t, data.timezone);
             return (
               <section key={t.id} className="card stack">
                 <div className="spread">
@@ -136,6 +176,14 @@ export default function Tiers() {
                 <Field label="Description" help="Shown to attendees under the name">
                   <input value={d.description} onChange={(e) => setDraft(t.id, { description: e.target.value })} />
                 </Field>
+                <div className="grid-2">
+                  <Field label="Sale starts" help={data.timezone}>
+                    <input type="datetime-local" value={d.salesStartAt} onChange={(e) => setDraft(t.id, { salesStartAt: e.target.value })} />
+                  </Field>
+                  <Field label="Sale ends" help="Optional">
+                    <input type="datetime-local" value={d.salesEndAt} onChange={(e) => setDraft(t.id, { salesEndAt: e.target.value })} />
+                  </Field>
+                </div>
                 <div className="spread">
                   <div className="row">
                     <label className="row small"><input type="checkbox" checked={d.active} onChange={(e) => setDraft(t.id, { active: e.target.checked })} /> On sale</label>
@@ -144,7 +192,7 @@ export default function Tiers() {
                   </div>
                   <div className="row">
                     <button className="btn sm danger" disabled={!!busy || t.registrationCount > 0}
-                      title={t.registrationCount > 0 ? 'People registered on this ticket type — take it off sale instead' : undefined}
+                      title={t.registrationCount > 0 ? 'In use. Take it off sale instead.' : undefined}
                       onClick={() => remove(t)}>Delete</button>
                     <button className="btn sm primary" disabled={!!busy} onClick={() => save(t)}>{busy === t.id ? 'Saving…' : 'Save'}</button>
                   </div>
@@ -170,10 +218,96 @@ export default function Tiers() {
               </div>
             </div>
             <Field label="Description"><input value={adding.description} onChange={(e) => setAdding({ ...adding, description: e.target.value })} /></Field>
+            <div className="grid-2">
+              <Field label="Sale starts" help="Optional"><input type="datetime-local" value={adding.salesStartAt} onChange={(e) => setAdding({ ...adding, salesStartAt: e.target.value })} /></Field>
+              <Field label="Sale ends" help="Optional"><input type="datetime-local" value={adding.salesEndAt} onChange={(e) => setAdding({ ...adding, salesEndAt: e.target.value })} /></Field>
+            </div>
             <button className="btn primary" style={{ justifySelf: 'start' }} disabled={busy === 'add' || !adding.name.trim()}>
               {busy === 'add' ? 'Adding…' : 'Add ticket type'}
             </button>
           </form>
+
+          {donation && (
+            <form className="card stack" onSubmit={saveDonation}>
+              <h2 style={{ margin: 0 }}>Donation add-on</h2>
+              <label className="row small">
+                <input type="checkbox" checked={donation.enabled} onChange={(e) => setDonation({ ...donation, enabled: e.target.checked })} />
+                Offer an optional donation at online checkout
+              </label>
+              {donation.enabled && (
+                <div className="grid-2">
+                  <Field label="Prompt"><input value={donation.label} onChange={(e) => setDonation({ ...donation, label: e.target.value })} /></Field>
+                  <Field label="Suggested amounts ($)" help="Comma separated">
+                    <input value={donation.presets} onChange={(e) => setDonation({ ...donation, presets: e.target.value })} />
+                  </Field>
+                </div>
+              )}
+              {!stripe && <p className="small muted" style={{ margin: 0 }}>Needs Stripe.</p>}
+              <button className="btn primary" style={{ justifySelf: 'start' }}>Save</button>
+            </form>
+          )}
+
+          <section className="card stack">
+            <h2 style={{ margin: 0 }}>Discount codes</h2>
+            {codes.length > 0 && (
+              <table>
+                <thead><tr><th>Code</th><th>Discount</th><th>Applies to</th><th>Used</th><th>Expires</th><th /></tr></thead>
+                <tbody>
+                  {codes.map((c) => (
+                    <tr key={c.id} style={c.active ? undefined : { opacity: 0.55 }}>
+                      <td className="mono">{c.code}</td>
+                      <td>{discountLabel(c)}</td>
+                      <td className="small">{c.tierIds.length ? tiers.filter((t) => c.tierIds.includes(t.id)).map((t) => t.name).join(', ') : 'All paid tickets'}</td>
+                      <td className="mono small">{c.usedCount}{c.maxUses != null ? ` / ${c.maxUses}` : ''}</td>
+                      <td className="small">{c.expiresAt ? new Date(c.expiresAt).toLocaleString(undefined, { timeZone: data.timezone }) : '-'}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn sm ghost" onClick={() => toggleCode(c)}>{c.active ? 'Turn off' : 'Turn on'}</button>
+                        <button className="btn sm danger" onClick={() => removeCode(c)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <form className="stack" onSubmit={addCode}>
+              <div className="row" style={{ alignItems: 'end' }}>
+                <Field label="Code">
+                  <input className="mono" value={newCode.code} placeholder="SPRING20" style={{ textTransform: 'uppercase', width: 160 }}
+                    onChange={(e) => setNewCode({ ...newCode, code: e.target.value })} />
+                </Field>
+                <Field label="Discount">
+                  <div className="row" style={{ flexWrap: 'nowrap', gap: 6 }}>
+                    <input type="number" min="0" step={newCode.kind === 'percent' ? 1 : 0.01} value={newCode.value} style={{ width: 100 }}
+                      onChange={(e) => setNewCode({ ...newCode, value: e.target.value })} />
+                    <div className="segmented">
+                      <button type="button" className={newCode.kind === 'percent' ? 'selected' : ''} onClick={() => setNewCode({ ...newCode, kind: 'percent' })}>%</button>
+                      <button type="button" className={newCode.kind === 'amount' ? 'selected' : ''} onClick={() => setNewCode({ ...newCode, kind: 'amount' })}>$</button>
+                    </div>
+                  </div>
+                </Field>
+                <Field label="Max uses" help="Blank = unlimited">
+                  <input type="number" min="1" value={newCode.maxUses} style={{ width: 100 }} onChange={(e) => setNewCode({ ...newCode, maxUses: e.target.value })} />
+                </Field>
+                <Field label="Expires" help="Optional">
+                  <input type="datetime-local" value={newCode.expiresAt} onChange={(e) => setNewCode({ ...newCode, expiresAt: e.target.value })} />
+                </Field>
+              </div>
+              {tiers.some((t) => t.priceCents > 0) && (
+                <div className="row small">
+                  <span className="muted">Applies to:</span>
+                  {tiers.filter((t) => t.priceCents > 0).map((t) => (
+                    <label key={t.id} className="row small" style={{ gap: 4 }}>
+                      <input type="checkbox" checked={newCode.tierIds.includes(t.id)}
+                        onChange={(e) => setNewCode({ ...newCode, tierIds: e.target.checked ? [...newCode.tierIds, t.id] : newCode.tierIds.filter((x) => x !== t.id) })} />
+                      {t.name}
+                    </label>
+                  ))}
+                  <span className="muted">(none = all)</span>
+                </div>
+              )}
+              <button className="btn primary" style={{ justifySelf: 'start' }} disabled={!newCode.code.trim() || !newCode.value}>Add discount code</button>
+            </form>
+          </section>
         </div>
       </fieldset>
     </>

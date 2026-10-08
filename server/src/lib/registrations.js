@@ -6,7 +6,8 @@ import { blindIndex } from './crypto.js';
 import { formatInTimeZone } from './tz.js';
 import { env } from './env.js';
 import { stripeEnabled } from './stripe.js';
-import { STAFF_PAYMENT_METHODS, abandonPendingPayments } from './payments.js';
+import { STAFF_PAYMENT_METHODS, abandonPendingPayments, releaseDiscount } from './payments.js';
+import { tierSaleState, checkDiscount, checkDonation, registrationCharge, normalizeCode, PricingError, STRIPE_MIN_CHARGE_CENTS } from './pricing.js';
 
 export class RegistrationError extends Error {}
 
@@ -55,7 +56,7 @@ export function registrationWindowState(event, heldCount) {
     return { open: false, reason: 'Registration has closed.' };
   if (event.capacity && heldCount >= event.capacity) {
     return event.waitlistEnabled
-      ? { open: true, waitlist: true, reason: 'This event is full — you will join the waitlist.' }
+      ? { open: true, waitlist: true, reason: 'This event is full. You will join the waitlist.' }
       : { open: false, reason: 'This event is full.' };
   }
   return { open: true, waitlist: false };
@@ -68,7 +69,11 @@ export function registrationWindowState(event, heldCount) {
 ///   - anything else                                 -> CONFIRMED, balance due
 ///     (pay at the door — what v1's PayPal tier effectively was)
 /// `inPersonPayment` is { method, amountCents, note }.
-export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, ticketTierId, voucherCode, inPersonPayment, processedById }) {
+///
+/// Attendee registrations can also carry a `discountCode` (reduces the
+/// ticket price, online or at the door) and `donationCents` (the optional
+/// add-on — only charged online, so ignored without Stripe).
+export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, ticketTierId, voucherCode, discountCode, donationCents, inPersonPayment, processedById }) {
   const ban = await findMatchingBan({ legalName, email, telegramId: user.telegramId, telegramUsername: user.telegramUsername });
   if (ban) {
     await audit(null, 'ban.blocked_registration', ban.id, {
@@ -117,8 +122,34 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
   if (!voucher) {
     const tiers = await activeTiers(event.id);
     if (!tiers.length) throw new RegistrationError('No tickets are on sale for this event right now.');
-    tier = ticketTierId ? tiers.find((t) => t.id === ticketTierId) : tiers.length === 1 ? tiers[0] : null;
+    // Staff at the kiosk can still sell a tier outside its sale window.
+    const buyable = source === 'admin' ? tiers : tiers.filter((t) => tierSaleState(t).buyable);
+    tier = ticketTierId ? tiers.find((t) => t.id === ticketTierId) : buyable.length === 1 ? buyable[0] : null;
     if (!tier) throw new RegistrationError(ticketTierId ? 'That ticket type is not available.' : 'Choose a ticket type.');
+    if (!buyable.includes(tier)) {
+      const sale = tierSaleState(tier);
+      throw new RegistrationError(sale.reason === 'not_yet'
+        ? `${tier.name} tickets go on sale ${formatInTimeZone(sale.at, event.timezone)}.`
+        : `${tier.name} tickets are no longer on sale.`);
+    }
+  }
+
+  // Discount codes and the donation add-on are attendee-side only; staff
+  // just enter what they actually took at the kiosk.
+  let discount = null;
+  let discountCents = 0;
+  let donation = 0;
+  if (tier && source !== 'admin') {
+    try {
+      if (normalizeCode(discountCode)) {
+        discount = await prisma.discountCode.findUnique({ where: { eventId_code: { eventId: event.id, code: normalizeCode(discountCode) } } });
+        discountCents = checkDiscount(discount, tier);
+      }
+      if (stripeEnabled()) donation = checkDonation(event, donationCents);
+    } catch (e) {
+      if (e instanceof PricingError) throw new RegistrationError(e.message);
+      throw e;
+    }
   }
   const paid = tier?.priceCents > 0;
   const staffPaid = paid && source === 'admin' && inPersonPayment?.method;
@@ -126,7 +157,8 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
     if (!STAFF_PAYMENT_METHODS.includes(inPersonPayment.method)) throw new RegistrationError('Choose how the payment was received.');
     if (!Number.isInteger(inPersonPayment.amountCents) || inPersonPayment.amountCents < 0) throw new RegistrationError('Enter the amount received.');
   }
-  const online = paid && source !== 'admin' && stripeEnabled();
+  let charge = registrationCharge({ tierPriceCents: tier?.priceCents, discountCents, donationCents: donation });
+  let online = charge.totalCents > 0 && source !== 'admin' && stripeEnabled();
 
   return prisma.$transaction(async (tx) => {
     let status;
@@ -155,8 +187,26 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
       }
       // A waitlisted spot has nothing to charge for yet, and promotion off
       // the waitlist is automatic — so an online-paid ticket never waitlists.
+      // A free ticket with only a donation on top just waitlists without it.
+      if (state.waitlist && donation && charge.ticketCents === 0) {
+        donation = 0;
+        charge = registrationCharge({ tierPriceCents: tier.priceCents, discountCents, donationCents: 0 });
+        online = false;
+      }
       if (state.waitlist && online) throw new RegistrationError('This event is full.');
+      if (online && charge.totalCents < STRIPE_MIN_CHARGE_CENTS)
+        throw new RegistrationError(`Online payments must be at least $${(STRIPE_MIN_CHARGE_CENTS / 100).toFixed(2)}.`);
       status = state.waitlist ? 'WAITLIST' : online ? 'PENDING_PAYMENT' : 'CONFIRMED';
+
+      if (discount) {
+        // Claimed here, compare-and-swap like vouchers; lib/payments.js gives
+        // it back if the checkout hold lapses unpaid.
+        const claimed = await tx.discountCode.updateMany({
+          where: { id: discount.id, active: true, ...(discount.maxUses != null ? { usedCount: { lt: discount.maxUses } } : {}) },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (claimed.count === 0) throw new RegistrationError('That discount code has been used up.');
+      }
     }
 
     const data = {
@@ -173,6 +223,9 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
       tosVersion: tosVersion || null,
       voucherCodeId: voucher?.id || null,
       badgeTier: voucher?.badgeTier || null,
+      discountCodeId: discount?.id ?? null,
+      discountCents,
+      donationCents: donation,
     };
 
     // Badge numbers go to spots that are actually held — a PENDING_PAYMENT
@@ -206,7 +259,7 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
       await tx.payment.create({
         data: {
           registrationId: reg.id, method: 'STRIPE', status: 'PENDING',
-          amountCents: tier.priceCents, currency: tier.currency,
+          amountCents: charge.totalCents, donationCents: charge.donationCents, currency: tier.currency,
           expiresAt: new Date(Date.now() + (env.stripe.checkoutMinutes + 2) * 60_000),
         },
       });
@@ -246,7 +299,10 @@ export async function findOrCreateHeadlessUser({ eventId, legalName, fursonaName
 /// response formats differ, so that part isn't shared).
 export async function cancelRegistration(reg) {
   await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
-  if (reg.status === 'PENDING_PAYMENT') await abandonPendingPayments(reg.id);
+  if (reg.status === 'PENDING_PAYMENT') {
+    await abandonPendingPayments(reg.id);
+    await releaseDiscount(reg.id);
+  }
   return promoteFromWaitlist(reg.eventId);
 }
 
