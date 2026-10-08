@@ -6,6 +6,7 @@ import { usePageMeta } from '../lib/meta.js';
 import { downloadEventIcs } from '../lib/ics.js';
 import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
+import PaymentNotice from '../components/PaymentNotice.jsx';
 
 const TICKET_GRID = { display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' };
 
@@ -189,6 +190,7 @@ export default function Tickets() {
                   <button className="btn signal" disabled={payBusy === t.code} onClick={() => pay(t.code)}>
                     {payBusy === t.code ? 'Opening payment…' : 'Complete payment'}
                   </button>
+                  <PaymentNotice />
                 </div>
               ) : (
                 <>

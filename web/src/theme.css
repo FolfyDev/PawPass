@@ -336,3 +336,6 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 .site-footer { max-width: 1080px; margin: 0 auto; padding: 0 20px 32px; text-align: center; }
 .site-footer .hero-rule { margin: 0 0 18px; }
 .site-footer p { margin: 0; line-height: 1.7; }
+
+/* ---- payment disclosure ---- */
+.payment-notice { display: flex; gap: 6px; align-items: flex-start; margin: 0; text-align: left; }

@@ -172,6 +172,27 @@ describe('stripe payments', () => {
     assert.equal(p.amountRefundedCents, 2500);
   });
 
+  test('cuts off an address sending forged webhooks without blocking Stripe', async () => {
+    const { reg, session } = await paidRegistration();
+    // Two proxy hops, like Cloudflare Tunnel -> nginx: the client's address
+    // first, then the private address of the proxy in between.
+    const from = (ip) => request(app).post('/api/stripe/webhook')
+      .set('Content-Type', 'application/json').set('X-Forwarded-For', `${ip}, 172.18.0.3`);
+
+    let status;
+    for (let i = 0; i < 31; i++) {
+      ({ status } = await from('203.0.113.66').set('stripe-signature', 't=1,v1=forged').send('{}'));
+    }
+    assert.equal(status, 429, 'the forging address is blocked after 30 rejections');
+
+    // A real delivery from a different address still goes through.
+    const payload = JSON.stringify(stripeEvent('checkout.session.completed', complete(session)));
+    const header = real.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
+    const ok = await from('3.18.12.63').set('stripe-signature', header).send(payload);
+    assert.equal(ok.status, 200);
+    assert.equal((await prisma.registration.findUnique({ where: { id: reg.id } })).status, 'CONFIRMED');
+  });
+
   test('rejects a webhook with a bad signature', async () => {
     const res = await request(app).post('/api/stripe/webhook')
       .set('Content-Type', 'application/json').set('stripe-signature', 't=1,v1=deadbeef')

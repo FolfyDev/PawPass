@@ -7,6 +7,7 @@ import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill } from 
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import Turnstile from '../components/Turnstile.jsx';
+import PaymentNotice from '../components/PaymentNotice.jsx';
 
 /// One answer input per custom question — shared by the registration popup.
 function AnswerInput({ f, answers, setAnswer }) {
@@ -222,6 +223,7 @@ export default function EventPage() {
                 <button className="btn signal" disabled={busy} onClick={pay}>{busy ? 'Opening payment…' : 'Complete payment'}</button>
                 <Link className="btn ghost" to="/tickets">Manage in tickets</Link>
               </div>
+              <PaymentNotice />
             </div>
           ) : registered ? (
             <div className="stack">
@@ -259,6 +261,7 @@ export default function EventPage() {
                   ))}
                 </ul>
               ) : <p className="muted" style={{ margin: 0 }}>No tickets are on sale yet.</p>)}
+              {event.state.open && tiers.some((t) => t.priceCents > 0 && !t.soldOut) && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
 
               {event.state.open && tiers.some((t) => !t.soldOut) && (
                 user ? (
@@ -340,6 +343,7 @@ export default function EventPage() {
               {!event.state.open && <p className="note">Registration is normally closed ({event.state.reason}) — a valid voucher code will still get you in.</p>}
 
               {event.state.open && tiers.length > 0 && !usingVoucher && <Field label="Ticket">{tierPicker}</Field>}
+              {!usingVoucher && selectedTier?.priceCents > 0 && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
 
               <Field label={settings?.legalNameLabel || 'Preferred name'} help={settings?.legalNameHelp}>
                 <input value={form.legalName} required autoComplete="name" autoFocus
@@ -381,12 +385,6 @@ export default function EventPage() {
             </form>
           ) : (
             <>
-              {goesToPayment && (
-                <p className="note">
-                  After you accept, you'll go to Stripe to pay {fmtMoney(selectedTier.priceCents, selectedTier.currency)} for {selectedTier.name}.
-                  Your spot is held while you pay. Card details go straight to Stripe and never touch this site.
-                </p>
-              )}
               <p className="tos">{event.tosBody || 'The organiser has not published terms for this event yet.'}</p>
               {captchaRequired && (
                 <div style={{ marginTop: 14 }}>

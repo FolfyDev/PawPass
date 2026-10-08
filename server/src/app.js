@@ -14,7 +14,7 @@ import { adminRouter } from './routes/admin.js';
 import { badgeRouter } from './routes/badges.js';
 import { STARTER_TEMPLATE } from './badges/template.js';
 import { escapeHtml } from './lib/html.js';
-import { stripeWebhook } from './lib/payments.js';
+import { stripeWebhook, createWebhookLimiters } from './lib/payments.js';
 
 function isLocalDev() {
   try {
@@ -47,7 +47,14 @@ if ((env.owner.password || 'change-me-now') === 'change-me-now' && !isLocalDev()
 }
 
 export const app = express();
-app.set('trust proxy', 1);
+// Requests arrive through two proxies in production — Cloudflare Tunnel or
+// Caddy, then the web container's nginx — so trusting a fixed hop count of 1
+// made req.ip the outer proxy's address for every visitor, and turned each
+// rate limiter into one shared bucket for the whole site. Trusting only hops
+// on loopback/private addresses lands on the real client instead, and a client
+// can't spoof it: the edge proxy appends the true address after anything the
+// client put in X-Forwarded-For, and that public address is where trust stops.
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -74,7 +81,7 @@ app.use(helmet({
 app.use(cors({ origin: [env.webUrl], credentials: true }));
 // Before express.json(): Stripe's signature covers the raw request bytes, and
 // a parsed-then-reserialized body won't verify.
-app.post('/api/stripe/webhook', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhook);
+app.post('/api/stripe/webhook', ...createWebhookLimiters(), express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhook);
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(loadUser);

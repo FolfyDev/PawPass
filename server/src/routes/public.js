@@ -45,7 +45,7 @@ publicRouter.get('/settings', async (_req, res) => {
     printMode: env.zebra.mode,
     webUrl: env.webUrl,
     legal: { entityName: env.legal.entityName, contactEmail: env.legal.contactEmail },
-    payments: { online: stripeEnabled() },
+    payments: { online: stripeEnabled(), holdMinutes: stripeEnabled() ? env.stripe.checkoutMinutes : null },
   });
 });
 

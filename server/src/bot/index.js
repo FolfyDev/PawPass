@@ -317,7 +317,8 @@ export function createBot() {
       const tier = reg.ticketTier;
       return ctx.reply(
         `Your spot for ${event.title}${reg.tierName ? ` (${reg.tierName})` : ''} is held for ${env.stripe.checkoutMinutes} minutes.\n\n` +
-        `Pay ${tier ? money(tier.priceCents, tier.currency) : ''} to confirm it — you'll get your badge code here as soon as it goes through.`,
+        `Pay ${tier ? money(tier.priceCents, tier.currency) : ''} to confirm it — you'll get your badge code here as soon as it goes through.\n\n` +
+        'Payments are handled securely by Stripe.',
         { reply_markup: payButton(url, tier ? `Pay ${money(tier.priceCents, tier.currency)}` : 'Pay now') },
       );
     } catch (e) {

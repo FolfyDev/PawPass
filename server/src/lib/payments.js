@@ -1,3 +1,4 @@
+import rateLimit from 'express-rate-limit';
 import { prisma } from './db.js';
 import { env } from './env.js';
 import { audit } from './auth.js';
@@ -277,6 +278,40 @@ function expectedLivemode() {
   if (/^(sk|rk)_live_/.test(key)) return true;
   if (/^(sk|rk)_test_/.test(key)) return false;
   return null;
+}
+
+/// Two per-IP limits for the webhook route, mounted ahead of it in app.js:
+///   - rejected: only requests answered 400 (bad signature, wrong mode) count.
+///     Real Stripe deliveries are never 400s, so a busy on-sale can't trip it,
+///     while anyone probing with forged requests is cut off quickly.
+///   - flood: a high ceiling on everything, so junk can't load the server even
+///     though each forged request is cheap to reject.
+/// A 500 from our side doesn't count against the strict limit, so Stripe's own
+/// retries after an outage on our end always get through.
+export function createWebhookLimiters({
+  windowMs = 15 * 60 * 1000,
+  rejectedLimit = 30,
+  floodLimit = 3000,
+} = {}) {
+  const common = { windowMs, standardHeaders: true, legacyHeaders: false };
+  return [
+    rateLimit({
+      ...common,
+      limit: floodLimit,
+      message: { error: 'Too many requests.' },
+    }),
+    rateLimit({
+      ...common,
+      limit: rejectedLimit,
+      skipSuccessfulRequests: true,
+      requestWasSuccessful: (_req, res) => res.statusCode !== 400,
+      message: { error: 'Too many rejected webhook requests from this address.' },
+      handler: (req, res, _next, options) => {
+        console.warn(`Rate-limited Stripe webhook requests from ${req.ip} after repeated rejections.`);
+        res.status(options.statusCode).json(options.message);
+      },
+    }),
+  ];
 }
 
 /// Express handler — mounted with express.raw() ahead of express.json() in
