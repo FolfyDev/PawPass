@@ -10,12 +10,15 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
-import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers } from '../lib/registrations.js';
+import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier } from '../lib/registrations.js';
+import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents } from '../lib/payments.js';
+import { syncTier, archiveTierProduct, stripeEnabled } from '../lib/stripe.js';
+import { upgradeBackup, BACKUP_VERSION } from '../lib/backup.js';
 import { norm, normHandle } from '../lib/bans.js';
 import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
-import { summarize, shapeReg } from './public.js';
+import { summarize, shapeReg, REG_INCLUDE } from './public.js';
 import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
 import { notifyWaitlistPromotion } from '../bot/index.js';
 
@@ -38,7 +41,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationTierName','donationPaypalLink','donationRequired'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -65,10 +68,120 @@ adminRouter.post('/events', requireOwner, async (req, res) => {
 });
 
 adminRouter.patch('/events/:id', requireOwner, async (req, res) => {
-  const timeZone = req.body.timezone || (await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true } }))?.timezone || env.defaultTimezone;
+  const before = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true, title: true } });
+  if (!before) return res.status(404).json({ error: 'Event not found.' });
+  const timeZone = req.body.timezone || before.timezone || env.defaultTimezone;
   const event = await prisma.event.update({ where: { id: req.params.id }, data: eventPayload(req.body, timeZone) });
+  // Stripe product names include the event title — keep them matching.
+  if (event.title !== before.title) {
+    const tiers = await prisma.ticketTier.findMany({ where: { eventId: event.id, stripeProductId: { not: null } } });
+    for (const t of tiers) await syncTier(t, event);
+  }
   await audit(req.user.id, 'event.update', event.id, {});
   res.json(event);
+});
+
+/* ---------------- ticket tiers ---------------- */
+
+const shapeTier = (t, held = 0) => ({ ...t, held, remaining: t.capacity != null ? Math.max(t.capacity - held, 0) : null });
+const CURRENCY = /^[a-z]{3}$/;
+
+/// Validates a tier create/update body into Prisma data. `existing` is the
+/// current row on update, so partial bodies only touch what they include.
+function tierPayload(body, existing) {
+  const data = {};
+  if (body.name !== undefined || !existing) {
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new RegistrationError('Give the ticket type a name.');
+    data.name = name;
+  }
+  if (body.description !== undefined) data.description = String(body.description ?? '').trim();
+  if (body.price !== undefined) {
+    const cents = toCents(body.price) ?? 0;
+    if (!Number.isInteger(cents) || cents < 0) throw new RegistrationError('Price must be zero or more.');
+    if (cents > 0 && cents < 50) throw new RegistrationError('Paid tickets must cost at least $0.50 — Stripe\'s minimum charge.');
+    data.priceCents = cents;
+  }
+  if (body.currency !== undefined) {
+    const currency = String(body.currency).trim().toLowerCase();
+    if (!CURRENCY.test(currency)) throw new RegistrationError('Currency must be a three-letter code like USD.');
+    data.currency = currency;
+  }
+  if (body.capacity !== undefined) {
+    const cap = body.capacity === '' || body.capacity === null ? null : Number(body.capacity);
+    if (cap !== null && (!Number.isInteger(cap) || cap < 0)) throw new RegistrationError('Ticket limit must be a whole number, or blank for no limit.');
+    data.capacity = cap;
+  }
+  if (body.sortOrder !== undefined) data.sortOrder = Number(body.sortOrder) || 0;
+  if (body.active !== undefined) data.active = Boolean(body.active);
+  return data;
+}
+
+adminRouter.get('/events/:id/tiers', async (req, res) => {
+  const [tiers, held] = await Promise.all([
+    prisma.ticketTier.findMany({ where: { eventId: req.params.id }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] }),
+    heldByTier(req.params.id),
+  ]);
+  const counts = await prisma.registration.groupBy({ by: ['ticketTierId'], where: { eventId: req.params.id }, _count: { _all: true } });
+  const total = Object.fromEntries(counts.map((c) => [c.ticketTierId, c._count._all]));
+  res.json({
+    stripe: stripeEnabled(),
+    tiers: tiers.map((t) => ({ ...shapeTier(t, held[t.id] || 0), registrationCount: total[t.id] || 0 })),
+  });
+});
+
+adminRouter.post('/events/:id/tiers', requireOwner, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  let data;
+  try { data = tierPayload(req.body || {}, null); }
+  catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
+  if (data.sortOrder === undefined) data.sortOrder = await prisma.ticketTier.count({ where: { eventId: event.id } });
+  const tier = await syncTier(await prisma.ticketTier.create({ data: { ...data, eventId: event.id } }), event);
+  await audit(req.user.id, 'tier.create', tier.id, { name: tier.name, priceCents: tier.priceCents });
+  res.json(shapeTier(tier));
+});
+
+adminRouter.patch('/tiers/:id', requireOwner, async (req, res) => {
+  const existing = await prisma.ticketTier.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!existing) return res.status(404).json({ error: 'Ticket type not found.' });
+  let data;
+  try { data = tierPayload(req.body || {}, existing); }
+  catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
+  if (data.capacity != null) {
+    const held = (await heldByTier(existing.eventId))[existing.id] || 0;
+    if (data.capacity < held) return res.status(400).json({ error: `Ticket limit cannot be below the ${held} already taken.` });
+  }
+  const updated = await prisma.ticketTier.update({ where: { id: existing.id }, data });
+  const tier = await syncTier(updated, existing.event);
+  await audit(req.user.id, 'tier.update', tier.id, data);
+  res.json(shapeTier(tier, (await heldByTier(existing.eventId))[tier.id] || 0));
+});
+
+/// Only for tiers nobody has registered on — otherwise deactivate it, which
+/// stops sales but keeps the registrations' tier (and its price) intact.
+adminRouter.delete('/tiers/:id', requireOwner, async (req, res) => {
+  const tier = await prisma.ticketTier.findUnique({ where: { id: req.params.id }, include: { _count: { select: { registrations: true } } } });
+  if (!tier) return res.status(404).json({ error: 'Ticket type not found.' });
+  if (tier._count.registrations > 0)
+    return res.status(400).json({ error: 'People have registered on this ticket type — turn off "On sale" instead of deleting it.' });
+  await prisma.ticketTier.delete({ where: { id: tier.id } });
+  await archiveTierProduct(tier);
+  await audit(req.user.id, 'tier.delete', tier.id, { name: tier.name });
+  res.json({ ok: true });
+});
+
+/// Re-pushes every tier on the event to Stripe — for recovering from a sync
+/// error, or after adding STRIPE_SECRET_KEY to an instance that already had tiers.
+adminRouter.post('/events/:id/tiers/sync', requireOwner, async (req, res) => {
+  if (!stripeEnabled()) return res.status(400).json({ error: 'Stripe is not configured on this instance (STRIPE_SECRET_KEY).' });
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const tiers = await prisma.ticketTier.findMany({ where: { eventId: event.id } });
+  const synced = [];
+  for (const t of tiers) synced.push(await syncTier(t, event));
+  await audit(req.user.id, 'tier.sync', event.id, { count: synced.length });
+  res.json({ ok: true, errors: synced.filter((t) => t.stripeSyncError).map((t) => ({ id: t.id, name: t.name, error: t.stripeSyncError })) });
 });
 
 adminRouter.delete('/events/:id', requireOwner, async (req, res) => {
@@ -86,7 +199,7 @@ adminRouter.get('/events/:id/registrations', async (req, res) => {
   const { q, status } = req.query;
   const regs = await prisma.registration.findMany({
     where: { eventId: req.params.id, ...(status ? { status } : {}) },
-    include: { user: true },
+    include: { user: true, ...REG_INCLUDE },
     orderBy: { createdAt: 'asc' },
   });
   const needle = q ? String(q).toLowerCase() : '';
@@ -101,9 +214,20 @@ adminRouter.get('/events/:id/registrations', async (req, res) => {
 });
 
 adminRouter.get('/events/:id/registrations.csv', async (req, res) => {
-  const regs = await prisma.registration.findMany({ where: { eventId: req.params.id }, include: { user: true }, orderBy: { createdAt: 'asc' } });
-  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tier','badgeTier','paymentMethod','paymentAmount','paymentNote'];
-  const rows = regs.map((r) => keys.map((k) => csv(k === 'telegram' ? r.user.telegramUsername : r[k])).join(','));
+  const regs = await prisma.registration.findMany({ where: { eventId: req.params.id }, include: { user: true, ...REG_INCLUDE }, orderBy: { createdAt: 'asc' } });
+  const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tierName','badgeTier','tierPrice','paid','paymentMethod','balanceDue'];
+  const dollars = (cents) => (cents == null ? '' : (cents / 100).toFixed(2));
+  const rows = regs.map((r) => {
+    const shaped = shapeReg(r);
+    const value = {
+      telegram: r.user.telegramUsername,
+      tierPrice: dollars(shaped.tierPriceCents),
+      paid: dollars(shaped.paidCents),
+      paymentMethod: shaped.paymentMethod,
+      balanceDue: dollars(shaped.balanceDueCents),
+    };
+    return keys.map((k) => csv(k in value ? value[k] : r[k])).join(',');
+  });
   res.type('text/csv').set('Content-Disposition', 'attachment; filename="registrations.csv"').send([keys.join(','), ...rows].join('\n'));
 });
 
@@ -119,7 +243,15 @@ adminRouter.post('/registrations', async (req, res) => {
       ? await prisma.user.findUnique({ where: { telegramId: String(req.body.telegramId) } })
       : null;
     if (!user) user = await findOrCreateHeadlessUser({ eventId: req.body.eventId, legalName: req.body.legalName, fursonaName: req.body.fursonaName, email: req.body.email });
-    const reg = await createRegistration({ event, user, ...req.body, source: 'admin' });
+    const p = req.body.payment;
+    const reg = await createRegistration({
+      event, user,
+      legalName: req.body.legalName, fursonaName: req.body.fursonaName, email: req.body.email, answers: req.body.answers,
+      ticketTierId: req.body.ticketTierId, voucherCode: req.body.voucherCode,
+      inPersonPayment: p?.method ? { method: p.method, amountCents: toCents(p.amount), note: p.note } : null,
+      processedById: req.user.id,
+      source: 'admin',
+    });
     await audit(req.user.id, 'registration.create', reg.id, { code: reg.code });
     getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
     res.json(shapeReg(reg));
@@ -130,8 +262,16 @@ adminRouter.post('/registrations', async (req, res) => {
 });
 
 adminRouter.patch('/registrations/:code', async (req, res) => {
-  const allowed = ['legalName','fursonaName','email','status','answers','paymentMethod','paymentAmount','paymentNote'];
+  const allowed = ['legalName','fursonaName','email','status','answers','ticketTierId'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+  if (data.ticketTierId !== undefined) {
+    const current = await prisma.registration.findUnique({ where: { code: req.params.code }, select: { eventId: true } });
+    if (!current) return res.status(404).json({ error: 'Registration not found.' });
+    const tier = data.ticketTierId ? await prisma.ticketTier.findFirst({ where: { id: data.ticketTierId, eventId: current.eventId } }) : null;
+    if (data.ticketTierId && !tier) return res.status(400).json({ error: 'That ticket type is not on this event.' });
+    data.ticketTierId = tier?.id ?? null;
+    data.tierName = tier?.name ?? null;
+  }
   if (data.answers) {
     const existing = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
     if (!existing) return res.status(404).json({ error: 'Registration not found.' });
@@ -142,13 +282,42 @@ adminRouter.patch('/registrations/:code', async (req, res) => {
     try { validateAnswers(existing.event, data.answers); }
     catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
   }
-  const reg = await prisma.registration.update({ where: { code: req.params.code }, data });
+  const reg = await prisma.registration.update({ where: { code: req.params.code }, data, include: REG_INCLUDE });
   if (data.status === 'CANCELLED') {
     const promoted = await promoteFromWaitlist(reg.eventId);
     await notifyWaitlistPromotion(promoted);
   }
   await audit(req.user.id, 'registration.update', reg.id, data);
   res.json(shapeReg(reg));
+});
+
+/// Money taken in person for a registration that was already created — e.g.
+/// someone who registered online on a pay-at-the-door tier, paying at check-in.
+adminRouter.post('/registrations/:code/payments', async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { ticketTier: true } });
+  if (!reg) return res.status(404).json({ error: 'Registration not found.' });
+  try {
+    const payment = await recordInPersonPayment({
+      registrationId: reg.id, method: req.body?.method, amountCents: toCents(req.body?.amount),
+      note: req.body?.note, processedById: req.user.id, currency: reg.ticketTier?.currency,
+    });
+    await audit(req.user.id, 'payment.record', payment.id, { code: reg.code, method: payment.method, amountCents: payment.amountCents });
+    res.json(shapeReg(await prisma.registration.findUnique({ where: { id: reg.id }, include: REG_INCLUDE })));
+  } catch (e) {
+    if (e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Undoes a mistaken in-person entry. Stripe payments are refunded from the
+/// Stripe dashboard instead, and the refund webhook updates them here.
+adminRouter.delete('/payments/:id', async (req, res) => {
+  const payment = await prisma.payment.findUnique({ where: { id: req.params.id }, include: { registration: true } });
+  if (!payment) return res.status(404).json({ error: 'Payment not found.' });
+  if (payment.method === 'STRIPE') return res.status(400).json({ error: 'Refund Stripe payments from the Stripe dashboard — PawPass updates automatically.' });
+  await prisma.payment.delete({ where: { id: payment.id } });
+  await audit(req.user.id, 'payment.undo', payment.id, { code: payment.registration.code, amountCents: payment.amountCents });
+  res.json(shapeReg(await prisma.registration.findUnique({ where: { id: payment.registrationId }, include: REG_INCLUDE })));
 });
 
 /// Manual re-send for "I never got the confirmation email" — awaited rather
@@ -252,7 +421,10 @@ adminRouter.post('/registrations/combine', async (req, res) => {
 
 /* ---------------- merch ---------------- */
 
-const PAYMENT_METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
+/// Methods staff can record by hand (merch, donations, tickets at the door).
+const PAYMENT_METHODS = STAFF_PAYMENT_METHODS;
+/// Everything that can show up in the money totals — Stripe on top of those.
+const ALL_PAYMENT_METHODS = [...STAFF_PAYMENT_METHODS, 'STRIPE'];
 class MerchError extends Error {}
 
 adminRouter.get('/events/:id/merch', async (req, res) => {
@@ -289,7 +461,7 @@ adminRouter.get('/events/:id/merch', async (req, res) => {
 
 /// A donation taken in person at the table, not tied to a merch item or an
 /// event registration — e.g. a walk-up donation box. Rolls into the Cash
-/// reconciliation totals the same as donation-tier registrations do.
+/// reconciliation totals alongside ticket payments.
 adminRouter.post('/events/:id/donations', async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
@@ -405,31 +577,33 @@ adminRouter.delete('/merch/sales/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-/// Combines the two separate places money gets recorded — donation-tier
-/// registrations and merch sales — into one end-of-shift total, broken out
-/// by payment method. Donation registrations with no paymentMethod recorded
-/// (i.e. nobody at the door confirmed the PayPal payment actually happened)
-/// are called out separately rather than silently counted as zero.
+/// Combines every place money gets recorded — ticket payments (Stripe and
+/// in-person), in-person donations, and merch sales — into one end-of-shift
+/// total, broken out by payment method. Ticket payments are net of refunds.
+/// Registrations on a paid tier that still owe money (pay-at-the-door tiers
+/// nobody has collected on yet) are called out separately, not counted.
 adminRouter.get('/events/:id/reconciliation', async (req, res) => {
-  const donationRegs = await prisma.registration.findMany({
-    where: { eventId: req.params.id, tier: 'DONATION', status: { not: 'CANCELLED' } },
-  });
-  const sales = await prisma.sale.findMany({
-    where: { item: { eventId: req.params.id } },
-    include: { item: true },
-  });
-  const donationEntries = await prisma.donation.findMany({ where: { eventId: req.params.id } });
+  const eventId = req.params.id;
+  const [payments, sales, donationEntries, owing] = await Promise.all([
+    prisma.payment.findMany({ where: { registration: { eventId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] } } }),
+    prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true } }),
+    prisma.donation.findMany({ where: { eventId } }),
+    prisma.registration.findMany({
+      where: { eventId, status: { in: ['CONFIRMED', 'WAITLIST'] }, ticketTier: { priceCents: { gt: 0 } } },
+      include: REG_INCLUDE,
+    }),
+  ]);
 
-  const byMethod = () => Object.fromEntries(PAYMENT_METHODS.map((m) => [m, { count: 0, total: 0 }]));
+  const byMethod = () => Object.fromEntries(ALL_PAYMENT_METHODS.map((m) => [m, { count: 0, total: 0 }]));
   const sumTotals = (obj) => Object.values(obj).reduce((sum, m) => sum + m.total, 0);
 
-  const donations = byMethod();
-  let unrecordedDonations = 0;
-  for (const r of donationRegs) {
-    if (!r.paymentMethod) { unrecordedDonations++; continue; }
-    donations[r.paymentMethod].count++;
-    donations[r.paymentMethod].total += r.paymentAmount || 0;
+  const tickets = byMethod();
+  for (const p of payments) {
+    tickets[p.method].count++;
+    tickets[p.method].total += (p.amountCents - p.amountRefundedCents) / 100;
   }
+
+  const donations = byMethod();
   for (const d of donationEntries) {
     donations[d.paymentMethod].count++;
     donations[d.paymentMethod].total += d.amount;
@@ -441,9 +615,18 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
     merch[s.paymentMethod].total += (s.item.price || 0) * s.quantity;
   }
 
+  const unpaid = owing.map(shapeReg).filter((r) => r.balanceDueCents > 0);
+  const ticketsTotal = sumTotals(tickets);
   const donationsTotal = sumTotals(donations);
   const merchTotal = sumTotals(merch);
-  res.json({ donations, merch, unrecordedDonations, donationsTotal, merchTotal, grandTotal: donationsTotal + merchTotal });
+  res.json({
+    methods: ALL_PAYMENT_METHODS,
+    tickets, donations, merch,
+    unpaidTickets: unpaid.length,
+    unpaidTotal: unpaid.reduce((sum, r) => sum + r.balanceDueCents, 0) / 100,
+    ticketsTotal, donationsTotal, merchTotal,
+    grandTotal: ticketsTotal + donationsTotal + merchTotal,
+  });
 });
 
 /// Full sales log, not just the last 100 shown on screen.
@@ -467,21 +650,27 @@ adminRouter.get('/events/:id/merch.csv', async (req, res) => {
 });
 
 /// One combined ledger of every place money got recorded for this event —
-/// donation-tier registrations, merch sales, and in-person donations — for
-/// end-of-event bookkeeping. The on-screen reconciliation view only shows
-/// totals by method; this is the transaction-level detail behind them.
+/// ticket payments, merch sales, and in-person donations — for end-of-event
+/// bookkeeping. The on-screen reconciliation view only shows totals by
+/// method; this is the transaction-level detail behind them.
 adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
   const eventId = req.params.id;
-  const [donationRegs, sales, donationEntries] = await Promise.all([
-    prisma.registration.findMany({ where: { eventId, tier: 'DONATION', status: { not: 'CANCELLED' }, paymentMethod: { not: null } } }),
+  const [payments, sales, donationEntries] = await Promise.all([
+    prisma.payment.findMany({
+      where: { registration: { eventId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] } },
+      include: { registration: true, processedBy: true },
+    }),
     prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true, processedBy: true } }),
     prisma.donation.findMany({ where: { eventId }, include: { processedBy: true } }),
   ]);
 
   const rows = [
-    ...donationRegs.map((r) => ({
-      createdAt: r.createdAt, type: 'Registration', description: `${r.legalName} (${r.code})`,
-      amount: r.paymentAmount || 0, paymentMethod: r.paymentMethod, note: r.paymentNote || '', processedBy: '',
+    ...payments.map((p) => ({
+      createdAt: p.paidAt || p.createdAt, type: 'Ticket',
+      description: `${p.registration.tierName || 'Ticket'} — ${p.registration.legalName} (${p.registration.code})`,
+      amount: (p.amountCents - p.amountRefundedCents) / 100, paymentMethod: p.method,
+      note: [p.note, p.amountRefundedCents ? `refunded ${(p.amountRefundedCents / 100).toFixed(2)}` : ''].filter(Boolean).join('; '),
+      processedBy: p.processedBy?.displayName || '',
     })),
     ...sales.map((s) => ({
       createdAt: s.createdAt, type: 'Merch', description: `${s.quantity} x ${s.item.name}`,
@@ -590,7 +779,7 @@ adminRouter.post('/checkin', async (req, res) => {
   const secret = primary.split('/').pop();
   const reg = await prisma.registration.findFirst({
     where: { OR: [{ secret }, { code: primary.toUpperCase() }] },
-    include: { event: true, user: true },
+    include: { event: true, user: true, ...REG_INCLUDE },
   });
   if (!reg) return res.status(404).json({ error: 'No ticket matches that code.' });
   if (req.body.eventId && reg.eventId !== req.body.eventId)
@@ -599,6 +788,8 @@ adminRouter.post('/checkin', async (req, res) => {
     return res.status(409).json({ error: 'This ticket was cancelled.', registration: shapeReg(reg) });
   if (reg.status === 'WAITLIST')
     return res.status(409).json({ error: 'This registration is on the waitlist and has no confirmed spot.', registration: shapeReg(reg) });
+  if (reg.status === 'PENDING_PAYMENT')
+    return res.status(409).json({ error: 'This ticket\'s online payment never completed.', registration: shapeReg(reg) });
 
   const already = reg.checkedInAt;
   const updated = already
@@ -606,6 +797,7 @@ adminRouter.post('/checkin', async (req, res) => {
     : await prisma.registration.update({
         where: { id: reg.id },
         data: { checkedInAt: new Date(), checkedInById: req.user.id },
+        include: REG_INCLUDE,
       });
 
   res.json({
@@ -789,7 +981,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
   const regs = await prisma.registration.findMany({
     where: { ...(eventId && { eventId }), ...(since && { createdAt: { gte: since } }) },
-    select: { createdAt: true, status: true, source: true, tier: true, checkedInAt: true },
+    select: { createdAt: true, status: true, source: true, checkedInAt: true },
   });
 
   const dayKey = (d) => d.toISOString().slice(0, 10);
@@ -798,7 +990,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
     for (let t = new Date(since); t <= new Date(); t.setUTCDate(t.getUTCDate() + 1)) dailyMap.set(dayKey(t), 0);
   }
   const bySource = {};
-  const byStatus = { CONFIRMED: 0, WAITLIST: 0, CANCELLED: 0 };
+  const byStatus = { CONFIRMED: 0, PENDING_PAYMENT: 0, WAITLIST: 0, CANCELLED: 0 };
   let checkedIn = 0;
   const todayKey = dayKey(new Date());
   let today = 0;
@@ -827,8 +1019,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'voucherCode', 'merchItem', 'registration', 'sale', 'donation', 'emailCampaign', 'auditLog'];
-const BACKUP_VERSION = 1;
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'voucherCode', 'merchItem', 'registration', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 
@@ -870,8 +1061,10 @@ adminRouter.post('/restore', requireOwner, restoreUpload.single('file'), async (
   try { parsed = JSON.parse(dataEntry.getData().toString('utf8'), reviveDates); }
   catch { return res.status(400).json({ error: 'data.json in that backup is not valid JSON.' }); }
 
-  if (parsed?.meta?.version !== BACKUP_VERSION)
-    return res.status(400).json({ error: `Unsupported backup version (${parsed?.meta?.version ?? 'unknown'}) — expected ${BACKUP_VERSION}.` });
+  // Older backups are converted forward one version at a time (lib/backup.js),
+  // the same way the v1 -> v2 database migration converts a live instance.
+  try { parsed = upgradeBackup(parsed); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
 
   const counts = {};
   await prisma.$transaction(async (tx) => {

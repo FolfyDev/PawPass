@@ -6,7 +6,9 @@ import sharp from 'sharp';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { createRegistration, RegistrationError, registrationWindowState, cancelRegistration } from '../lib/registrations.js';
+import { createRegistration, RegistrationError, registrationWindowState, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier } from '../lib/registrations.js';
+import { startCheckout, PaymentError } from '../lib/payments.js';
+import { stripeEnabled } from '../lib/stripe.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { escapeHtml as esc } from '../lib/html.js';
 import { sendRegistrationConfirmation } from '../lib/mailer.js';
@@ -17,6 +19,13 @@ import { sendRegistrationConfirmation } from '../lib/mailer.js';
 /// into one of those messages that isn't meant to be a tag — an event title,
 /// a configurable welcome message — has to go through esc() first.
 const link = (url, text) => `<a href="${esc(url)}">${esc(text ?? url)}</a>`;
+
+const money = (cents, currency = 'usd') =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
+
+/// Stripe Checkout always has an https URL, which is what Telegram needs for
+/// an inline URL button.
+const payButton = (url, label = 'Pay now') => new InlineKeyboard().url(label, url);
 
 /// The web Login Widget hands us `photo_url` directly, but that widget only
 /// works over https on a domain registered with BotFather — useless on a
@@ -217,14 +226,16 @@ export function createBot() {
     await beginEvent(ctx, String(ctx.from.id), event);
   });
 
-  bot.callbackQuery(/^tier:(free|donation)$/, async (ctx) => {
+  bot.callbackQuery(/^tier:(.+)$/, async (ctx) => {
     const telegramId = String(ctx.from.id);
     const { session, draft } = await load(ctx);
     await ctx.answerCallbackQuery();
     if (session.state !== S.TIER) return;
-    draft.tier = ctx.match[1] === 'donation' ? 'DONATION' : 'FREE';
     const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
     if (!event) { await reset(telegramId); return ctx.reply('That event is gone. Send /register to see the current list.'); }
+    const tier = (await activeTiers(event.id)).find((t) => t.id === ctx.match[1]);
+    if (!tier) return ctx.reply('That ticket type is no longer available — pick another one.');
+    draft.ticketTierId = tier.id;
     await save(telegramId, S.TOS, draft);
     const body = (event.tosBody || '').slice(0, 3500);
     await ctx.reply(
@@ -238,12 +249,17 @@ export function createBot() {
     const existing = await prisma.registration.findUnique({
       where: { eventId_userId: { eventId: event.id, userId: user.id } },
     });
+    if (existing?.status === 'PENDING_PAYMENT') {
+      await reset(telegramId);
+      const kb = new InlineKeyboard().text('Pay now', `pay:${existing.id}`);
+      return ctx.reply(`Your registration for ${event.title} is waiting on payment.`, { reply_markup: kb });
+    }
     if (existing && existing.status !== 'CANCELLED') {
       await reset(telegramId);
       return ctx.reply(`You are already registered for ${event.title}. Your code is ${existing.code}.`);
     }
-    const confirmed = await prisma.registration.count({ where: { eventId: event.id, status: 'CONFIRMED' } });
-    const state = registrationWindowState(event, confirmed);
+    const held = await prisma.registration.count({ where: { eventId: event.id, status: { in: HOLDS_SEAT } } });
+    const state = registrationWindowState(event, held);
     if (!state.open) { await reset(telegramId); return ctx.reply(state.reason); }
 
     const settings = await getSettings();
@@ -265,27 +281,59 @@ export function createBot() {
         fursonaName: draft.fursonaName,
         email: draft.email,
         answers: draft.answers,
-        tier: draft.tier,
+        ticketTierId: draft.ticketTierId,
         source: 'telegram',
       });
       await prisma.user.update({
         where: { id: user.id },
         data: { legalName: reg.legalName, fursonaName: reg.fursonaName, email: reg.email ?? undefined },
       });
-      getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
       await reset(telegramId);
+
+      // Same as the web: the confirmation (Telegram + email) for a paid
+      // ticket goes out from the payment webhook, not from here.
+      if (reg.status === 'PENDING_PAYMENT') return sendPayLink(ctx, reg, event);
+
+      getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
+      const due = reg.ticketTier?.priceCents > 0 && !reg.payments?.some((p) => p.status === 'PAID');
       await ctx.reply(
-        `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${esc(event.title)}.\n\n` +
+        `You are ${reg.status === 'WAITLIST' ? 'on the waitlist' : 'registered'} for ${esc(event.title)}` +
+        `${reg.tierName ? ` (${esc(reg.tierName)})` : ''}.\n\n` +
         `Badge code: ${reg.code}\n` +
         `Ticket and wallet pass: ${link(`${env.webUrl}/tickets`)}\n\n` +
         'Bring the QR from that page to check-in. Send /rsvp any time to update whether you\'re going.' +
-        (reg.tier === 'DONATION' ? `\n\nComplete your ${esc(event.donationTierName.toLowerCase())} contribution: ${link(event.donationPaypalLink)}` : ''),
+        (due ? `\n\nPay ${money(reg.ticketTier.priceCents, reg.ticketTier.currency)} at the door.` : ''),
         { parse_mode: 'HTML' },
       );
     } catch (e) {
       await reset(telegramId);
       await ctx.reply(e instanceof RegistrationError ? e.message : 'Something went wrong. Try /register again.');
     }
+  });
+
+  async function sendPayLink(ctx, reg, event) {
+    try {
+      const url = await startCheckout(reg.id);
+      const tier = reg.ticketTier;
+      return ctx.reply(
+        `Your spot for ${event.title}${reg.tierName ? ` (${reg.tierName})` : ''} is held for ${env.stripe.checkoutMinutes} minutes.\n\n` +
+        `Pay ${tier ? money(tier.priceCents, tier.currency) : ''} to confirm it — you'll get your badge code here as soon as it goes through.`,
+        { reply_markup: payButton(url, tier ? `Pay ${money(tier.priceCents, tier.currency)}` : 'Pay now') },
+      );
+    } catch (e) {
+      if (!(e instanceof PaymentError)) throw e;
+      const kb = new InlineKeyboard().text('Try again', `pay:${reg.id}`);
+      return ctx.reply(e.message, { reply_markup: kb });
+    }
+  }
+
+  bot.callbackQuery(/^pay:(.+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    const reg = await prisma.registration.findUnique({ where: { id: ctx.match[1] }, include: { event: true, ticketTier: true } });
+    if (!reg || reg.userId !== user.id) return ctx.reply('That ticket is not yours.');
+    if (reg.status !== 'PENDING_PAYMENT') return ctx.reply('That ticket has nothing left to pay. Send /mytickets to see it.');
+    await sendPayLink(ctx, reg, reg.event);
   });
 
   /// Hands out a single-use sign-in code. This is the only sign-in path that
@@ -317,12 +365,14 @@ export function createBot() {
     if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
     const kb = new InlineKeyboard();
     regs.forEach((r, i) => {
-      kb.text(`Show QR — ${r.event.title}`, `ticketqr:${r.id}`);
+      if (r.status === 'PENDING_PAYMENT') kb.text(`Pay — ${r.event.title}`, `pay:${r.id}`);
+      else kb.text(`Show QR — ${r.event.title}`, `ticketqr:${r.id}`);
       if (i < regs.length - 1) kb.row();
     });
+    const label = { WAITLIST: 'Waitlist', PENDING_PAYMENT: 'Awaiting payment', CONFIRMED: 'Confirmed' };
     await ctx.reply(
       regs.map((r) =>
-        `${esc(r.event.title)}\n${r.status === 'WAITLIST' ? 'Waitlist' : 'Confirmed'} — code ${r.code}` +
+        `${esc(r.event.title)}${r.tierName ? ` · ${esc(r.tierName)}` : ''}\n${label[r.status]} — code ${r.code}` +
         (r.checkedInAt ? '\nChecked in' : '')).join('\n\n') +
       `\n\nWallet passes: ${link(`${env.webUrl}/tickets`)}`,
       { reply_markup: kb, parse_mode: 'HTML' },
@@ -670,13 +720,29 @@ export function createBot() {
     }
 
     async function askTier(event) {
-      if (!event.donationPaypalLink) {
-        draft.tier = 'FREE';
+      const [tiers, held] = await Promise.all([activeTiers(event.id), heldByTier(event.id)]);
+      const available = tiers.filter((t) => t.capacity == null || (held[t.id] || 0) < t.capacity);
+      if (!available.length) {
+        await reset(telegramId);
+        return ctx.reply(tiers.length ? 'Every ticket type for this event is sold out.' : 'No tickets are on sale for this event right now.');
+      }
+      if (available.length === 1) {
+        draft.ticketTierId = available[0].id;
         return askTos(event);
       }
       await save(telegramId, S.TIER, draft);
-      const kb = new InlineKeyboard().text('Free', 'tier:free').text(event.donationTierName, 'tier:donation');
-      return ctx.reply('Choose a tier:', { reply_markup: kb });
+      const kb = new InlineKeyboard();
+      available.forEach((t, i) => {
+        kb.text(`${t.name} — ${t.priceCents ? money(t.priceCents, t.currency) : 'Free'}`, `tier:${t.id}`);
+        if (i < available.length - 1) kb.row();
+      });
+      const details = available
+        .map((t) => `· ${t.name} — ${t.priceCents ? money(t.priceCents, t.currency) : 'Free'}${t.description ? `\n  ${t.description}` : ''}`)
+        .join('\n');
+      const payNote = available.some((t) => t.priceCents > 0)
+        ? (stripeEnabled() ? '\n\nPaid tickets are paid by card right after you accept the terms.' : '\n\nPaid tickets are paid at the door.')
+        : '';
+      return ctx.reply(`Choose a ticket:\n\n${details}${payNote}`, { reply_markup: kb });
     }
 
     async function askTos(event) {

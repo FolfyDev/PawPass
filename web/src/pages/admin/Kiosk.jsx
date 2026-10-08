@@ -2,18 +2,19 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
-import { Field, PaymentButtons } from '../../components/Bits.jsx';
+import { Field, PaymentButtons, fmtMoney } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 import { printBadge } from '../../lib/print.js';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 
-const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, tier: 'FREE', paymentMethod: '', paymentAmount: '', paymentNote: '', tosAccepted: false };
+const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, ticketTierId: '', paymentMethod: '', paymentAmount: null, paymentNote: '', tosAccepted: false };
 
 
 export default function Kiosk() {
   const { id } = useParams();
   const { settings } = useSession();
   const [event, setEvent] = useState(null);
+  const [tiers, setTiers] = useState([]);
   const [form, setForm] = useState(BLANK_FORM);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -23,11 +24,21 @@ export default function Kiosk() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
 
-  useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
+  useEffect(() => {
+    api.get(`/api/admin/events/${id}`).then(setEvent);
+    api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers.filter((t) => t.active)));
+  }, [id]);
 
   if (!event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
 
   const fields = event.customFields || [];
+  // With a single tier there's nothing to pick.
+  const tierId = form.ticketTierId || (tiers.length === 1 ? tiers[0].id : '');
+  const tier = tiers.find((t) => t.id === tierId);
+  const paid = tier?.priceCents > 0;
+  // null = untouched, which means "the ticket price".
+  const amount = form.paymentAmount ?? (paid ? (tier.priceCents / 100).toFixed(2) : '');
+  const pickTier = (t) => setForm({ ...form, ticketTierId: t.id, paymentAmount: null });
 
   const submit = async (e) => {
     e.preventDefault();
@@ -38,8 +49,9 @@ export default function Kiosk() {
       if (f.required && (Array.isArray(v) ? v.length === 0 : !v)) return setError(`${f.label} is required.`);
     }
     if (!form.tosAccepted) return setError('Confirm the attendee has agreed to the terms.');
-    if (form.tier === 'DONATION' && !form.paymentMethod) return setError('Select how the payment was received.');
-    if (form.tier === 'DONATION' && !(Number(form.paymentAmount) > 0)) return setError('Enter the amount received.');
+    if (!tier) return setError('Choose a ticket type.');
+    if (paid && !form.paymentMethod) return setError('Select how the payment was received.');
+    if (paid && (amount === '' || !(Number(amount) >= 0))) return setError('Enter the amount received.');
 
     setBusy(true);
     try {
@@ -49,10 +61,8 @@ export default function Kiosk() {
         fursonaName: form.fursonaName,
         email: form.email || null,
         answers: form.answers,
-        tier: form.tier,
-        paymentMethod: form.tier === 'DONATION' ? form.paymentMethod : undefined,
-        paymentAmount: form.tier === 'DONATION' ? Number(form.paymentAmount) : undefined,
-        paymentNote: form.tier === 'DONATION' ? form.paymentNote : undefined,
+        ticketTierId: tier.id,
+        payment: paid ? { method: form.paymentMethod, amount, note: form.paymentNote } : undefined,
       });
       setResult(reg);
       setPrintMsg('');
@@ -93,10 +103,11 @@ export default function Kiosk() {
               <span className="code">{result.code}</span>
               {result.badgeNumber != null && <span className="small muted">Badge #{result.badgeNumber}</span>}
             </p>
-            {result.tier === 'DONATION' && (
+            {result.tierName && <p className="small muted" style={{ margin: 0 }}>{result.tierName}</p>}
+            {result.paidCents > 0 && (
               <p className="small muted" style={{ margin: 0 }}>
-                Paid {result.paymentAmount != null ? `$${Number(result.paymentAmount).toFixed(2)} ` : ''}
-                via {result.paymentMethod || 'unrecorded method'}{result.paymentNote ? ` — ${result.paymentNote}` : ''}
+                Paid {fmtMoney(result.paidCents, result.currency)} via {result.paymentMethod}
+                {result.payments?.at(-1)?.note ? ` — ${result.payments.at(-1).note}` : ''}
               </p>
             )}
             {printMsg && <p className={`note ${printMsgOk ? 'good' : 'bad'}`}>{printMsg}</p>}
@@ -155,30 +166,29 @@ export default function Kiosk() {
               </Field>
             ))}
 
-            {event.donationPaypalLink && (
-              <Field label="Tier">
+            {tiers.length === 0 && <p className="note bad">This event has no ticket types on sale — add one on the Tickets tab.</p>}
+            {tiers.length > 1 && (
+              <Field label="Ticket">
                 <div className="tiers">
-                  <button type="button" className={`tier${form.tier === 'FREE' ? ' selected' : ''}`}
-                    onClick={() => setForm({ ...form, tier: 'FREE' })}>
-                    <span className="tier-name">Free</span>
-                    <span className="tier-help">Standard registration</span>
-                  </button>
-                  <button type="button" className={`tier${form.tier === 'DONATION' ? ' selected' : ''}`}
-                    onClick={() => setForm({ ...form, tier: 'DONATION' })}>
-                    <span className="tier-name">{event.donationTierName}</span>
-                    <span className="tier-help">Paid onsite</span>
-                  </button>
+                  {tiers.map((t) => (
+                    <button key={t.id} type="button" disabled={t.remaining === 0}
+                      className={`tier${tierId === t.id ? ' selected' : ''}`} onClick={() => pickTier(t)}>
+                      <span className="tier-name">{t.name}</span>
+                      <span className="tier-price">{t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free'}</span>
+                      <span className="tier-help">{t.remaining === 0 ? 'Sold out' : t.remaining != null ? `${t.remaining} left` : ''}</span>
+                    </button>
+                  ))}
                 </div>
               </Field>
             )}
 
-            {form.tier === 'DONATION' && (
+            {paid && (
               <>
                 <Field label="Payment received via">
                   <PaymentButtons value={form.paymentMethod} onChange={(v) => setForm({ ...form, paymentMethod: v })} />
                 </Field>
-                <Field label="Amount received ($)">
-                  <input type="number" step="0.01" min="0" value={form.paymentAmount}
+                <Field label={`Amount received (${tier.currency.toUpperCase()})`} help={`Ticket price ${fmtMoney(tier.priceCents, tier.currency)}`}>
+                  <input type="number" step="0.01" min="0" value={amount}
                     onChange={(e) => setForm({ ...form, paymentAmount: e.target.value })} />
                 </Field>
                 <Field label="Payment note" help="Optional — change given, etc.">

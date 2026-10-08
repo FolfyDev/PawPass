@@ -5,6 +5,7 @@ import Breadcrumbs from './Breadcrumbs.jsx';
 
 const TABS = [
   ['', 'Details'],
+  ['tickets', 'Tickets'],
   ['attendees', 'Attendees'],
   ['kiosk', 'Kiosk'],
   ['merch', 'Merch'],

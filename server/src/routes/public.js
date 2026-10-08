@@ -5,7 +5,9 @@ import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
 import { requireUser, issueToken, setSessionCookie, audit } from '../lib/auth.js';
-import { createRegistration, RegistrationError, registrationWindowState, findOrCreateHeadlessUser, cancelRegistration } from '../lib/registrations.js';
+import { createRegistration, RegistrationError, registrationWindowState, findOrCreateHeadlessUser, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier } from '../lib/registrations.js';
+import { startCheckout, syncSessionForUser, PaymentError, paymentSummary } from '../lib/payments.js';
+import { stripeEnabled } from '../lib/stripe.js';
 import { findMatchingBan, normHandle } from '../lib/bans.js';
 import { ticketCode, ticketSecret } from '../lib/codes.js';
 import { buildApplePass } from '../wallet/apple.js';
@@ -43,6 +45,7 @@ publicRouter.get('/settings', async (_req, res) => {
     printMode: env.zebra.mode,
     webUrl: env.webUrl,
     legal: { entityName: env.legal.entityName, contactEmail: env.legal.contactEmail },
+    payments: { online: stripeEnabled() },
   });
 });
 
@@ -50,7 +53,7 @@ publicRouter.get('/events', async (_req, res) => {
   const events = await prisma.event.findMany({
     where: { published: true },
     orderBy: { startsAt: 'asc' },
-    include: { _count: { select: { registrations: { where: { status: 'CONFIRMED' } } } } },
+    include: { _count: { select: { registrations: { where: { status: { in: HOLDS_SEAT } } } } } },
   });
   res.json(events.map(summarize));
 });
@@ -58,7 +61,7 @@ publicRouter.get('/events', async (_req, res) => {
 publicRouter.get('/events/:slug', async (req, res) => {
   const event = await prisma.event.findUnique({
     where: { slug: req.params.slug },
-    include: { _count: { select: { registrations: { where: { status: 'CONFIRMED' } } } } },
+    include: { _count: { select: { registrations: { where: { status: { in: HOLDS_SEAT } } } } } },
   });
   if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
   const state = registrationWindowState(event, event._count.registrations);
@@ -66,13 +69,14 @@ publicRouter.get('/events/:slug', async (req, res) => {
   if (req.user) {
     mine = await prisma.registration.findUnique({
       where: { eventId_userId: { eventId: event.id, userId: req.user.id } },
+      include: REG_INCLUDE,
     });
   }
+  const [tiers, held] = await Promise.all([activeTiers(event.id), heldByTier(event.id)]);
   res.json({
     ...summarize(event), description: event.description, tosTitle: event.tosTitle, tosBody: event.tosBody,
     customFields: event.customFields, state, registration: mine && shapeReg(mine),
-    donationTierName: event.donationTierName, donationPaypalLink: event.donationPaypalLink,
-    donationRequired: event.donationRequired,
+    tiers: tiers.map((t) => publicTier(t, held[t.id] || 0)),
   });
 });
 
@@ -108,7 +112,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
-  const { legalName, fursonaName, email, answers, acceptedTos, tier, voucherCode } = req.body || {};
+  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your preferred name.' });
@@ -136,7 +140,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   try {
     const reg = await createRegistration({
       event, user,
-      legalName, fursonaName, email, answers, tier, voucherCode,
+      legalName, fursonaName, email, answers, ticketTierId, voucherCode,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });
@@ -144,8 +148,20 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
       where: { id: user.id },
       data: { legalName: reg.legalName, fursonaName: reg.fursonaName, email: reg.email ?? undefined },
     });
-    getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
     if (guest) setSessionCookie(res, issueToken(user));
+
+    // Paid online: the confirmation email waits for the payment (see
+    // lib/payments.js notifyPaid). If Stripe can't start a session right
+    // now, the seat stays held and they can retry from their tickets.
+    if (reg.status === 'PENDING_PAYMENT') {
+      try {
+        return res.json({ ...shapeReg(reg), checkoutUrl: await startCheckout(reg.id) });
+      } catch (e) {
+        if (!(e instanceof PaymentError)) throw e;
+        return res.json({ ...shapeReg(reg), checkoutError: e.message });
+      }
+    }
+    getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
     res.json(shapeReg(reg));
   } catch (e) {
     if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
@@ -153,10 +169,30 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   }
 });
 
+/// Resume (or retry) payment for a ticket still waiting on it.
+publicRouter.post('/my/tickets/:code/pay', requireUser, async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
+  if (!reg || reg.userId !== req.user.id) return res.status(404).json({ error: 'Ticket not found.' });
+  try {
+    res.json({ url: await startCheckout(reg.id) });
+  } catch (e) {
+    if (e instanceof PaymentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Called by the Stripe success page so the ticket shows as confirmed right
+/// away, without waiting on the webhook.
+publicRouter.post('/my/payments/sync', requireUser, async (req, res) => {
+  const reg = await syncSessionForUser(req.body?.sessionId, req.user.id);
+  if (!reg) return res.status(404).json({ error: 'Payment not found.' });
+  res.json({ code: reg.code, status: reg.status });
+});
+
 publicRouter.get('/my/tickets', requireUser, async (req, res) => {
   const regs = await prisma.registration.findMany({
     where: { userId: req.user.id, status: { not: 'CANCELLED' } },
-    include: { event: true },
+    include: { event: true, ...REG_INCLUDE },
     orderBy: { createdAt: 'desc' },
   });
   res.json(regs.map((r) => ({ ...shapeReg(r), event: summarize(r.event) })));
@@ -277,14 +313,27 @@ export function summarize(e) {
   };
 }
 
+/// Include this wherever shapeReg's tier/payment fields should be filled in.
+export const REG_INCLUDE = { ticketTier: true, payments: { orderBy: { createdAt: 'asc' } } };
+
 export function shapeReg(r) {
   return {
     code: r.code, status: r.status, legalName: r.legalName, fursonaName: r.fursonaName,
     email: r.email, answers: r.answers, checkedInAt: r.checkedInAt, createdAt: r.createdAt,
     qrUrl: `${env.publicUrl}/t/${r.secret}`,
-    tier: r.tier, badgeNumber: r.badgeNumber, rsvp: r.rsvp,
-    paymentMethod: r.paymentMethod, paymentAmount: r.paymentAmount, paymentNote: r.paymentNote,
+    ticketTierId: r.ticketTierId, tierName: r.tierName, badgeNumber: r.badgeNumber, rsvp: r.rsvp,
+    tierPriceCents: r.ticketTier?.priceCents ?? null,
+    currency: r.ticketTier?.currency ?? null,
     badgeTier: r.badgeTier,
+    ...paymentSummary(r),
+  };
+}
+
+export function publicTier(t, held) {
+  const remaining = t.capacity != null ? Math.max(t.capacity - held, 0) : null;
+  return {
+    id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, currency: t.currency,
+    remaining, soldOut: remaining === 0,
   };
 }
 

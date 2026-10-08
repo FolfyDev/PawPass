@@ -158,7 +158,7 @@ web/
 ```bash
 # terminal 1
 docker compose up db
-cd server && npm install && npx prisma db push && npm run dev
+cd server && npm install && npm run db:migrate && npm run dev
 
 # terminal 2
 cd web && npm install && npm run dev     # proxies /api to :4000

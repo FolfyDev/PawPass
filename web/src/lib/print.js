@@ -63,8 +63,8 @@ export async function printBadges(codes, mode) {
 
 export const ATTENDEE_LIST_COLUMNS = [
   ['code', 'Code'], ['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'],
-  ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tier', 'Tier'], ['badgeTier', 'Badge tier'],
-  ['paymentMethod', 'Payment'], ['paymentAmount', 'Amount'], ['checkedInAt', 'Checked in'],
+  ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tierName', 'Ticket'], ['badgeTier', 'Badge tier'],
+  ['paymentMethod', 'Payment'], ['paidCents', 'Paid'], ['balanceDueCents', 'Owes'], ['checkedInAt', 'Checked in'],
 ];
 
 // Blanks always sort last — a column full of "—" isn't useful to page
@@ -91,7 +91,9 @@ export function printAttendeeList(rows, eventTitle, columnKeys, sortKey = 'badge
   const cell = (r, key) => {
     if (key === 'checkedInAt') return r.checkedInAt ? new Date(r.checkedInAt).toLocaleString() : '';
     if (key === 'telegram') return r.telegram ? `@${r.telegram}` : '';
-    if (key === 'paymentAmount') return r.paymentAmount != null ? `$${Number(r.paymentAmount).toFixed(2)}` : '';
+    if (key === 'paidCents' || key === 'balanceDueCents') {
+      return r[key] ? new Intl.NumberFormat(undefined, { style: 'currency', currency: (r.currency || 'usd').toUpperCase() }).format(r[key] / 100) : '';
+    }
     return r[key] ?? '';
   };
 

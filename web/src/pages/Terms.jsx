@@ -57,7 +57,7 @@ export default function Terms() {
         <section>
           <h2>4. Payments</h2>
           <p>
-            Where an event offers a paid or donation tier, payment is completed through PayPal or recorded directly
+            Where an event offers paid tickets, payment is completed online through Stripe or recorded directly
             by event staff (for onsite/cash payments)  PawPass itself does not process or store payment card
             details. Refund and cancellation policies are set by each event's organizers, not by us.
           </p>

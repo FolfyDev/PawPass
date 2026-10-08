@@ -1,7 +1,7 @@
 {
   "name": "pawpass-server",
   "description": "Simple Mobile Identity and Ticketing Management for Events",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -10,10 +10,12 @@
     "start": "sh docker-entrypoint.sh",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:reset": "prisma db push --force-reset",
+    "db:reset": "prisma migrate reset --force --skip-seed",
     "pretest": "prisma db push --skip-generate --accept-data-loss",
     "test": "node --test --test-concurrency=1 tests/*.test.js tests/load/*.test.js",
-    "test:load": "node --test tests/load/*.test.js"
+    "test:load": "node --test tests/load/*.test.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:diff": "prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url $SHADOW_DATABASE_URL --script"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -33,12 +35,13 @@
     "nanoid": "^5.0.9",
     "nodemailer": "^9.1.0",
     "passkit-generator": "^3.3.0",
+    "prisma": "^5.22.0",
     "qrcode": "^1.5.4",
     "sharp": "^0.35.4",
+    "stripe": "^23.0.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "prisma": "^5.22.0",
     "supertest": "^7.0.0"
   }
 }

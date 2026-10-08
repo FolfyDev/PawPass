@@ -1,3 +1,9 @@
+// Frozen snapshot of the final PawPass v1 schema. Never edit — it exists so
+// scripts/migrate.js can bring a v1 database created by `prisma db push` (no
+// migration history) up to exactly this shape before adopting it into
+// prisma/migrations as 0001_v1_baseline. New schema changes go in
+// ../schema.prisma plus a new migration, never here.
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -17,10 +23,11 @@ enum RegistrationStatus {
   CONFIRMED
   WAITLIST
   CANCELLED
-  /// Holds a seat while the attendee is on Stripe Checkout. Becomes CONFIRMED
-  /// from the webhook once Stripe says the session is paid, or CANCELLED when
-  /// the session expires (see lib/payments.js).
-  PENDING_PAYMENT
+}
+
+enum RegistrationTier {
+  FREE
+  DONATION
 }
 
 enum RsvpStatus {
@@ -33,19 +40,7 @@ enum PaymentMethod {
   CASH
   CARD
   PAYPAL
-  /// Online, via Stripe Checkout. Only ever set by lib/payments.js from a
-  /// Stripe-verified session, never by staff.
-  STRIPE
   OTHER
-}
-
-enum PaymentStatus {
-  PENDING
-  PAID
-  EXPIRED
-  FAILED
-  REFUNDED
-  PARTIALLY_REFUNDED
 }
 
 /// A person. Attendees always arrive through Telegram; staff may also hold a password.
@@ -78,7 +73,6 @@ model User {
   auditEntries     AuditLog[]
   sales            Sale[]         @relation("SalesProcessedBy")
   donationsProcessed Donation[]   @relation("DonationsProcessedBy")
-  paymentsProcessed Payment[]     @relation("PaymentsProcessedBy")
   bansCreated      Ban[]          @relation("BansCreatedBy")
 }
 
@@ -105,12 +99,18 @@ model Event {
   badgeTemplateId  String?
   badgeTemplate    BadgeTemplate? @relation(fields: [badgeTemplateId], references: [id])
   accentColor      String         @default("#FF5B04")
+  /// Fixed two-tier model: everyone can register free; this is the paid/optional tier.
+  donationTierName String         @default("Supporter")
+  donationPaypalLink String?      // null = donation tier is hidden for this event
+  /// When true, the free option is hidden entirely and every registration is
+  /// treated as paid (short of a voucher override) — for a special add-on
+  /// registration that always costs money, e.g. an after-party.
+  donationRequired Boolean        @default(false)
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
 
   registrations    Registration[]
-  ticketTiers      TicketTier[]
   campaigns        EmailCampaign[]
   merchItems       MerchItem[]
   voucherCodes     VoucherCode[]
@@ -144,19 +144,16 @@ model Registration {
   /// custom-question answers are free text and can contain anything.
   answers       String             @default("")
   status        RegistrationStatus @default(CONFIRMED)
-  /// null for voucher redemptions, which bypass tiers entirely.
-  ticketTierId  String?
-  ticketTier    TicketTier?        @relation(fields: [ticketTierId], references: [id], onDelete: SetNull)
-  /// Denormalized copy of the tier's name at registration time, so the badge
-  /// keeps printing it even if the tier is later renamed or deleted — same
-  /// reasoning as badgeTier below.
-  tierName      String?
-  /// Assigned once the registration holds a confirmed or waitlisted spot —
-  /// never while PENDING_PAYMENT, so abandoned checkouts don't burn numbers.
+  tier          RegistrationTier   @default(FREE)
   badgeNumber   Int?
   rsvp          RsvpStatus         @default(YES)
   source        String             @default("web") // web | telegram | admin
-  payments      Payment[]
+  /// How a DONATION-tier payment was actually received — set by staff, usually
+  /// via the onsite kiosk, since the donation tier is otherwise just a PayPal
+  /// link with no way for us to confirm it was paid.
+  paymentMethod PaymentMethod?
+  paymentAmount Float?
+  paymentNote   String?
 
   voucherCodeId String?
   voucher       VoucherCode?       @relation(fields: [voucherCodeId], references: [id], onDelete: SetNull)
@@ -175,79 +172,8 @@ model Registration {
 
   @@unique([eventId, userId])
   @@index([eventId, status])
-  @@index([ticketTierId])
   @@index([legalNameIndex])
   @@index([emailIndex])
-}
-
-/// A purchasable (or free) ticket type for an event, e.g. "Attendee",
-/// "Sponsor", "Early bird". PawPass is the source of truth; each paid tier is
-/// pushed to Stripe as a Product + Price (see lib/stripe.js syncTier).
-model TicketTier {
-  id              String         @id @default(cuid())
-  eventId         String
-  event           Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  name            String
-  description     String         @default("")
-  /// Integer cents. 0 = free.
-  priceCents      Int            @default(0)
-  currency        String         @default("usd")
-  /// Per-tier limit on top of the event's own capacity; null = no tier limit.
-  /// Counts CONFIRMED + PENDING_PAYMENT, same as the event capacity does.
-  capacity        Int?
-  sortOrder       Int            @default(0)
-  /// Inactive tiers are hidden from sale but kept, so existing registrations
-  /// still point at them. Tiers with registrations can't be deleted.
-  active          Boolean        @default(true)
-  stripeProductId String?        @unique
-  stripePriceId   String?
-  stripeSyncedAt  DateTime?
-  /// Last sync failure, shown to staff; cleared on the next successful sync.
-  stripeSyncError String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-
-  registrations   Registration[]
-
-  @@index([eventId])
-}
-
-/// Money received for a registration — either a Stripe Checkout attempt, or
-/// an in-person payment staff recorded at the kiosk/attendee editor. No card
-/// data is ever stored; Stripe rows only hold Stripe's own IDs.
-model Payment {
-  id                    String        @id @default(cuid())
-  registrationId        String
-  registration          Registration  @relation(fields: [registrationId], references: [id], onDelete: Cascade)
-  method                PaymentMethod
-  status                PaymentStatus @default(PENDING)
-  /// Integer cents.
-  amountCents           Int
-  amountRefundedCents   Int           @default(0)
-  currency              String        @default("usd")
-  note                  String?
-  stripeSessionId       String?       @unique
-  stripePaymentIntentId String?       @unique
-  /// When the Stripe Checkout session (and so the held seat) lapses.
-  expiresAt             DateTime?
-  paidAt                DateTime?
-  /// Staff member who recorded an in-person payment; null for Stripe.
-  processedById         String?
-  processedBy           User?         @relation("PaymentsProcessedBy", fields: [processedById], references: [id], onDelete: SetNull)
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
-
-  @@index([registrationId])
-  @@index([status, expiresAt])
-}
-
-/// Stripe webhook event IDs already applied. Stripe retries deliveries and
-/// can send the same event more than once; inserting here inside the same
-/// transaction as the update makes a duplicate a no-op.
-model StripeEvent {
-  id          String   @id // evt_...
-  type        String
-  processedAt DateTime @default(now())
 }
 
 /// Everything about how a badge looks lives here as data, so it is editable in the UI.
@@ -316,8 +242,8 @@ model Sale {
 /// A cash/card/etc. donation taken in person at the table — not tied to any
 /// merch item or event registration, e.g. a walk-up donation box. Recorded
 /// from the Merch tab (where staff are already handling in-person payments)
-/// and rolled into the Cash reconciliation totals alongside ticket
-/// payments and merch sales.
+/// and rolled into the Cash reconciliation totals alongside donation-tier
+/// registrations and merch sales.
 model Donation {
   id            String        @id @default(cuid())
   eventId       String

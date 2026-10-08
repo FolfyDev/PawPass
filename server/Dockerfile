@@ -10,6 +10,7 @@ RUN npm install --omit=dev
 COPY prisma ./prisma
 RUN npx prisma generate
 COPY src ./src
+COPY scripts ./scripts
 COPY docker-entrypoint.sh ./
 
 RUN mkdir -p /app/uploads && chown -R node:node /app/uploads

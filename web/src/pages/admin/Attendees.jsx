@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } from '../../lib/print.js';
-import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate } from '../../components/Bits.jsx';
+import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate, fmtMoney } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
@@ -80,7 +80,11 @@ export default function Attendees() {
   const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = () => api.get(`/api/admin/events/${id}/registrations?q=${encodeURIComponent(q)}`).then(setRows);
-  useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
+  const [tiers, setTiers] = useState([]);
+  useEffect(() => {
+    api.get(`/api/admin/events/${id}`).then(setEvent);
+    api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers)).catch(() => setTiers([]));
+  }, [id]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [q, id]);
   useEffect(() => { setSelected(new Set()); }, [id]);
   useEffect(() => { setPage(1); }, [q, id, sort, pageSize]);
@@ -174,14 +178,35 @@ export default function Attendees() {
       legalName: r.legalName || '',
       fursonaName: r.fursonaName || '',
       email: r.email || '',
-      paymentMethod: r.paymentMethod || '',
-      paymentAmount: r.paymentAmount != null ? String(r.paymentAmount) : '',
-      paymentNote: r.paymentNote || '',
+      ticketTierId: r.ticketTierId || '',
       status: r.status || 'CONFIRMED',
       answers: { ...(r.answers || {}) },
     });
+    setPaymentDraft({ method: '', amount: r.balanceDueCents ? (r.balanceDueCents / 100).toFixed(2) : '', note: '' });
     setEditMsg('');
     setEditMsgOk(false);
+  };
+
+  // Payments save immediately (they're money, not a form field), so they
+  // refresh `editing` from the server response instead of waiting for Save.
+  const [paymentDraft, setPaymentDraft] = useState({ method: '', amount: '', note: '' });
+  const recordPayment = async () => {
+    setEditMsg('');
+    try {
+      const updated = await api.post(`/api/admin/registrations/${editing.code}/payments`, paymentDraft);
+      setEditing((e) => ({ ...e, ...updated }));
+      setPaymentDraft({ method: '', amount: updated.balanceDueCents ? (updated.balanceDueCents / 100).toFixed(2) : '', note: '' });
+      setEditMsg('Payment recorded.'); setEditMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+  };
+  const undoPayment = async (p) => {
+    if (!confirm(`Remove the ${fmtMoney(p.amountCents, p.currency)} ${p.method.toLowerCase()} payment?`)) return;
+    try {
+      const updated = await api.del(`/api/admin/payments/${p.id}`);
+      setEditing((e) => ({ ...e, ...updated }));
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
   };
 
   const setAnswer = (key, value) => setEditForm((f) => ({ ...f, answers: { ...f.answers, [key]: value } }));
@@ -194,9 +219,7 @@ export default function Attendees() {
         legalName: editForm.legalName,
         fursonaName: editForm.fursonaName,
         email: editForm.email,
-        paymentMethod: editForm.paymentMethod || null,
-        paymentAmount: editForm.paymentAmount === '' ? null : Number(editForm.paymentAmount),
-        paymentNote: editForm.paymentNote,
+        ...(editForm.ticketTierId !== (editing.ticketTierId || '') ? { ticketTierId: editForm.ticketTierId || null } : {}),
         status: editForm.status,
         answers: editForm.answers,
       });
@@ -308,7 +331,7 @@ export default function Attendees() {
                 <SortTh label="Preferred name" sortKey="legalName" sort={sort} onSort={toggleSort} />
                 <th>Contact</th>
                 <SortTh label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
-                <th>Tier</th>
+                <th>Ticket</th>
                 <th>Badge tier</th>
                 <th>Payment</th>
                 <th>Printed</th>
@@ -326,12 +349,14 @@ export default function Attendees() {
                   <td style={{ whiteSpace: 'nowrap' }}>{r.legalName}</td>
                   <td className="small muted">{r.telegram ? `@${r.telegram}` : ''}{r.email ? <><br />{r.email}</> : ''}</td>
                   <td style={{ whiteSpace: 'nowrap' }}><StatusPill status={r.status} checkedInAt={r.checkedInAt} /></td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{r.tier === 'DONATION' ? <Pill tone="go">Donation</Pill> : <Pill>Free</Pill>}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{r.tierName ? <Pill tone={r.tierPriceCents ? 'go' : ''}>{r.tierName}</Pill> : '—'}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '—'}</td>
                   <td className="small muted">
-                    {r.tier !== 'DONATION' ? '—' : r.paymentMethod
-                      ? <>{r.paymentMethod}{r.paymentAmount != null ? ` · $${Number(r.paymentAmount).toFixed(2)}` : ''}{r.paymentNote ? <><br />{r.paymentNote}</> : ''}</>
-                      : <Pill tone="wait">Unrecorded</Pill>}
+                    {r.status === 'PENDING_PAYMENT' ? <Pill tone="wait">Checkout open</Pill>
+                      : r.balanceDueCents > 0 ? <Pill tone="wait">Owes {fmtMoney(r.balanceDueCents, r.currency)}</Pill>
+                      : r.paidCents > 0 ? <>{r.paymentMethod} · {fmtMoney(r.paidCents, r.currency)}</>
+                      : r.payments?.some((p) => p.status === 'REFUNDED') ? <Pill>Refunded</Pill>
+                      : '—'}
                   </td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.printCount ? `${r.printCount}×` : '—'}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.createdAt, event?.timezone)}</td>
@@ -444,6 +469,9 @@ export default function Attendees() {
           <div className="stack">
             <p className="mono small muted" style={{ margin: 0 }}>{editing.code}</p>
             {editMsg && <p className={`note ${editMsgOk ? 'good' : 'bad'}`}>{editMsg}</p>}
+            {editing.status === 'PENDING_PAYMENT' && (
+              <p className="note" style={{ margin: 0 }}>This person is partway through paying online. Their spot is held until Stripe confirms the payment or the checkout expires — marking them Confirmed here gives them the spot without payment.</p>
+            )}
             <Field label="Registration status">
               <div className="row">
                 <button type="button" className={`btn sm ${editForm.status === 'CONFIRMED' ? 'primary' : ''}`}
@@ -517,21 +545,57 @@ export default function Attendees() {
               </Field>
             ))}
 
-            {editing.tier === 'DONATION' && (
-              <>
-                <Field label="Payment method">
-                  <PaymentButtons value={editForm.paymentMethod} onChange={(v) => setEditForm({ ...editForm, paymentMethod: v })} />
-                </Field>
-                <div className="grid-2">
-                  <Field label="Amount">
-                    <input type="number" step="0.01" value={editForm.paymentAmount} onChange={(e) => setEditForm({ ...editForm, paymentAmount: e.target.value })} />
-                  </Field>
-                  <Field label="Note">
-                    <input value={editForm.paymentNote} onChange={(e) => setEditForm({ ...editForm, paymentNote: e.target.value })} />
-                  </Field>
-                </div>
-              </>
+            {tiers.length > 0 && (
+              <Field label="Ticket type" help={editing.badgeTier ? 'Voucher redemptions normally have none' : undefined}>
+                <select value={editForm.ticketTierId} onChange={(e) => setEditForm({ ...editForm, ticketTierId: e.target.value })}>
+                  <option value="">None</option>
+                  {tiers.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} — {t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free'}{t.active ? '' : ' (not on sale)'}</option>
+                  ))}
+                </select>
+              </Field>
             )}
+
+            <div className="card stack" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
+              <div className="spread">
+                <h3 style={{ margin: 0 }}>Payments</h3>
+                {editing.tierPriceCents > 0 && (
+                  <span className="small muted">
+                    Paid {fmtMoney(editing.paidCents, editing.currency)} of {fmtMoney(editing.tierPriceCents, editing.currency)}
+                  </span>
+                )}
+              </div>
+              {editing.payments?.length ? (
+                <table>
+                  <tbody>
+                    {editing.payments.map((p) => (
+                      <tr key={p.id}>
+                        <td className="small">{fmtDate(p.paidAt || p.createdAt, event?.timezone)}</td>
+                        <td className="small">{p.method}</td>
+                        <td className="mono small">
+                          {fmtMoney(p.amountCents, p.currency)}
+                          {p.amountRefundedCents > 0 && <span className="muted"> ({fmtMoney(p.amountRefundedCents, p.currency)} refunded)</span>}
+                        </td>
+                        <td>{p.status === 'PAID' ? <Pill tone="go">Paid</Pill> : <Pill tone={p.status === 'PENDING' ? 'wait' : ''}>{p.status.replace('_', ' ').toLowerCase()}</Pill>}</td>
+                        <td className="small muted">{p.note}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {p.method !== 'STRIPE' && <button className="btn sm ghost" onClick={() => undoPayment(p)}>Remove</button>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <p className="small muted" style={{ margin: 0 }}>No payments recorded.</p>}
+              <p className="small muted" style={{ margin: 0 }}>Stripe payments are refunded from the Stripe dashboard; the refund shows up here automatically.</p>
+              <div className="row" style={{ alignItems: 'end' }}>
+                <PaymentButtons value={paymentDraft.method} onChange={(v) => setPaymentDraft({ ...paymentDraft, method: v })} />
+                <input type="number" step="0.01" min="0" placeholder="Amount" value={paymentDraft.amount} style={{ width: 100 }}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, amount: e.target.value })} />
+                <input placeholder="Note (optional)" value={paymentDraft.note} style={{ width: 160 }}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, note: e.target.value })} />
+                <button className="btn sm" disabled={!paymentDraft.method || paymentDraft.amount === ''} onClick={recordPayment}>Record payment</button>
+              </div>
+            </div>
           </div>
         </Modal>
       )}

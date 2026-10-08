@@ -21,6 +21,7 @@ const AdminEvents = lazy(() => import('./pages/admin/Events.jsx'));
 const AdminEventEdit = lazy(() => import('./pages/admin/EventEdit.jsx'));
 const AdminAttendees = lazy(() => import('./pages/admin/Attendees.jsx'));
 const AdminKiosk = lazy(() => import('./pages/admin/Kiosk.jsx'));
+const AdminTiers = lazy(() => import('./pages/admin/Tiers.jsx'));
 const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
 const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
 const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
@@ -88,6 +89,7 @@ export default function App() {
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<AdminEvents />} />
               <Route path="events/:id" element={<AdminEventEdit />} />
+              <Route path="events/:id/tickets" element={<AdminTiers />} />
               <Route path="events/:id/attendees" element={<AdminAttendees />} />
               <Route path="events/:id/kiosk" element={<AdminKiosk />} />
               <Route path="events/:id/merch" element={<AdminMerch />} />

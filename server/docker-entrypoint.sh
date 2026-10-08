@@ -1,15 +1,8 @@
 #!/bin/sh
 set -e
 
-# `prisma migrate deploy` exits 0 on an empty migrations directory without
-# creating anything, so a fresh install would start against a database with no
-# tables. Choose the right command instead of chaining them.
-if ls prisma/migrations/*/migration.sql >/dev/null 2>&1; then
-  echo "Applying migrations…"
-  npx prisma migrate deploy
-else
-  echo "No migrations found — syncing schema directly."
-  npx prisma db push --skip-generate
-fi
+# Adopts a v1 (db push) database into the migration history if needed, then
+# runs `prisma migrate deploy` — see scripts/migrate.js.
+node scripts/migrate.js
 
 exec node src/index.js

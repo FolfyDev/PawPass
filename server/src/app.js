@@ -14,6 +14,7 @@ import { adminRouter } from './routes/admin.js';
 import { badgeRouter } from './routes/badges.js';
 import { STARTER_TEMPLATE } from './badges/template.js';
 import { escapeHtml } from './lib/html.js';
+import { stripeWebhook } from './lib/payments.js';
 
 function isLocalDev() {
   try {
@@ -71,6 +72,9 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors({ origin: [env.webUrl], credentials: true }));
+// Before express.json(): Stripe's signature covers the raw request bytes, and
+// a parsed-then-reserialized body won't verify.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhook);
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(loadUser);

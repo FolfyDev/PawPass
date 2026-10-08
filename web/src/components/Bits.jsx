@@ -3,6 +3,7 @@ export const Pill = ({ tone = '', children }) => <span className={`pill ${tone}`
 export const StatusPill = ({ status, checkedInAt }) => {
   if (checkedInAt) return <Pill tone="go">Checked in</Pill>;
   if (status === 'WAITLIST') return <Pill tone="wait">Waitlist</Pill>;
+  if (status === 'PENDING_PAYMENT') return <Pill tone="wait">Awaiting payment</Pill>;
   if (status === 'CANCELLED') return <Pill tone="stop">Cancelled</Pill>;
   return <Pill>Confirmed</Pill>;
 };
@@ -24,6 +25,10 @@ export function Empty({ title, children }) {
     </div>
   );
 }
+
+/// Integer cents to "$12.50" (or "€12.50" for a eur tier).
+export const fmtMoney = (cents, currency = 'usd') =>
+  new Intl.NumberFormat(undefined, { style: 'currency', currency: (currency || 'usd').toUpperCase() }).format((cents || 0) / 100);
 
 export const fmtDate = (d, tz) =>
   new Date(d).toLocaleString(undefined, {

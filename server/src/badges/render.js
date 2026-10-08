@@ -31,7 +31,7 @@ function specialQualifier(reg, event) {
 export function contextForRegistration(reg, event, settings, publicUrl) {
   const accent = event?.accentColor || settings.accentColor;
   const fursonaName = reg.fursonaName || reg.legalName;
-  const tierName = reg.badgeTier || (reg.tier === 'DONATION' ? (event?.donationTierName || 'Supporter') : 'Attendee');
+  const tierName = reg.badgeTier || reg.tierName || 'Attendee';
   return {
     '{{fursona_name}}': fursonaName,
     '{{legal_name}}': reg.legalName,

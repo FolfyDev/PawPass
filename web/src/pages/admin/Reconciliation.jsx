@@ -4,16 +4,15 @@ import { api } from '../../lib/api.js';
 import EventTabs from '../../components/EventTabs.jsx';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
-const METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
 
-function MethodTable({ title, byMethod, total }) {
+function MethodTable({ title, methods, byMethod, total }) {
   return (
     <div className="card" style={{ padding: 0, overflow: 'auto' }}>
       <p className="eyebrow" style={{ padding: '14px 16px 0' }}>{title}</p>
       <table>
         <thead><tr><th>Method</th><th>Count</th><th>Total</th></tr></thead>
         <tbody>
-          {METHODS.map((m) => (
+          {methods.filter((m) => m !== 'STRIPE' || byMethod.STRIPE?.count).map((m) => (
             <tr key={m}>
               <td>{m}</td>
               <td className="mono">{byMethod[m]?.count ?? 0}</td>
@@ -56,21 +55,27 @@ export default function Reconciliation() {
         <p className="eyebrow" style={{ marginBottom: 4 }}>Grand total collected</p>
         <p style={{ fontSize: 32, fontWeight: 700, margin: 0 }}>{money(data.grandTotal)}</p>
         <p className="small muted" style={{ margin: '6px 0 0' }}>
-          {money(data.donationsTotal)} from donations · {money(data.merchTotal)} from merch
+          {money(data.ticketsTotal)} from tickets · {money(data.donationsTotal)} from donations · {money(data.merchTotal)} from merch
         </p>
+        {data.tickets.STRIPE?.count > 0 && (
+          <p className="small muted" style={{ margin: '4px 0 0' }}>
+            {money(data.tickets.STRIPE.total)} of that was paid online through Stripe (net of refunds, before Stripe's fees) and is not in the cash box.
+          </p>
+        )}
       </div>
 
-      {data.unrecordedDonations > 0 && (
+      {data.unpaidTickets > 0 && (
         <p className="note" style={{ marginBottom: 20 }}>
-          {data.unrecordedDonations} donation-tier registration{data.unrecordedDonations === 1 ? '' : 's'} with no payment method recorded
-          (paid — or not — via the PayPal link on their own, never confirmed at the door) are excluded from this total.
-          Check <Link to={`/admin/events/${id}/attendees`}>Attendees</Link> for the "Unrecorded" tag.
+          {data.unpaidTickets} registration{data.unpaidTickets === 1 ? '' : 's'} on a paid ticket still owe{data.unpaidTickets === 1 ? 's' : ''} {money(data.unpaidTotal)} in
+          total (pay-at-the-door tickets nobody has collected on yet) and {data.unpaidTickets === 1 ? 'is' : 'are'} not counted above.
+          Check <Link to={`/admin/events/${id}/attendees`}>Attendees</Link> for the "Owes" tag.
         </p>
       )}
 
       <div className="grid-2" style={{ gap: 20 }}>
-        <MethodTable title="Donations (registrations + in-person)" byMethod={data.donations} total={data.donationsTotal} />
-        <MethodTable title="Merch sales" byMethod={data.merch} total={data.merchTotal} />
+        <MethodTable title="Tickets" methods={data.methods} byMethod={data.tickets} total={data.ticketsTotal} />
+        <MethodTable title="In-person donations" methods={data.methods} byMethod={data.donations} total={data.donationsTotal} />
+        <MethodTable title="Merch sales" methods={data.methods} byMethod={data.merch} total={data.merchTotal} />
       </div>
     </>
   );

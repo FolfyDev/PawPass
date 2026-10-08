@@ -10,8 +10,8 @@ const RANGE_OPTIONS = [
   { label: 'All time', days: 0 },
 ];
 
-const STATUS_COLOR = { CONFIRMED: 'var(--go)', WAITLIST: 'var(--signal)', CANCELLED: 'var(--stop)' };
-const STATUS_LABEL = { CONFIRMED: 'Confirmed', WAITLIST: 'Waitlist', CANCELLED: 'Cancelled' };
+const STATUS_COLOR = { CONFIRMED: 'var(--go)', PENDING_PAYMENT: 'var(--ink-3)', WAITLIST: 'var(--signal)', CANCELLED: 'var(--stop)' };
+const STATUS_LABEL = { CONFIRMED: 'Confirmed', PENDING_PAYMENT: 'Awaiting payment', WAITLIST: 'Waitlist', CANCELLED: 'Cancelled' };
 const SOURCE_LABEL = { web: 'Web', telegram: 'Telegram', admin: 'Kiosk' };
 
 const shortDate = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });

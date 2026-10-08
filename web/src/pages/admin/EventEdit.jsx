@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
@@ -116,21 +116,10 @@ export default function EventEdit() {
         </section>
 
         <section className="card stack">
-          <h2 style={{ margin: 0 }}>Tiers</h2>
-          <p className="small muted">Everyone can register free. Add a PayPal link to also offer a donation tier — registration completes immediately and a new tab opens to PayPal, with no confirmation step.</p>
-          <div className="grid-2">
-            <Field label="Donation tier name"><input value={e.donationTierName || ''} onChange={(ev) => set('donationTierName', ev.target.value)} /></Field>
-            <Field label="PayPal link" help="Leave blank to offer free registration only">
-              <input type="url" placeholder="https://paypal.me/…" value={e.donationPaypalLink || ''} onChange={(ev) => set('donationPaypalLink', ev.target.value || null)} />
-            </Field>
-          </div>
-          <label className="row small">
-            <input type="checkbox" checked={!!e.donationRequired} onChange={(ev) => set('donationRequired', ev.target.checked)} />
-            Require payment for this event (hides the free option — for a paid add-on like an after-party)
-          </label>
-          {e.donationRequired && !e.donationPaypalLink && (
-            <p className="note bad" style={{ margin: 0 }}>Add a PayPal link above, or registration will complete with nowhere to send people to pay.</p>
-          )}
+          <h2 style={{ margin: 0 }}>Tickets</h2>
+          <p className="small muted" style={{ margin: 0 }}>
+            Free and paid ticket types, their prices, and Stripe sync live on the <Link to={`/admin/events/${id}/tickets`}>Tickets</Link> tab.
+          </p>
         </section>
 
         <section className="card stack">

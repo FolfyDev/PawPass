@@ -6,7 +6,7 @@ import { useSession } from '../../lib/session.jsx';
 import { printBadge } from '../../lib/print.js';
 import { playCheckinSuccess, playCheckinError } from '../../lib/sound.js';
 import { runPreflight } from '../../lib/checkin.js';
-import { StatusPill, Pill, fmtDate } from '../../components/Bits.jsx';
+import { StatusPill, Pill, fmtDate, fmtMoney } from '../../components/Bits.jsx';
 import StatusMark from '../../components/StatusMark.jsx';
 
 const MODES = {
@@ -175,7 +175,7 @@ function ScannerView({ event, warnings, overridden }) {
         registration: reg,
         scanned: value,
         printError,
-        notice: reg && reg.tier === 'DONATION' && !reg.paymentMethod ? 'No donation payment has been recorded for this person yet.' : '',
+        notice: reg?.balanceDueCents > 0 ? `${reg.tierName || 'Ticket'}: ${fmtMoney(reg.balanceDueCents, reg.currency)} still to collect — record it in Attendees.` : '',
         canReprint: !!reg,
         canUndo: mode !== 'print' && !!reg,
       });

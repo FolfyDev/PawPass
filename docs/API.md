@@ -8,8 +8,9 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 |---|---|---|
 | GET | `/api/settings` | Branding, wording, which wallet backends are live |
 | GET | `/api/events` | Published events |
-| GET | `/api/events/:slug` | Event, terms, custom fields, your registration if any |
-| POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, acceptedTos }` |
+| GET | `/api/events/:slug` | Event, terms, custom fields, ticket `tiers` on sale, your registration if any |
+| POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, ticketTierId, voucherCode, acceptedTos }`. A paid tier with Stripe configured returns `status: PENDING_PAYMENT` and a `checkoutUrl` to redirect to |
+| POST | `/api/stripe/webhook` | Stripe only — signature-verified against `STRIPE_WEBHOOK_SECRET` |
 | GET | `/t/:secret` | The URL inside every QR — human-readable landing page |
 
 ## Auth
@@ -34,6 +35,8 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET | `/api/my/tickets/:code/apple.pkpass` |
 | GET | `/api/my/tickets/:code/google` |
 | POST | `/api/my/tickets/:code/cancel` |
+| POST | `/api/my/tickets/:code/pay` — `{ url }` of a Stripe Checkout for a ticket awaiting payment |
+| POST | `/api/my/payments/sync` — `{ sessionId }` from the Stripe success redirect; settles it from Stripe |
 
 ## Admin — requires ADMIN or OWNER
 
@@ -43,8 +46,15 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET/PATCH/DELETE | `/api/admin/events/:id` | |
 | GET | `/api/admin/events/:id/registrations` | `?q=` `?status=` |
 | GET | `/api/admin/events/:id/registrations.csv` | |
-| POST | `/api/admin/registrations` | Walk-up registration |
+| GET | `/api/admin/events/:id/tiers` | Every tier, with seats taken and Stripe sync state |
+| POST | `/api/admin/events/:id/tiers` | **Owner only.** `{ name, price, currency, capacity, description, active }` — price in dollars |
+| PATCH/DELETE | `/api/admin/tiers/:id` | **Owner only.** Delete refuses a tier anyone registered on |
+| POST | `/api/admin/events/:id/tiers/sync` | **Owner only.** Re-push every tier to Stripe |
+| POST | `/api/admin/registrations` | Walk-up registration. `{ ..., ticketTierId, payment: { method, amount, note } }` |
 | PATCH | `/api/admin/registrations/:code` | |
+| POST | `/api/admin/registrations/:code/payments` | Record an in-person payment `{ method, amount, note }` |
+| DELETE | `/api/admin/payments/:id` | Remove a mistaken in-person payment (not Stripe ones) |
+| GET | `/api/admin/events/:id/reconciliation` | Totals by method: tickets, in-person donations, merch |
 | POST | `/api/admin/checkin` | `{ value }` — a ticket URL, a secret, or a typed code |
 | POST | `/api/admin/checkin/:code/undo` | |
 | GET | `/api/admin/users` | No `q` returns staff only |

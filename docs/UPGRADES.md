@@ -56,14 +56,12 @@ docker compose build
 docker compose up -d
 ```
 
-You do **not** need a separate `prisma db push` step. `server`'s
-[docker-entrypoint.sh](../server/docker-entrypoint.sh) already runs schema
-sync automatically on every container start — `prisma migrate deploy` if a
-`prisma/migrations/` directory exists, otherwise `prisma db push
---skip-generate`. Today this repo has no migrations directory, so every
-restart re-syncs the schema via `db push`, which is exactly why Step 1
-matters: `db push` can silently drop a column or table on a destructive
-schema change, with no migration history to roll back through.
+You do **not** need a separate migration step. `server`'s
+[docker-entrypoint.sh](../server/docker-entrypoint.sh) runs
+[scripts/migrate.js](../server/scripts/migrate.js) on every container start,
+which applies any new migration in `server/prisma/migrations/` with `prisma
+migrate deploy`. Already-applied migrations are skipped, so a restart with no
+schema change does nothing.
 
 ## Step 4 — verify
 
@@ -86,12 +84,11 @@ docker compose build
 docker compose up -d
 ```
 
-Careful if the schema changed between the two commits: rolling the code back
-does **not** roll the schema back, and the entrypoint's `db push` on restart
-will resync to whatever `schema.prisma` says in the commit you just checked
-out — which may itself drop columns the newer code had added. If the schema
-changed, restore the Step 1 backup instead of trusting `db push` to reverse
-it:
+Careful if a migration ran between the two commits: rolling the code back
+does **not** roll the schema back, and older code may not run against the
+newer schema. In particular, v2 code cannot be rolled back to v1 that way —
+the v2 migration drops the v1 donation columns. If the schema changed,
+restore the Step 1 backup instead:
 
 ```bash
 docker compose exec -T db psql -U pawpass -d pawpass < backup-<date>.sql
@@ -106,12 +103,75 @@ Never run `prisma db push --force-reset` or `npm run db:reset` against a
 production database — both wipe every table on purpose. They exist for
 local development only.
 
-## A note on migrations
+## Database versions
 
-The entrypoint already prefers real migrations the moment a
-`prisma/migrations/` directory exists — nothing else needs to change to
-switch over. That gives rollback history for schema changes, at the cost of
-needing the *first* migration to be baselined carefully against a database
-that already has data in it (getting that wrong is the kind of mistake that
-goes badly). Worth doing before your next real schema change; not done as
-part of this runbook.
+The schema is versioned in `server/prisma/migrations/`, one folder per change:
+
+| Migration | What it is |
+|---|---|
+| `0001_v1_baseline` | The final PawPass v1 schema, exactly. |
+| `0002_v2_ticket_tiers_stripe` | v2: configurable ticket tiers synced to Stripe, a `Payment` ledger, and seat holds during checkout. Converts v1 data in place (below). |
+
+v1 instances never had a migration history — they were kept in sync with
+`prisma db push`. The first time a v2 container starts against one,
+`scripts/migrate.js` notices (tables exist, no `_prisma_migrations`), syncs it
+to the frozen v1 schema in `prisma/legacy/v1.prisma` in case it was pushed
+from an older v1 commit, marks `0001` as applied, then runs `0002`. You'll see
+"Found a v1 database with no migration history" in the server log once; after
+that it's ordinary `migrate deploy`.
+
+### What the v1 → v2 upgrade does to your data
+
+* Every event gets an **Attendee** tier (free, on sale) standing in for v1's
+  free option — unless it was a "require payment" event nobody registered on
+  for free.
+* Every event that had a PayPal donation tier gets that tier carried over
+  under its v1 name, **not on sale and at $0**. v1 never knew what people paid
+  through PayPal, so set a real price on the **Tickets** tab and tick
+  "On sale" to sell it again (through Stripe, or at the door).
+* **An event that required payment has no ticket on sale after the upgrade,
+  so registration is closed until you do that.** Check those events first.
+* Registrations keep their tier (and badges keep printing the same tier name);
+  voucher redemptions have no tier, as in v2.
+* Every payment staff recorded (method, amount, note) becomes a paid
+  `Payment` row, in cents.
+
+Old backup zips (version 1) still restore: Admin → Restore converts them the
+same way before loading them.
+
+### Adding the next migration
+
+1. Edit `server/prisma/schema.prisma`.
+2. With a scratch Postgres database for Prisma's shadow DB, generate the SQL:
+   `SHADOW_DATABASE_URL=postgresql://…/pawpass_shadow npm run db:diff`
+3. Save it as `server/prisma/migrations/0003_<name>/migration.sql`. If data has
+   to move, edit it into create → copy → drop order like `0002` does.
+4. If a backed-up model changed shape, bump `BACKUP_VERSION` in
+   `server/src/lib/backup.js` and add the matching upgrade step there.
+
+Never edit a migration that has already shipped, and never edit
+`prisma/legacy/v1.prisma`.
+
+## Stripe
+
+Optional. Without `STRIPE_SECRET_KEY`, paid tiers are paid at the door (staff
+record it at the kiosk or in the attendee editor) and nothing talks to Stripe.
+
+To turn it on:
+
+1. Set `STRIPE_SECRET_KEY` in `.env` (a restricted key needs write access to
+   Products, Prices, and Checkout Sessions).
+2. In the Stripe dashboard → Developers → Webhooks, add an endpoint at
+   `${PUBLIC_URL}/api/stripe/webhook` for `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_failed`, `checkout.session.expired`, and
+   `charge.refunded`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+3. Restart, then on each event's **Tickets** tab press **Resync with Stripe**
+   to push existing paid tiers.
+
+Card details only ever go to Stripe's hosted checkout page; PawPass stores
+Stripe's IDs and the payment status, nothing else. Refunds are issued from the
+Stripe dashboard; a full refund cancels the ticket here automatically.
+
+For local testing, `stripe listen --forward-to localhost:4000/api/stripe/webhook`
+prints a webhook secret to use instead.

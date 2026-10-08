@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import { downloadEventIcs } from '../lib/ics.js';
-import { Empty, StatusPill, RsvpButtons, fmtDate, Field } from '../components/Bits.jsx';
+import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
 
 const TICKET_GRID = { display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' };
@@ -55,8 +56,32 @@ export default function Tickets() {
   const { settings, refresh } = useSession();
   usePageMeta({ title: 'My tickets', noindex: true });
   const [tickets, setTickets] = useState(null);
+  const [params, setParams] = useSearchParams();
+  const [payNote, setPayNote] = useState('');
+  const [payBusy, setPayBusy] = useState('');
   const load = () => api.get('/api/my/tickets').then(setTickets);
-  useEffect(() => { load(); }, []);
+
+  // Back from Stripe Checkout: settle the session from Stripe right away
+  // instead of waiting on the webhook, then show the confirmed ticket.
+  useEffect(() => {
+    const sessionId = params.get('session_id');
+    if (params.get('paid') && sessionId) {
+      setPayNote('Payment received — confirming your ticket…');
+      api.post('/api/my/payments/sync', { sessionId })
+        .then((r) => setPayNote(r.status === 'CONFIRMED' ? 'Payment received. You are registered!' : 'Payment received. Your ticket will update in a moment.'))
+        .catch(() => setPayNote('Payment received. Your ticket will update in a moment.'))
+        .finally(() => { setParams({}, { replace: true }); load(); });
+    } else {
+      load();
+    }
+    // eslint-disable-next-line
+  }, []);
+
+  const pay = async (code) => {
+    setPayBusy(code);
+    try { window.location.href = (await api.post(`/api/my/tickets/${code}/pay`)).url; }
+    catch (e) { setPayNote(e.message); setPayBusy(''); load(); }
+  };
 
   const google = async (code) => {
     try { window.location.href = (await api.get(`/api/my/tickets/${code}/google`)).url; }
@@ -108,7 +133,11 @@ export default function Tickets() {
   };
 
   const cancelTicket = async (code) => {
-    if (!confirm('Cancel this registration? This cannot be undone.')) return;
+    const t = tickets.find((x) => x.code === code);
+    const paid = t?.paidCents > 0;
+    if (!confirm(paid
+      ? 'Cancel this registration? This cannot be undone, and it does not refund your payment automatically — contact the organizers about a refund.'
+      : 'Cancel this registration? This cannot be undone.')) return;
     setCancelBusy(true);
     try {
       await api.post(`/api/my/tickets/${code}/cancel`);
@@ -142,6 +171,7 @@ export default function Tickets() {
         <h1>Tickets</h1>
       </header>
 
+      {payNote && <p className="note good" style={{ marginBottom: 20 }}>{payNote}</p>}
       {tickets.length === 0 && <Empty title="No tickets yet">Pick an event from the home page to register.</Empty>}
 
       <div style={{ display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' }}>
@@ -152,19 +182,34 @@ export default function Tickets() {
               <p className="eyebrow">{fmtDate(t.event.startsAt, t.event.timezone)}</p>
               <h2 style={{ margin: '4px 0 2px' }}>{t.event.title}</h2>
               <p className="small muted" style={{ margin: 0 }}>{t.event.venue}</p>
-              <div style={{ margin: '18px 0 6px', display: 'grid', placeItems: 'center' }}>
-                <img alt={`QR code for ${t.code}`} width="190" height="190"
-                  src={`${api.base}/api/my/tickets/${t.code}/qr.png`} style={{ borderRadius: 8 }} />
-              </div>
-              <p className="code" style={{ textAlign: 'center', margin: 0 }}>{t.code}</p>
+              {t.status === 'PENDING_PAYMENT' ? (
+                // No QR until it's paid — it wouldn't get them in anyway.
+                <div className="stack" style={{ margin: '18px 0 6px', justifyItems: 'center', textAlign: 'center' }}>
+                  <p className="muted" style={{ margin: 0 }}>Your spot is held while you pay{t.tierPriceCents != null ? ` ${fmtMoney(t.tierPriceCents, t.currency)}` : ''}.</p>
+                  <button className="btn signal" disabled={payBusy === t.code} onClick={() => pay(t.code)}>
+                    {payBusy === t.code ? 'Opening payment…' : 'Complete payment'}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ margin: '18px 0 6px', display: 'grid', placeItems: 'center' }}>
+                    <img alt={`QR code for ${t.code}`} width="190" height="190"
+                      src={`${api.base}/api/my/tickets/${t.code}/qr.png`} style={{ borderRadius: 8 }} />
+                  </div>
+                  <p className="code" style={{ textAlign: 'center', margin: 0 }}>{t.code}</p>
+                </>
+              )}
               <p className="small muted" style={{ textAlign: 'center' }}>{settings?.ticketFooter}</p>
             </div>
             <div className="stub-tear" />
             <div className="stub-foot stack">
               <div className="spread">
-                <span className="small muted">{t.fursonaName || t.legalName}</span>
+                <span className="small muted">{t.fursonaName || t.legalName}{t.tierName ? ` · ${t.tierName}` : ''}</span>
                 <StatusPill status={t.status} checkedInAt={t.checkedInAt} />
               </div>
+              {t.balanceDueCents > 0 && t.status !== 'PENDING_PAYMENT' && (
+                <p className="small muted" style={{ margin: 0 }}>Pay {fmtMoney(t.balanceDueCents, t.currency)} at the door.</p>
+              )}
               {t.status !== 'CANCELLED' && (
                 <button className="btn sm" onClick={() => openModify(t)}>Modify ticket</button>
               )}

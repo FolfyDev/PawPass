@@ -191,6 +191,15 @@ a.stub:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 .tier.selected { border-color: var(--signal); background: color-mix(in srgb, var(--signal) 7%, var(--card)); }
 .tier .tier-name { font-weight: 700; font-size: 14px; }
 .tier .tier-help { font-size: 12px; color: var(--ink-3); }
+.tier .tier-help:empty { display: none; }
+.tier .tier-price { font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tier:disabled { cursor: not-allowed; opacity: .5; }
+.tier:disabled:hover { border-color: var(--rule); }
+
+/* ---- tier list (event page, read-only) ---- */
+.tier-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.tier-list li { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid var(--rule); }
+.tier-list li:first-child { border-top: 0; padding-top: 0; }
 
 /* ---- tables ---- */
 /* auto width + min-width:100% lets columns size to their content (growing

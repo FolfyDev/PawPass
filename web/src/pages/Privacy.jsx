@@ -29,7 +29,7 @@ export default function Privacy() {
             <li><strong>Telegram sign-in:</strong> your Telegram ID, username, display name, and profile photo, if you sign in or register through Telegram.</li>
             <li><strong>Registration details:</strong> your preferred name, fursona/badge name, email address, and answers to any custom event questions.</li>
             <li><strong>Ticket &amp; check-in data:</strong> your registration status, RSVP, QR code, check-in time, and badge print history.</li>
-            <li><strong>Payment records:</strong> for donation/paid tiers, the payment method and amount as recorded by staff or returned by PayPal we do not collect or store card numbers.</li>
+            <li><strong>Payment records:</strong> for paid tickets, the payment method, amount, and status as recorded by staff or reported by Stripe, plus Stripe's own reference IDs. We do not collect or store card numbers.</li>
             <li><strong>Account credentials:</strong> a hashed password, if you set one for email sign-in.</li>
             <li><strong>Standard technical data:</strong> IP address and basic request logs, generated automatically by any web server.</li>
           </ul>
@@ -50,8 +50,9 @@ export default function Privacy() {
           <p>
             Event staff and administrators of this instance can see registration data for events they manage. If
             you add a wallet pass, Apple or Google receives the ticket details needed to display it. If you pay
-            through a donation link, PayPal handles that transaction directly  we only see what it reports back
-            (method, amount). We do not sell your data or share it with advertisers.
+            online, Stripe handles that transaction directly on its own checkout page and receives your email
+            address  we only see what it reports back (amount, status, refunds). We do not sell your data or
+            share it with advertisers.
           </p>
         </section>
 

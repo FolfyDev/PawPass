@@ -63,6 +63,19 @@ export const env = {
       return Boolean(this.issuerId && this.serviceAccount);
     },
   },
+  /// Optional. Without a secret key, paid ticket tiers still exist but are
+  /// paid at the door (staff record it at the kiosk or attendee editor), and
+  /// nothing is pushed to Stripe.
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY || '',
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    /// How long a seat is held while someone is on Stripe Checkout. Stripe
+    /// accepts 30 minutes to 24 hours.
+    checkoutMinutes: Math.min(Math.max(Number(process.env.STRIPE_CHECKOUT_EXPIRES_MINUTES || 30), 30), 1440),
+    get enabled() {
+      return Boolean(this.secretKey);
+    },
+  },
     turnstile: {
     siteKey: process.env.TURNSTILE_SITE_KEY || '',
     secretKey: process.env.TURNSTILE_SECRET_KEY || '',

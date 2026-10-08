@@ -33,7 +33,10 @@ const CLEAR_ORDER = [
   'ban',
   'sale',
   'donation',
+  'stripeEvent',
+  'payment',
   'registration',
+  'ticketTier',
   'merchItem',
   'voucherCode',
   'emailCampaign',
@@ -57,10 +60,14 @@ export async function closeDb() {
 let seq = 0;
 const next = () => ++seq;
 
-export function createEvent(overrides = {}) {
+/// Every event needs at least one active ticket tier to accept
+/// registrations; by default it gets one free "Attendee" tier, same as a v1
+/// event after the v2 migration. Pass `tiers` to replace it ([] for none).
+/// The created tiers come back on `event.ticketTiers`, in the order given.
+export async function createEvent(overrides = {}, { tiers = [{ name: 'Attendee' }] } = {}) {
   const n = next();
   const now = new Date();
-  return prisma.event.create({
+  const event = await prisma.event.create({
     data: {
       slug: `test-event-${n}-${Date.now()}`,
       title: `Test Event ${n}`,
@@ -70,6 +77,11 @@ export function createEvent(overrides = {}) {
       ...overrides,
     },
   });
+  event.ticketTiers = [];
+  for (const [i, t] of tiers.entries()) {
+    event.ticketTiers.push(await prisma.ticketTier.create({ data: { eventId: event.id, sortOrder: i, ...t } }));
+  }
+  return event;
 }
 
 export function createUser(overrides = {}) {
