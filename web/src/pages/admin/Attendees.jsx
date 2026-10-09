@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } from '../../lib/print.js';
-import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate, fmtMoney } from '../../components/Bits.jsx';
+import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate, fmtMoney, fieldsForTier } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
@@ -384,7 +384,7 @@ export default function Attendees() {
                     <StatusPill status={r.status} checkedInAt={r.checkedInAt} />
                     {r.cancelRequestedAt && <> <Pill tone="wait">Cancel requested</Pill></>}
                   </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{r.tierName ? <Pill tone={r.tierPriceCents ? 'go' : ''}>{r.tierName}</Pill> : '-'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{r.tierName ? <Pill tone={r.tierPriceCents ? 'go' : ''}>{r.tierName}</Pill> : '-'}{r.paidBy && <div className="small muted">bought by {r.paidBy.name}</div>}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '-'}</td>
                   <td className="small muted">
                     {r.status === 'PENDING_PAYMENT' ? <Pill tone="wait">Checkout open</Pill>
@@ -568,7 +568,7 @@ export default function Attendees() {
               </div>
             </Field>
 
-            {(event?.customFields || []).map((f) => (
+            {fieldsForTier(event, editForm.ticketTierId).map((f) => (
               <Field key={f.key} label={f.label} help={f.help}>
                 {f.type === 'select' ? (
                   <select value={editForm.answers[f.key] || ''} onChange={(e) => setAnswer(f.key, e.target.value)}>
@@ -610,7 +610,7 @@ export default function Attendees() {
 
             <div className="card stack" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
               <div className="spread">
-                <h3 style={{ margin: 0 }}>Payments</h3>
+                <h3 style={{ margin: 0 }}>Payments <a className="small" style={{ fontWeight: 400 }} href={`${api.base}/api/admin/registrations/${editing.code}/receipt`} target="_blank" rel="noreferrer">Receipt</a></h3>
                 {editing.tierPriceCents > 0 && (
                   <span className="small muted">
                     Paid {fmtMoney(editing.paidCents, editing.currency)} of {fmtMoney(editing.tierPriceCents, editing.currency)}

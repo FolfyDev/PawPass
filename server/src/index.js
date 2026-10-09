@@ -3,7 +3,10 @@ import { env } from './lib/env.js';
 import { createBot } from './bot/index.js';
 import { startPaymentSweeper } from './lib/payments.js';
 
-bootstrap().then(() => {
+bootstrap().catch((e) => {
+  console.error(e.message);
+  process.exit(1);
+}).then(() => {
   app.listen(env.port, () => console.log(`API on :${env.port}`));
   startPaymentSweeper();
   const bot = createBot();

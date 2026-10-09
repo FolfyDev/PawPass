@@ -4,11 +4,13 @@ import QRCode from 'qrcode';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { requireUser, issueToken, setSessionCookie, audit } from '../lib/auth.js';
+import { requireUser, issueToken, setSessionCookie, audit, COOKIE } from '../lib/auth.js';
+import { exportAccount, deleteAccount, AccountError } from '../lib/account.js';
 import { createRegistration, RegistrationError, registrationWindowState, findOrCreateHeadlessUser, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier } from '../lib/registrations.js';
-import { startCheckout, startOrderCheckout, syncSessionForUser, PaymentError, paymentSummary, selfCancel } from '../lib/payments.js';
+import { startCheckout, startOrderCheckout, syncSessionForUser, PaymentError, paymentSummary, selfCancel, notifyFriendTickets } from '../lib/payments.js';
 import { tierSaleState, checkDiscount, normalizeCode, registrationCharge, PricingError } from '../lib/pricing.js';
 import { createMerchOrder, MerchOrderError, shapeOrder, itemPriceCents } from '../lib/merch.js';
+import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
 import { stripeEnabled } from '../lib/stripe.js';
 import { findMatchingBan, normHandle } from '../lib/bans.js';
 import { ticketCode, ticketSecret } from '../lib/codes.js';
@@ -172,7 +174,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
-  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode, discountCode, donationCents } = req.body || {};
+  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode, discountCode, donationCents, friends } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your preferred name.' });
@@ -200,7 +202,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   try {
     const reg = await createRegistration({
       event, user,
-      legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents,
+      legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, friends,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });
@@ -222,8 +224,13 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
       }
     }
     getSettings().then((settings) => sendRegistrationConfirmation(reg, event, settings)).catch((e) => console.error('confirmation email failed', reg.code, e.message));
-    res.json(shapeReg(reg));
+    if (reg.boughtFor?.length) notifyFriendTickets(reg.id).catch(() => {}); // free tickets: confirmed already
+    res.json(shapeReg(await prisma.registration.findUnique({ where: { id: reg.id }, include: REG_INCLUDE })));
   } catch (e) {
+    // A guest account exists only for this registration. If that failed
+    // (sold out, bad code...), remove it so retrying with the same email
+    // doesn't hit "an account already exists, sign in first".
+    if (guest) await prisma.user.deleteMany({ where: { id: user.id, registrations: { none: {} } } }).catch(() => {});
     if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
     throw e;
   }
@@ -247,6 +254,44 @@ publicRouter.post('/my/payments/sync', requireUser, async (req, res) => {
   const result = await syncSessionForUser(req.body?.sessionId, req.user.id);
   if (!result) return res.status(404).json({ error: 'Payment not found.' });
   res.json(result);
+});
+
+export const RECEIPT_INCLUDE = {
+  event: true, ticketTier: true, payments: { orderBy: { createdAt: 'asc' } },
+  paidBy: { select: { code: true, legalName: true, fursonaName: true } },
+  boughtFor: { select: { legalName: true, fursonaName: true, status: true } },
+};
+
+publicRouter.get('/my/tickets/:code/receipt', requireUser, async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: RECEIPT_INCLUDE });
+  if (!reg || reg.userId !== req.user.id) return res.status(404).send('Ticket not found.');
+  res.type('html').send(ticketReceipt(reg, await getSettings()));
+});
+
+publicRouter.get('/my/merch-orders/:id/receipt', requireUser, async (req, res) => {
+  const order = await prisma.merchOrder.findUnique({ where: { id: req.params.id }, include: { event: true, user: true, items: true, payments: true } });
+  if (!order || order.userId !== req.user.id) return res.status(404).send('Order not found.');
+  res.type('html').send(orderReceipt(order, await getSettings()));
+});
+
+/// "Download my data": everything held about the signed-in person, as JSON.
+publicRouter.get('/my/data', requireUser, async (req, res) => {
+  const data = await exportAccount(req.user.id);
+  res.set('Content-Disposition', `attachment; filename="pawpass-my-data-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.type('application/json').send(JSON.stringify(data, null, 2));
+});
+
+/// "Delete my account": anonymises it (see lib/account.js) and signs out.
+publicRouter.post('/my/account/delete', requireUser, async (req, res) => {
+  if (req.body?.confirm !== 'DELETE') return res.status(400).json({ error: 'Type DELETE to confirm.' });
+  try {
+    await deleteAccount(req.user.id);
+  } catch (e) {
+    if (e instanceof AccountError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+  res.clearCookie(COOKIE);
+  res.json({ ok: true });
 });
 
 publicRouter.get('/my/merch-orders', requireUser, async (req, res) => {
@@ -402,7 +447,13 @@ export function summarize(e) {
 }
 
 /// Include this wherever shapeReg's tier/payment fields should be filled in.
-export const REG_INCLUDE = { ticketTier: true, payments: { orderBy: { createdAt: 'asc' } } };
+export const REG_INCLUDE = {
+  ticketTier: true,
+  payments: { orderBy: { createdAt: 'asc' } },
+  // "Buy for friends": who paid for this ticket, or whose tickets it paid for.
+  paidBy: { select: { code: true, legalName: true, fursonaName: true } },
+  boughtFor: { select: { code: true, legalName: true, fursonaName: true, status: true } },
+};
 
 export function shapeReg(r) {
   return {
@@ -414,6 +465,8 @@ export function shapeReg(r) {
     currency: r.ticketTier?.currency ?? null,
     badgeTier: r.badgeTier,
     cancelRequestedAt: r.cancelRequestedAt, cancelRequestNote: r.cancelRequestNote,
+    paidBy: r.paidBy ? { code: r.paidBy.code, name: r.paidBy.fursonaName || r.paidBy.legalName } : null,
+    boughtFor: (r.boughtFor || []).map((f) => ({ code: f.code, name: f.fursonaName || f.legalName, status: f.status })),
     ...paymentSummary(r),
   };
 }

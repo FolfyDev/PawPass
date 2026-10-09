@@ -49,7 +49,10 @@ export function checkDonation(event, cents) {
 }
 
 /// What an online checkout for a registration charges, split into its parts.
-export function registrationCharge({ tierPriceCents, discountCents = 0, donationCents = 0 }) {
+/// `friends` is how many extra tickets the buyer is paying for (full price;
+/// a discount code only applies to the buyer's own ticket).
+export function registrationCharge({ tierPriceCents, discountCents = 0, donationCents = 0, friends = 0 }) {
   const ticketCents = Math.max((tierPriceCents || 0) - discountCents, 0);
-  return { ticketCents, donationCents, totalCents: ticketCents + donationCents };
+  const friendsCents = (tierPriceCents || 0) * friends;
+  return { ticketCents, friendsCents, donationCents, totalCents: ticketCents + friendsCents + donationCents };
 }

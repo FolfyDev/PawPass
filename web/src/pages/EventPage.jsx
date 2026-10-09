@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown } from '../components/Bits.jsx';
+import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown, fieldsForTier } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import Turnstile from '../components/Turnstile.jsx';
@@ -62,6 +62,8 @@ export default function EventPage() {
   const [discountMsg, setDiscountMsg] = useState('');
   const [customDonation, setCustomDonation] = useState('');
   const [customOpen, setCustomOpen] = useState(false);
+  // "Buy for friends": [{ name, contact }] where contact is an email or @telegram.
+  const [friends, setFriends] = useState([]);
   const [showDiscount, setShowDiscount] = useState(false);
   const [preorder, setPreorder] = useState({});
   // null = closed; 'details' -> 'terms' inside the registration popup.
@@ -119,20 +121,28 @@ export default function EventPage() {
   if (error && !event) return <p className="note bad" style={{ marginTop: 40 }}>{error}</p>;
   if (!event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
 
-  const fields = event.customFields || [];
   const tiers = event.tiers || [];
   const reg = event.registration;
   const registered = reg && reg.status !== 'CANCELLED';
   const selectedTier = tiers.find((t) => t.id === form.ticketTierId);
   const usingVoucher = Boolean(form.voucherCode.trim());
+  // Only the questions for the chosen ticket (a voucher has no ticket type).
+  const fields = fieldsForTier(event, usingVoucher ? null : form.ticketTierId);
   // Only counts while it's still for the tier it was checked against.
   const appliedDiscount = discount && discount.tierId === form.ticketTierId ? discount : null;
   const ticketCents = selectedTier ? (appliedDiscount ? appliedDiscount.ticketCents : selectedTier.priceCents) : 0;
   const donationAddon = !usingVoucher && event.donationAddon && settings?.payments?.online ? event.donationAddon : null;
   const donationCents = donationAddon ? form.donationCents : 0;
-  const totalCents = ticketCents + donationCents;
   const payOnline = settings?.payments?.online;
-  const goesToPayment = !usingVoucher && totalCents > 0 && payOnline;
+  // Friends need a seat each and online payment for paid tickets; never on
+  // the waitlist or with a voucher.
+  const canBuyForFriends = Boolean(selectedTier) && !usingVoucher && event.state.open && !event.state.waitlist
+    && (!selectedTier.priceCents || payOnline);
+  const friendRows = canBuyForFriends ? friends : [];
+  const friendsCents = selectedTier ? selectedTier.priceCents * friendRows.length : 0;
+  const totalCents = ticketCents + donationCents + friendsCents;
+  const waitlisting = event.state.waitlist && !usingVoucher;
+  const goesToPayment = !usingVoucher && !waitlisting && totalCents > 0 && payOnline;
 
   const applyDiscount = async () => {
     setDiscountMsg('');
@@ -173,6 +183,10 @@ export default function EventPage() {
     e?.preventDefault();
     setError('');
     if (!usingVoucher && !form.ticketTierId) return setError('Choose a ticket.');
+    for (const f of friendRows) {
+      if (f.name.trim().length < 2) return setError('Enter a name for each friend.');
+      if (!f.contact.trim()) return setError(`Add an email or @telegram for ${f.name.trim()}.`);
+    }
     if (form.legalName.trim().length < 2) return setError('Enter your preferred name.');
     if (!user && !/^\S+@\S+\.\S+$/.test(form.email)) return setError('Enter an email address so you can get back into your account later.');
     for (const f of fields) {
@@ -192,6 +206,7 @@ export default function EventPage() {
         ...form, ticketTierId: form.ticketTierId || undefined, acceptedTos: true, turnstileToken: captchaToken,
         discountCode: appliedDiscount && !usingVoucher ? form.discountCode : undefined,
         donationCents: donationCents || undefined,
+        friends: friendRows.length ? friendRows : undefined,
       });
       // Gate on the server's result, not the form — a voucher code can turn
       // a paid pick into a free confirmed spot.
@@ -264,7 +279,7 @@ export default function EventPage() {
               <p className="muted" style={{ margin: 0 }}>
                 Your {reg.tierName || 'ticket'} spot is held while you pay. It's confirmed as soon as the payment goes through.
               </p>
-              <p className="row" style={{ margin: 0 }}><StatusPill status={reg.status} /> {reg.tierPriceCents != null && <strong>{fmtMoney(reg.tierPriceCents, reg.currency)}</strong>}</p>
+              <p className="row" style={{ margin: 0 }}><StatusPill status={reg.status} /> {reg.chargeCents > 0 && <strong>{fmtMoney(reg.chargeCents, reg.currency)}</strong>}</p>
               <HoldCountdown until={reg.holdExpiresAt} onExpire={() => setTimeout(load, 10_000)} />
               <div className="row">
                 <button className="btn signal" disabled={busy} data-busy={busy ? 'true' : undefined} onClick={pay}>{busy ? 'Opening payment…' : 'Complete payment'}</button>
@@ -394,6 +409,7 @@ export default function EventPage() {
             <button className="btn signal" disabled={busy || (captchaRequired && !captchaToken)} data-busy={busy ? 'true' : undefined} onClick={accept}>
               {busy ? 'Registering…'
                 : goesToPayment ? `I accept · pay ${fmtMoney(totalCents, selectedTier?.currency)}`
+                : waitlisting ? 'I accept · join waitlist'
                 : 'I accept · register me'}
             </button>
           </>}
@@ -465,7 +481,28 @@ export default function EventPage() {
                 </section>
               )}
 
-              {selectedTier && !usingVoucher && selectedTier.priceCents + donationCents > 0 && (
+              {canBuyForFriends && (
+                <section className="reg-section">
+                  <h3 className="reg-heading">Tickets for friends <span className="help">(optional)</span></h3>
+                  {friends.map((f, i) => (
+                    <div key={i} className="row" style={{ flexWrap: 'nowrap', gap: 8 }}>
+                      <input placeholder="Name" value={f.name} style={{ flex: 1 }}
+                        onChange={(e) => setFriends(friends.map((x, n) => (n === i ? { ...x, name: e.target.value } : x)))} />
+                      <input placeholder="Email or @telegram" value={f.contact} style={{ flex: 1.3 }}
+                        onChange={(e) => setFriends(friends.map((x, n) => (n === i ? { ...x, contact: e.target.value } : x)))} />
+                      <button type="button" className="btn ghost sm" aria-label="Remove friend" onClick={() => setFriends(friends.filter((_, n) => n !== i))}>✕</button>
+                    </div>
+                  ))}
+                  {friends.length < 5 && (
+                    <button type="button" className="link-btn" style={{ justifySelf: 'start' }} onClick={() => setFriends([...friends, { name: '', contact: '' }])}>
+                      + Add a ticket for a friend
+                    </button>
+                  )}
+                  {friends.length > 0 && <p className="small muted" style={{ margin: 0 }}>They'll get their ticket by email or Telegram.</p>}
+                </section>
+              )}
+
+              {selectedTier && !usingVoucher && selectedTier.priceCents + donationCents + friendsCents > 0 && (
                 <section className="reg-summary">
                   <div className="spread"><span>{selectedTier.name}</span><span className="mono">{fmtMoney(selectedTier.priceCents, selectedTier.currency)}</span></div>
                   {appliedDiscount && (
@@ -477,11 +514,16 @@ export default function EventPage() {
                       <span className="mono">−{fmtMoney(selectedTier.priceCents - appliedDiscount.ticketCents, selectedTier.currency)}</span>
                     </div>
                   )}
+                  {friendRows.map((f, i) => (
+                    <div key={i} className="spread"><span>{selectedTier.name} for {f.name || 'a friend'}</span><span className="mono">{fmtMoney(selectedTier.priceCents, selectedTier.currency)}</span></div>
+                  ))}
                   {donationCents > 0 && (
                     <div className="spread"><span>Donation</span><span className="mono">{fmtMoney(donationCents, selectedTier.currency)}</span></div>
                   )}
                   <div className="spread reg-total"><strong>Total</strong><strong className="mono">{fmtMoney(totalCents, selectedTier.currency)}</strong></div>
-                  {totalCents > 0 && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
+                  {waitlisting
+                    ? <p className="small muted" style={{ margin: 0 }}>This event is full. You'll join the waitlist and only pay if a spot opens.</p>
+                    : totalCents > 0 && <PaymentNotice variant={payOnline ? 'online' : 'door'} />}
                 </section>
               )}
 

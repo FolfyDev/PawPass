@@ -82,6 +82,14 @@ export default function Merch() {
     catch (e) { setMsg(e.message); }
   };
 
+  const notifyReady = async () => {
+    setMsg('');
+    try {
+      const { sent } = await api.post(`/api/admin/events/${id}/merch-orders/notify-ready`);
+      alert(sent ? `Told ${sent} buyer${sent === 1 ? '' : 's'} their pre-order is ready.` : 'Everyone waiting has already been told.');
+    } catch (e) { setMsg(e.message); }
+  };
+
   const refundOrder = async (order) => {
     if (!confirm(`Refund ${fmtMoney(order.totalCents)} to ${order.buyer?.name || 'the buyer'}?`)) return;
     setMsg('');
@@ -181,7 +189,12 @@ export default function Merch() {
 
       {preorders.length > 0 && (
         <div className="card stack" style={{ marginBottom: 24 }}>
-          <h2 style={{ margin: 0 }}>Pre-orders</h2>
+          <div className="spread">
+            <h2 style={{ margin: 0 }}>Pre-orders</h2>
+            {preorders.some((o) => o.status === 'PAID' && !o.pickedUpAt) && (
+              <button className="btn sm" onClick={notifyReady}>Tell buyers it's ready</button>
+            )}
+          </div>
           <p className="small muted" style={{ margin: 0 }}>Paid online. Mark them picked up as you hand them over.</p>
           <div style={{ overflow: 'auto' }}>
             <table>

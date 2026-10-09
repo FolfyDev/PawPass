@@ -15,6 +15,7 @@ import { badgeRouter } from './routes/badges.js';
 import { STARTER_TEMPLATE } from './badges/template.js';
 import { escapeHtml } from './lib/html.js';
 import { stripeWebhook, createWebhookLimiters } from './lib/payments.js';
+import { verifyEncryptionKey } from './lib/keycheck.js';
 
 function isLocalDev() {
   try {
@@ -100,7 +101,7 @@ app.get('/robots.txt', (_req, res) => {
 });
 
 app.get('/sitemap.xml', async (_req, res) => {
-  const events = await prisma.event.findMany({ where: { published: true }, select: { slug: true, updatedAt: true } });
+  const events = await prisma.event.findMany({ where: { published: true }, select: { slug: true, createdAt: true } });
   const staticUrls = [
     { loc: '/', priority: '1.0' },
     { loc: '/login', priority: '0.3' },
@@ -109,7 +110,7 @@ app.get('/sitemap.xml', async (_req, res) => {
   ];
   const urls = [
     ...staticUrls.map((u) => `  <url><loc>${env.webUrl}${u.loc}</loc><priority>${u.priority}</priority></url>`),
-    ...events.map((e) => `  <url><loc>${env.webUrl}/e/${e.slug}</loc><lastmod>${e.updatedAt.toISOString().slice(0, 10)}</lastmod><priority>0.8</priority></url>`),
+    ...events.map((e) => `  <url><loc>${env.webUrl}/e/${e.slug}</loc><lastmod>${e.createdAt.toISOString().slice(0, 10)}</lastmod><priority>0.8</priority></url>`),
   ];
   res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`);
 });
@@ -153,6 +154,7 @@ app.use((err, req, res, _next) => {
 });
 
 export async function bootstrap() {
+  await verifyEncryptionKey();
   if ((await prisma.badgeTemplate.count()) === 0) {
     await prisma.badgeTemplate.create({ data: { ...STARTER_TEMPLATE, isDefault: true } });
   }

@@ -28,6 +28,8 @@ const MARKERS = [
   ['0002_v2_ticket_tiers_stripe', 'TicketTier'],
   ['0003_payments_addons', 'DiscountCode'],
   ['0004_cancel_policy', 'Event', 'cancelPolicy'],
+  ['0005_reminders_group_tickets', 'Registration', 'paidByRegistrationId'],
+  ['0006_event_emails', 'Event', 'kbygEnabled'],
 ];
 
 const prisma = new PrismaClient();

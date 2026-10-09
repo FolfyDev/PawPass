@@ -112,3 +112,8 @@ export function HoldCountdown({ until, onExpire }) {
     </span>
   );
 }
+
+/// The event's custom questions that apply to a ticket type. Mirrors
+/// fieldsForTier on the server: a question with tierIds is only for those.
+export const fieldsForTier = (event, tierId) =>
+  (event?.customFields || []).filter((f) => !f.tierIds?.length || (tierId && f.tierIds.includes(tierId)));

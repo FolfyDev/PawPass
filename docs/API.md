@@ -9,7 +9,7 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET | `/api/settings` | Branding, wording, which wallet backends are live |
 | GET | `/api/events` | Published events |
 | GET | `/api/events/:slug` | Event, terms, custom fields, ticket `tiers` on sale, your registration if any |
-| POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, acceptedTos }`. A paid tier with Stripe configured returns `status: PENDING_PAYMENT` and a `checkoutUrl` to redirect to |
+| POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, friends: [{ name, contact }], acceptedTos }`. A paid tier with Stripe configured returns `status: PENDING_PAYMENT` and a `checkoutUrl` to redirect to |
 | POST | `/api/events/:slug/discount` | `{ code, ticketTierId }` — preview the discounted price without using the code |
 | POST | `/api/events/:slug/merch/orders` | Signed in, confirmed attendee. `{ items: [{ itemId, quantity }] }` → `checkoutUrl` |
 | POST | `/api/stripe/webhook` | Stripe only — signature-verified against `STRIPE_WEBHOOK_SECRET` |
@@ -40,6 +40,9 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/my/tickets/:code/pay` — `{ url }` of a Stripe Checkout for a ticket awaiting payment |
 | POST | `/api/my/payments/sync` — `{ sessionId }` from the Stripe success redirect; settles it from Stripe |
 | GET | `/api/my/merch-orders` · POST `/api/my/merch-orders/:id/pay` |
+| GET | `/api/my/tickets/:code/receipt` · `/api/my/merch-orders/:id/receipt` (printable HTML) |
+| GET | `/api/my/data` (JSON download of everything held about you) |
+| POST | `/api/my/account/delete`: `{ confirm: 'DELETE' }`. Anonymises the account; refused while upcoming tickets are live |
 
 ## Admin — requires ADMIN or OWNER
 
@@ -62,6 +65,8 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET/POST | `/api/admin/events/:id/discounts` | Discount codes. POST is **owner only**: `{ code, percentOff \| amountOff, maxUses, tierIds, expiresAt }` |
 | PATCH/DELETE | `/api/admin/discounts/:id` | **Owner only** |
 | POST | `/api/admin/merch-orders/:id/pickup` | `{ pickedUp }` |
+| POST | `/api/admin/events/:id/merch-orders/notify-ready` | Tell paid, uncollected pre-order buyers it's ready |
+| GET | `/api/admin/registrations/:code/receipt` · `/api/admin/merch-orders/:id/receipt` | Printable receipts |
 | GET | `/api/admin/events/:id/reconciliation` | Totals by method: tickets, in-person donations, merch |
 | POST | `/api/admin/checkin` | `{ value }` — a ticket URL, a secret, or a typed code |
 | POST | `/api/admin/checkin/:code/undo` | |

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
-import { Field, PaymentButtons, fmtMoney } from '../../components/Bits.jsx';
+import { Field, PaymentButtons, fmtMoney, fieldsForTier } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 import { printBadge } from '../../lib/print.js';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
@@ -31,10 +31,10 @@ export default function Kiosk() {
 
   if (!event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
 
-  const fields = event.customFields || [];
   // With a single tier there's nothing to pick.
   const tierId = form.ticketTierId || (tiers.length === 1 ? tiers[0].id : '');
   const tier = tiers.find((t) => t.id === tierId);
+  const fields = fieldsForTier(event, tierId);
   const paid = tier?.priceCents > 0;
   // null = untouched, which means "the ticket price".
   const amount = form.paymentAmount ?? (paid ? (tier.priceCents / 100).toFixed(2) : '');

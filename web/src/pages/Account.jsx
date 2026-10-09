@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
@@ -20,6 +20,19 @@ export default function Account() {
   const [fursonaName, setFursonaName] = useState(user.fursonaName || '');
   const [fnMsg, setFnMsg] = useState('');
   const [fnMsgOk, setFnMsgOk] = useState(true);
+  const [delMsg, setDelMsg] = useState('');
+  const nav = useNavigate();
+
+  const deleteAccount = async () => {
+    const typed = prompt('This removes your name, email and Telegram from PawPass and signs you out. It can\'t be undone. Type DELETE to confirm.');
+    if (typed == null) return;
+    setDelMsg('');
+    try {
+      await api.post('/api/my/account/delete', { confirm: typed.trim() });
+      await refresh();
+      nav('/');
+    } catch (e) { setDelMsg(e.message); }
+  };
 
   const saveFursonaName = async (e) => {
     e.preventDefault();
@@ -125,6 +138,15 @@ export default function Account() {
           <button className="btn primary">Save email</button>
         </form>
       )}
+
+      <section className="card stack" style={{ marginTop: 20 }}>
+        <h2 style={{ margin: 0 }}>Your data</h2>
+        <div className="row">
+          <a className="btn" href={`${api.base}/api/my/data`}>Download my data</a>
+          {!isStaff && <button type="button" className="btn danger" onClick={deleteAccount}>Delete my account</button>}
+        </div>
+        {delMsg && <p className="note bad" style={{ margin: 0 }}>{delMsg}</p>}
+      </section>
     </div>
   );
 }

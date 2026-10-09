@@ -6,13 +6,14 @@ import sharp from 'sharp';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
 import { getSettings } from '../lib/settings.js';
-import { createRegistration, RegistrationError, registrationWindowState, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier } from '../lib/registrations.js';
-import { startCheckout, PaymentError, selfCancel } from '../lib/payments.js';
+import { createRegistration, RegistrationError, registrationWindowState, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier, fieldsForTier } from '../lib/registrations.js';
+import { startCheckout, startOrderCheckout, PaymentError, selfCancel } from '../lib/payments.js';
+import { createMerchOrder, MerchOrderError, itemPriceCents } from '../lib/merch.js';
 import { stripeEnabled } from '../lib/stripe.js';
-import { tierSaleState, checkDonation, PricingError } from '../lib/pricing.js';
+import { tierSaleState, checkDonation, checkDiscount, normalizeCode, PricingError, registrationCharge } from '../lib/pricing.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { escapeHtml as esc } from '../lib/html.js';
-import { sendRegistrationConfirmation } from '../lib/mailer.js';
+import { sendRegistrationConfirmation, sendNoticeEmail } from '../lib/mailer.js';
 
 /// Telegram doesn't reliably auto-link plain URLs (localhost during local
 /// dev never gets linked at all), so any message with a link is sent with
@@ -73,6 +74,7 @@ const S = {
   EMAIL: 'email',
   CUSTOM: 'custom',   // draft.fieldIndex tracks position
   TIER: 'tier',
+  DISCOUNT: 'discount',
   DONATION: 'donation',
   DONATION_CUSTOM: 'donation_custom',
   TOS: 'tos',
@@ -110,12 +112,33 @@ export async function notifyUser(telegramId, text) {
 /// half of this and silently skipping anyone who signed up by email code.
 export async function notifyWaitlistPromotion(promoted) {
   if (!promoted) return;
+
+  // A paid ticket comes off the waitlist onto a timed hold: pay to keep it.
+  if (promoted.status === 'PENDING_PAYMENT') {
+    const text = `Good news! A spot opened up for ${promoted.event.title}. ` +
+      `It's held for you for ${env.stripe.checkoutMinutes} minutes. Pay to confirm it.`;
+    if (promoted.user.telegramId && bot) {
+      try {
+        const url = await startCheckout(promoted.id);
+        await bot.api.sendMessage(promoted.user.telegramId, text, { reply_markup: payButton(url) });
+      } catch (e) {
+        await notifyUser(promoted.user.telegramId, `${text}\n\n${env.webUrl}/tickets`);
+      }
+    }
+    const to = promoted.email || promoted.user.email;
+    if (to && env.smtp.enabled) {
+      await sendNoticeEmail(to, `A spot opened up for ${promoted.event.title}`, `${text}\n\nPay here: ${env.webUrl}/tickets`)
+        .catch((e) => console.error('waitlist promotion email failed', promoted.code, e.message));
+    }
+    return;
+  }
+
   if (promoted.user.telegramId) {
     await notifyUser(promoted.user.telegramId,
       `Good news! A spot opened up for ${promoted.event.title} and you have been moved off the waitlist.\n\n` +
       `Badge code: ${promoted.code}\n` +
-      `Ticket: ${env.webUrl}/tickets`) +
-      `\n\nBring the QR from that page to check-in. Send /rsvp any time to update whether you're going.`;
+      `Ticket: ${env.webUrl}/tickets\n\n` +
+      'Bring the QR from that page to check-in. Send /rsvp any time to update whether you\'re going.');
   }
   const settings = await getSettings();
   await sendRegistrationConfirmation(promoted, promoted.event, settings)
@@ -239,12 +262,37 @@ export function createBot() {
     const tier = (await activeTiers(event.id)).find((t) => t.id === ctx.match[1] && tierSaleState(t).buyable);
     if (!tier) return ctx.reply('That ticket type is no longer available. Pick another one.');
     draft.ticketTierId = tier.id;
-    await afterTier(ctx, telegramId, draft, event);
+    await askCustom(ctx, telegramId, draft, event, 0);
   });
+
+  /// The event's questions for the chosen ticket, one at a time, then on to
+  /// discount / donation / terms. Asked after the ticket so per-tier
+  /// questions (fieldsForTier) only go to the people they're for.
+  async function askCustom(ctx, telegramId, draft, event, index) {
+    const fields = fieldsForTier(event, draft.ticketTierId);
+    if (index >= fields.length) return afterTier(ctx, telegramId, draft, event);
+    const field = fields[index];
+    draft.fieldIndex = index;
+    await save(telegramId, S.CUSTOM, draft);
+    const opts = field.options?.length ? `\nOptions: ${field.options.join(', ')}` : '';
+    const hint = field.type === 'qualifier' ? '\nReply with one or more, comma separated.' : '';
+    return ctx.reply(`${field.label}${field.required ? '' : ' (optional, /skip)'}${opts}${hint}`);
+  }
 
   /// The optional donation add-on, then the terms. Only offered when it can
   /// actually be charged online.
+  /// After the ticket: a discount code (only if the ticket costs something
+  /// and the event has any), then the donation add-on, then the terms.
   async function afterTier(ctx, telegramId, draft, event) {
+    const tier = await prisma.ticketTier.findUnique({ where: { id: draft.ticketTierId } });
+    if (tier?.priceCents > 0 && (await prisma.discountCode.count({ where: { eventId: event.id, active: true } }))) {
+      await save(telegramId, S.DISCOUNT, draft);
+      return ctx.reply('Got a discount code? Send it, or /skip.');
+    }
+    return askDonation(ctx, telegramId, draft, event);
+  }
+
+  async function askDonation(ctx, telegramId, draft, event) {
     if (!event.donationAddonEnabled || !stripeEnabled()) return sendTos(ctx, telegramId, draft, event);
     await save(telegramId, S.DONATION, draft);
     const kb = new InlineKeyboard();
@@ -316,6 +364,7 @@ export function createBot() {
         answers: draft.answers,
         ticketTierId: draft.ticketTierId,
         donationCents: draft.donationCents || 0,
+        discountCode: draft.discountCode,
         source: 'telegram',
       });
       await prisma.user.update({
@@ -336,7 +385,7 @@ export function createBot() {
         `Badge code: ${reg.code}\n` +
         `Ticket and wallet pass: ${link(`${env.webUrl}/tickets`)}\n\n` +
         'Bring the QR from that page to check-in. Send /rsvp any time to update whether you\'re going.' +
-        (due ? `\n\nPay ${money(reg.ticketTier.priceCents, reg.ticketTier.currency)} at the door.` : ''),
+        (due ? `\n\nPay ${money(reg.ticketTier.priceCents - (reg.discountCents || 0), reg.ticketTier.currency)} at the door.` : ''),
         { parse_mode: 'HTML' },
       );
     } catch (e) {
@@ -349,11 +398,13 @@ export function createBot() {
     try {
       const url = await startCheckout(reg.id);
       const tier = reg.ticketTier;
+      // What checkout actually charges: ticket, minus any discount, plus the donation.
+      const total = tier ? registrationCharge({ tierPriceCents: tier.priceCents, discountCents: reg.discountCents, donationCents: reg.donationCents }).totalCents : null;
       return ctx.reply(
         `Your spot for ${event.title}${reg.tierName ? ` (${reg.tierName})` : ''} is held for ${env.stripe.checkoutMinutes} minutes.\n\n` +
-        `Pay ${tier ? money(tier.priceCents, tier.currency) : ''} to confirm it. Your badge code arrives here once it goes through.\n\n` +
+        `Pay ${tier ? money(total, tier.currency) : ''} to confirm it. Your badge code arrives here once it goes through.\n\n` +
         'Payments are handled securely by Stripe.',
-        { reply_markup: payButton(url, tier ? `Pay ${money(tier.priceCents, tier.currency)}` : 'Pay now') },
+        { reply_markup: payButton(url, tier ? `Pay ${money(total, tier.currency)}` : 'Pay now') },
       );
     } catch (e) {
       if (!(e instanceof PaymentError)) throw e;
@@ -584,7 +635,7 @@ export function createBot() {
       orderBy: { createdAt: 'desc' },
     });
     if (!regs.length) return ctx.reply('You have no tickets yet. Send /register to get one.');
-    if (regs.length === 1) return showMerch(ctx, regs[0].event);
+    if (regs.length === 1) return showMerch(ctx, regs[0].event, regs[0]);
 
     const kb = new InlineKeyboard();
     regs.forEach((r, i) => {
@@ -598,10 +649,12 @@ export function createBot() {
     await ctx.answerCallbackQuery();
     const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
     if (!event) return ctx.reply('That event is gone.');
-    await showMerch(ctx, event);
+    const { user } = await load(ctx);
+    const reg = await prisma.registration.findUnique({ where: { eventId_userId: { eventId: event.id, userId: user.id } } });
+    await showMerch(ctx, event, reg);
   });
 
-  async function showMerch(ctx, event) {
+  async function showMerch(ctx, event, reg) {
     const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
     if (!items.length) return ctx.reply(`Nothing for sale at ${event.title} yet.`);
     const lines = items.map((i) => {
@@ -609,8 +662,41 @@ export function createBot() {
       const price = i.price != null ? ` · $${Number(i.price).toFixed(2)}` : '';
       return `· ${i.name}${price} (${remaining > 0 ? `${remaining} left` : 'sold out'})`;
     });
-    await ctx.reply(`Merch at ${event.title}:\n\n${lines.join('\n')}`);
+    // Pre-order buttons for confirmed attendees, same rules as the website.
+    const orderable = reg?.status === 'CONFIRMED' && stripeEnabled()
+      ? items.filter((i) => i.preorder && itemPriceCents(i) > 0 && i.maxCount > i.soldCount) : [];
+    const kb = new InlineKeyboard();
+    orderable.forEach((i, n) => { kb.text(`Pre-order ${i.name}`, `po:${i.id}`); if (n < orderable.length - 1) kb.row(); });
+    await ctx.reply(`Merch at ${event.title}:\n\n${lines.join('\n')}` + (orderable.length ? '\n\nPre-order now, pick up at the merch table:' : ''),
+      orderable.length ? { reply_markup: kb } : undefined);
   }
+
+  bot.callbackQuery(/^po:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const item = await prisma.merchItem.findUnique({ where: { id: ctx.match[1] } });
+    if (!item?.preorder) return ctx.reply('That item is not available to pre-order.');
+    const left = Math.min(Math.max(item.maxCount - item.soldCount, 0), 5);
+    if (!left) return ctx.reply(`${item.name} is sold out.`);
+    const kb = new InlineKeyboard();
+    for (let n = 1; n <= left; n++) kb.text(String(n), `poq:${item.id}:${n}`);
+    await ctx.reply(`How many ${item.name}?`, { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^poq:(.+):(\d+)$/, async (ctx) => {
+    const { user } = await load(ctx);
+    await ctx.answerCallbackQuery();
+    const item = await prisma.merchItem.findUnique({ where: { id: ctx.match[1] }, include: { event: true } });
+    if (!item) return ctx.reply('That item is gone.');
+    try {
+      const order = await createMerchOrder({ event: item.event, user, items: [{ itemId: item.id, quantity: Number(ctx.match[2]) }] });
+      const url = await startOrderCheckout(order.id);
+      await ctx.reply(`${ctx.match[2]} × ${item.name} held for ${env.stripe.checkoutMinutes} minutes. Pay to confirm it.`,
+        { reply_markup: payButton(url, `Pay ${money(order.totalCents, order.currency)}`) });
+    } catch (e) {
+      if (e instanceof MerchOrderError || e instanceof PaymentError) return ctx.reply(e.message);
+      throw e;
+    }
+  });
 
   /* ---------------- admin: broadcast ---------------- */
 
@@ -714,12 +800,12 @@ export function createBot() {
       case S.EMAIL: {
         if (text && !/^\S+@\S+\.\S+$/.test(text)) return ctx.reply('That does not look like an email. Try again or /skip.');
         draft.email = text || null;
-        return askCustom(0);
+        return askTier(await prisma.event.findUnique({ where: { id: draft.eventId } }));
       }
       case S.CUSTOM: {
         const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
-        const fields = event.customFields || [];
-        const field = fields[draft.fieldIndex];
+        const field = fieldsForTier(event, draft.ticketTierId)[draft.fieldIndex];
+        if (!field) return askCustom(ctx, telegramId, draft, event, draft.fieldIndex + 1);
         if (field.type === 'qualifier') {
           const options = field.options || [];
           const picked = text
@@ -728,11 +814,27 @@ export function createBot() {
             : [];
           if (field.required && picked.length === 0) return ctx.reply(`${field.label} is required. Reply with one or more, comma separated (e.g. ${options.slice(0, 2).join(', ')}).`);
           if (picked.length) draft.answers[field.key] = picked;
-          return askCustom(draft.fieldIndex + 1);
+          return askCustom(ctx, telegramId, draft, event, draft.fieldIndex + 1);
         }
         if (field.required && !text) return ctx.reply(`${field.label} is required.`);
         if (text) draft.answers[field.key] = text;
-        return askCustom(draft.fieldIndex + 1);
+        return askCustom(ctx, telegramId, draft, event, draft.fieldIndex + 1);
+      }
+      case S.DISCOUNT: {
+        const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+        if (!event) { await reset(telegramId); return ctx.reply('That event is gone. Send /register to see the current list.'); }
+        if (!text) { delete draft.discountCode; return askDonation(ctx, telegramId, draft, event); }
+        const tier = await prisma.ticketTier.findUnique({ where: { id: draft.ticketTierId } });
+        const code = await prisma.discountCode.findUnique({ where: { eventId_code: { eventId: event.id, code: normalizeCode(text) } } });
+        try {
+          const off = checkDiscount(code, tier);
+          draft.discountCode = code.code;
+          await ctx.reply(`Code ${code.code} applied: ${money(off, tier.currency)} off.`);
+        } catch (e) {
+          if (e instanceof PricingError) return ctx.reply(`${e.message} Try another, or /skip.`);
+          throw e;
+        }
+        return askDonation(ctx, telegramId, draft, event);
       }
       case S.DONATION_CUSTOM: {
         const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
@@ -766,18 +868,6 @@ export function createBot() {
       return ctx.reply('Email for updates? Send /skip if you would rather not.');
     }
 
-    async function askCustom(index) {
-      const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
-      const fields = event.customFields || [];
-      if (index >= fields.length) return askTier(event);
-      const field = fields[index];
-      draft.fieldIndex = index;
-      await save(telegramId, S.CUSTOM, draft);
-      const opts = field.options?.length ? `\nOptions: ${field.options.join(', ')}` : '';
-      const hint = field.type === 'qualifier' ? '\nReply with one or more, comma separated.' : '';
-      return ctx.reply(`${field.label}${field.required ? '' : ' (optional, /skip)'}${opts}${hint}`);
-    }
-
     async function askTier(event) {
       const [tiers, held] = await Promise.all([activeTiers(event.id), heldByTier(event.id)]);
       const available = tiers.filter((t) => tierSaleState(t).buyable && (t.capacity == null || (held[t.id] || 0) < t.capacity));
@@ -787,7 +877,7 @@ export function createBot() {
       }
       if (available.length === 1) {
         draft.ticketTierId = available[0].id;
-        return afterTier(ctx, telegramId, draft, event);
+        return askCustom(ctx, telegramId, draft, event, 0);
       }
       await save(telegramId, S.TIER, draft);
       const kb = new InlineKeyboard();
@@ -806,6 +896,9 @@ export function createBot() {
 
   }
 
-  bot.catch((err) => console.error('bot error', err));
+  // Only the underlying error and which update hit it: grammY's BotError
+  // carries the whole context, and printing that dumps the bot token
+  // (ctx.api.token) into the logs.
+  bot.catch((err) => console.error('bot error', `update ${err.ctx?.update?.update_id}`, err.error?.stack || err.error || err.message));
   return bot;
 }

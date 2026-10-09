@@ -215,7 +215,7 @@ export default function Tickets() {
               {t.status === 'PENDING_PAYMENT' ? (
                 // No QR until it's paid — it wouldn't get them in anyway.
                 <div className="stack" style={{ margin: '18px 0 6px', justifyItems: 'center', textAlign: 'center' }}>
-                  <p className="muted" style={{ margin: 0 }}>Pay{t.tierPriceCents != null ? ` ${fmtMoney(t.tierPriceCents, t.currency)}` : ''} to confirm your spot.</p>
+                  <p className="muted" style={{ margin: 0 }}>Pay{t.chargeCents > 0 ? ` ${fmtMoney(t.chargeCents, t.currency)}` : ''} to confirm your spot.</p>
                   <HoldCountdown until={t.holdExpiresAt} onExpire={() => setTimeout(load, 10_000)} />
                   <button className="btn signal" disabled={payBusy === t.code} data-busy={payBusy === t.code ? 'true' : undefined} onClick={() => pay(t.code)}>
                     {payBusy === t.code ? 'Opening payment…' : 'Complete payment'}
@@ -240,6 +240,13 @@ export default function Tickets() {
                 <StatusPill status={t.status} checkedInAt={t.checkedInAt} />
               </div>
               {t.cancelRequestedAt && <p className="note" style={{ margin: 0 }}>Cancellation requested. Waiting on the organizers.</p>}
+              {t.paidBy && <p className="small muted" style={{ margin: 0 }}>Bought for you by {t.paidBy.name}.</p>}
+              {t.boughtFor?.some((f) => f.status !== 'CANCELLED') && (
+                <p className="small muted" style={{ margin: 0 }}>Includes tickets for {t.boughtFor.filter((f) => f.status !== 'CANCELLED').map((f) => f.name).join(', ')}.</p>
+              )}
+              {(t.paidCents > 0 || t.payments?.length > 0) && t.status !== 'PENDING_PAYMENT' && (
+                <a className="small" href={`${api.base}/api/my/tickets/${t.code}/receipt`} target="_blank" rel="noreferrer">Receipt</a>
+              )}
               {t.balanceDueCents > 0 && t.status !== 'PENDING_PAYMENT' && (
                 <p className="small muted" style={{ margin: 0 }}>Pay {fmtMoney(t.balanceDueCents, t.currency)} at the door.</p>
               )}
@@ -269,6 +276,7 @@ export default function Tickets() {
                 <div className="stack" style={{ gap: 4 }}>
                   <strong>{o.event?.title}</strong>
                   <span className="small muted">{o.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')} · {fmtMoney(o.totalCents, o.currency)}</span>
+                  {o.status !== 'PENDING' && <a className="small" href={`${api.base}/api/my/merch-orders/${o.id}/receipt`} target="_blank" rel="noreferrer">Receipt</a>}
                   {o.status === 'PENDING' && <HoldCountdown until={o.holdExpiresAt} onExpire={() => setTimeout(load, 10_000)} />}
                 </div>
                 <div className="stack" style={{ gap: 6, justifyItems: 'end' }}>

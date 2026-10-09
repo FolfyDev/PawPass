@@ -113,6 +113,8 @@ The schema is versioned in `server/prisma/migrations/`, one folder per change:
 | `0002_v2_ticket_tiers_stripe` | v2: configurable ticket tiers synced to Stripe, a `Payment` ledger, and seat holds during checkout. Converts v1 data in place (below). |
 | `0003_payments_addons` | Donation add-on, discount codes, tier sale windows, Stripe fees, merch pre-orders. Additive only; no data conversion. |
 | `0004_cancel_policy` | Per-event cancellation policy for paid tickets (auto-refund or request), and pending cancellation requests. Additive only; existing events start on "request". |
+| `0005_reminders_group_tickets` | Reminder timestamps and "buy for friends" (a ticket can point at the buyer's registration). Additive only. |
+| `0006_event_emails` | Automatic "know before you go" and thank-you messages per event. Additive only; both start off. |
 
 v1 instances never had a migration history — they were kept in sync with
 `prisma db push`. The first time a v2 container starts against one,
@@ -155,6 +157,9 @@ Never edit a migration that has already shipped, and never edit
 `prisma/legacy/v1.prisma`.
 
 ## Stripe
+
+If `ENCRYPTION_KEY` doesn't match the key the database was written with, the
+server now refuses to start and says so, instead of failing on every read.
 
 Optional. Without `STRIPE_SECRET_KEY`, paid tiers are paid at the door (staff
 record it at the kiosk or in the attendee editor) and nothing talks to Stripe.

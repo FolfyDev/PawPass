@@ -127,6 +127,15 @@ model Event {
   badgeTemplate    BadgeTemplate? @relation(fields: [badgeTemplateId], references: [id])
   accentColor      String         @default("#FF5B04")
   cancelPolicy     CancelPolicy   @default(REQUEST)
+  /// Automatic "know before you go" message, kbygDaysBefore days ahead.
+  /// Message text supports the email tokens ({{fursona_name}}, {{code}}...).
+  kbygEnabled      Boolean        @default(false)
+  kbygDaysBefore   Int            @default(3)
+  kbygMessage      String         @default("")
+  /// Automatic thank-you after the event ends, with an optional feedback link.
+  thanksEnabled    Boolean        @default(false)
+  thanksMessage    String         @default("")
+  feedbackUrl      String?
   /// Optional "add a donation" step at online checkout, on top of the ticket.
   /// Charged as its own line on the same Stripe session.
   donationAddonEnabled Boolean    @default(false)
@@ -193,6 +202,17 @@ model Registration {
   /// an owner; cleared when it's approved or declined.
   cancelRequestedAt DateTime?
   cancelRequestNote String?
+  /// When the "event is tomorrow" reminder went out, so it only goes once.
+  eventReminderSentAt DateTime?
+  /// When the automatic "know before you go" / thank-you messages went out.
+  kbygSentAt    DateTime?
+  thanksSentAt  DateTime?
+  /// Set on a ticket someone else bought for this person ("buy for friends"):
+  /// the buyer's registration, whose payment covers this one. This ticket is
+  /// confirmed, expired, or refunded together with the buyer's.
+  paidByRegistrationId String?
+  paidBy        Registration?      @relation("GroupPurchase", fields: [paidByRegistrationId], references: [id], onDelete: SetNull)
+  boughtFor     Registration[]     @relation("GroupPurchase")
   /// Assigned once the registration holds a confirmed or waitlisted spot —
   /// never while PENDING_PAYMENT, so abandoned checkouts don't burn numbers.
   badgeNumber   Int?
@@ -218,6 +238,7 @@ model Registration {
   @@unique([eventId, userId])
   @@index([eventId, status])
   @@index([ticketTierId])
+  @@index([paidByRegistrationId])
   @@index([legalNameIndex])
   @@index([emailIndex])
 }
@@ -284,6 +305,8 @@ model Payment {
   stripePaymentIntentId String?       @unique
   /// When the Stripe Checkout session (and so the held seat) lapses.
   expiresAt             DateTime?
+  /// When the "your held spot expires soon" nudge went out.
+  holdReminderSentAt    DateTime?
   paidAt                DateTime?
   /// Staff member who recorded an in-person payment; null for Stripe.
   processedById         String?
@@ -333,6 +356,8 @@ model MerchOrder {
   totalCents    Int
   currency      String           @default("usd")
   pickedUpAt    DateTime?
+  /// When staff sent the "ready for pickup" message.
+  readyNotifiedAt DateTime?
   pickedUpById  String?
   pickedUpBy    User?            @relation("MerchPickedUpBy", fields: [pickedUpById], references: [id], onDelete: SetNull)
   createdAt     DateTime         @default(now())

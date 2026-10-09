@@ -20,15 +20,21 @@ export const DEFAULT_SETTINGS = {
   botWelcome: 'Hi! I can get you registered in about thirty seconds. Send /register to start.',
 };
 
+const KNOWN = Object.keys(DEFAULT_SETTINGS);
+
+/// Only the keys in DEFAULT_SETTINGS — this is served publicly at
+/// /api/settings, so anything else stored in the table (internal keys like
+/// the encryption check, or junk from an old import) never leaks out.
 export async function getSettings() {
-  const rows = await prisma.setting.findMany();
+  const rows = await prisma.setting.findMany({ where: { key: { in: KNOWN } } });
   const stored = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return { ...DEFAULT_SETTINGS, ...stored };
 }
 
+/// Unknown keys are ignored, same reason as above.
 export async function setSettings(patch) {
   await prisma.$transaction(
-    Object.entries(patch).map(([key, value]) =>
+    Object.entries(patch).filter(([key]) => KNOWN.includes(key)).map(([key, value]) =>
       prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } }),
     ),
   );

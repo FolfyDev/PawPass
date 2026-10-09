@@ -122,8 +122,9 @@ export default function Privacy() {
         <section>
           <h2>7. Your choices</h2>
           <p>
-            You can review and update your details from your Account page, unlink Telegram, or set/change your
-            password there. To request a copy or deletion of your data, contact us using the details below.
+            You can review and update your details from your Account page. You can also download a copy of your
+            data or delete your account there. Deleting removes your name, email, Telegram account and answers;
+            payment records are kept without them, as bookkeeping requires. Cancel any upcoming tickets first.
           </p>
         </section>
 

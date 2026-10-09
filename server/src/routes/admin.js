@@ -20,7 +20,8 @@ import { norm, normHandle } from '../lib/bans.js';
 import { ticketCode } from '../lib/codes.js';
 import { zonedTimeToUtc } from '../lib/tz.js';
 import { publicUser } from './auth.js';
-import { summarize, shapeReg, REG_INCLUDE } from './public.js';
+import { summarize, shapeReg, REG_INCLUDE, RECEIPT_INCLUDE } from './public.js';
+import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
 import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
 import { notifyWaitlistPromotion } from '../bot/index.js';
 
@@ -51,7 +52,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -63,7 +64,18 @@ function eventPayload(body, timeZone) {
     if (body[k] === undefined) continue;
     if (['startsAt','endsAt','opensAt','closesAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
-    else if (k === 'donationAddonEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'kbygDaysBefore') {
+      const days = Number(body[k]);
+      if (!Number.isInteger(days) || days < 1 || days > 30) throw new RegistrationError('Send "know before you go" 1 to 30 days before.');
+      data[k] = days;
+    }
+    else if (k === 'kbygMessage' || k === 'thanksMessage') data[k] = String(body[k] || '').slice(0, 5000);
+    else if (k === 'feedbackUrl') {
+      const url = String(body[k] || '').trim();
+      if (url && !/^https?:\/\/\S+$/i.test(url)) throw new RegistrationError('The feedback link must start with http:// or https://.');
+      data[k] = url || null;
+    }
     else if (k === 'cancelPolicy') {
       if (!['AUTO_REFUND', 'REQUEST'].includes(body[k])) throw new RegistrationError('Choose how cancellations of paid tickets work.');
       data[k] = body[k];
@@ -390,7 +402,7 @@ adminRouter.patch('/registrations/:code', async (req, res) => {
     // validateAnswers()'s return value drops any key no longer in the
     // event's current customFields, which would silently erase an answer to
     // a question that has since been removed from the event.
-    try { validateAnswers(existing.event, data.answers); }
+    try { validateAnswers(existing.event, data.answers, data.ticketTierId !== undefined ? data.ticketTierId : existing.ticketTierId); }
     catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
   }
   const reg = await prisma.registration.update({ where: { code: req.params.code }, data, include: REG_INCLUDE });
@@ -673,6 +685,27 @@ adminRouter.patch('/merch/:id', async (req, res) => {
   const updated = await prisma.merchItem.update({ where: { id: item.id }, data });
   await audit(req.user.id, 'merch.update', item.id, data);
   res.json({ ...updated, remaining: Math.max(updated.maxCount - updated.soldCount, 0) });
+});
+
+adminRouter.get('/registrations/:code/receipt', async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: RECEIPT_INCLUDE });
+  if (!reg) return res.status(404).send('Registration not found.');
+  res.type('html').send(ticketReceipt(reg, await getSettings()));
+});
+
+adminRouter.get('/merch-orders/:id/receipt', async (req, res) => {
+  const order = await prisma.merchOrder.findUnique({ where: { id: req.params.id }, include: { event: true, user: true, items: true, payments: true } });
+  if (!order) return res.status(404).send('Order not found.');
+  res.type('html').send(orderReceipt(order, await getSettings()));
+});
+
+/// "Tell buyers it's ready": messages every paid, uncollected pre-order
+/// that hasn't been told yet.
+adminRouter.post('/events/:id/merch-orders/notify-ready', async (req, res) => {
+  const { notifyPreordersReady } = await import('../lib/reminders.js');
+  const sent = await notifyPreordersReady(req.params.id);
+  await audit(req.user.id, 'merch_order.notify_ready', req.params.id, { sent });
+  res.json({ sent });
 });
 
 /// Hands over (or un-hands) a paid pre-order at the merch table.
@@ -1238,6 +1271,8 @@ const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(
 adminRouter.get('/backup', requireOwner, async (req, res) => {
   const data = {};
   for (const key of BACKUP_MODELS) data[key] = await prisma[key].findMany();
+  // Internal settings (e.g. the encryption key check) belong to this instance.
+  data.setting = data.setting.filter((s) => !s.key.startsWith('__'));
 
   const zip = new AdmZip();
   zip.addFile('data.json', Buffer.from(JSON.stringify({ meta: { version: BACKUP_VERSION, exportedAt: new Date().toISOString() }, data }, null, 2)));
@@ -1280,9 +1315,12 @@ adminRouter.post('/restore', requireOwner, restoreUpload.single('file'), async (
 
   const counts = {};
   await prisma.$transaction(async (tx) => {
-    for (const key of [...BACKUP_MODELS].reverse()) await tx[key].deleteMany({});
+    // Internal settings (the encryption key check) stay as they are.
+    const keep = (key) => (key === 'setting' ? { where: { NOT: { key: { startsWith: '__' } } } } : {});
+    for (const key of [...BACKUP_MODELS].reverse()) await tx[key].deleteMany(keep(key));
     for (const key of BACKUP_MODELS) {
-      const rows = parsed.data[key] || [];
+      let rows = parsed.data[key] || [];
+      if (key === 'setting') rows = rows.filter((r) => !String(r.key).startsWith('__'));
       if (rows.length) await tx[key].createMany({ data: rows });
       counts[key] = rows.length;
     }

@@ -13,6 +13,7 @@ export default function EventEdit() {
   const nav = useNavigate();
   const [e, setE] = useState(null);
   const [templates, setTemplates] = useState([]);
+  const [tiers, setTiers] = useState([]);
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
 
@@ -25,6 +26,7 @@ export default function EventEdit() {
       closesAt: localInZone(ev.closesAt, ev.timezone),
     }));
     api.get('/api/badges/templates').then(setTemplates);
+    api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers)).catch(() => setTiers([]));
   }, [id]);
 
   if (!e) return <p className="muted">Loading…</p>;
@@ -114,6 +116,40 @@ export default function EventEdit() {
         </section>
 
         <section className="card stack">
+          <h2 style={{ margin: 0 }}>Automatic messages</h2>
+          <p className="small muted" style={{ margin: 0 }}>Sent by email and Telegram. Tokens: {'{{fursona_name}} {{code}} {{event_title}}'}</p>
+          <label className="row small">
+            <input type="checkbox" checked={!!e.kbygEnabled} onChange={(ev) => set('kbygEnabled', ev.target.checked)} />
+            Know before you go
+          </label>
+          {e.kbygEnabled && (
+            <>
+              <Field label="Days before">
+                <input type="number" min="1" max="30" value={e.kbygDaysBefore ?? 3} style={{ width: 90 }}
+                  onChange={(ev) => set('kbygDaysBefore', Number(ev.target.value))} />
+              </Field>
+              <Field label="Message" help="Parking, what to bring, schedule. Date, venue and badge code are added.">
+                <textarea value={e.kbygMessage || ''} onChange={(ev) => set('kbygMessage', ev.target.value)} />
+              </Field>
+            </>
+          )}
+          <label className="row small">
+            <input type="checkbox" checked={!!e.thanksEnabled} onChange={(ev) => set('thanksEnabled', ev.target.checked)} />
+            Thank-you after the event
+          </label>
+          {e.thanksEnabled && (
+            <>
+              <Field label="Message" help="Blank = a short thanks">
+                <textarea value={e.thanksMessage || ''} onChange={(ev) => set('thanksMessage', ev.target.value)} />
+              </Field>
+              <Field label="Feedback link" help="Optional">
+                <input type="url" placeholder="https://" value={e.feedbackUrl || ''} onChange={(ev) => set('feedbackUrl', ev.target.value)} />
+              </Field>
+            </>
+          )}
+        </section>
+
+        <section className="card stack">
           <h2 style={{ margin: 0 }}>Terms</h2>
           <p className="small muted">Shown before anyone registers.</p>
           <Field label="Heading"><input value={e.tosTitle} onChange={(ev) => set('tosTitle', ev.target.value)} /></Field>
@@ -143,6 +179,19 @@ export default function EventEdit() {
                   <input value={(f.options || []).join(', ')} onChange={(ev) => setField(i, { options: ev.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
               </div>
+              {tiers.length > 1 && (
+                <div className="row small" style={{ marginTop: 8 }}>
+                  <span className="muted">Ask for:</span>
+                  {tiers.map((t) => (
+                    <label key={t.id} className="row small" style={{ gap: 4 }}>
+                      <input type="checkbox" checked={(f.tierIds || []).includes(t.id)}
+                        onChange={(ev) => setField(i, { tierIds: ev.target.checked ? [...(f.tierIds || []), t.id] : (f.tierIds || []).filter((x) => x !== t.id) })} />
+                      {t.name}
+                    </label>
+                  ))}
+                  <span className="muted">(none = everyone)</span>
+                </div>
+              )}
               {f.type === 'qualifier' && (
                 <p className="small muted" style={{ marginTop: 6 }}>
                   Attendees can pick several. The badge shows the highest one.

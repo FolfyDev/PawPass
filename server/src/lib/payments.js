@@ -92,10 +92,15 @@ export async function startCheckout(registrationId) {
 
   const reg = await prisma.registration.findUnique({
     where: { id: registrationId },
-    include: { event: true, ticketTier: true, payments: { where: { method: 'STRIPE', status: 'PENDING' }, orderBy: { createdAt: 'desc' } } },
+    include: {
+      event: true, ticketTier: true,
+      payments: { where: { method: 'STRIPE', status: 'PENDING' }, orderBy: { createdAt: 'desc' } },
+      boughtFor: { where: { status: 'PENDING_PAYMENT' } },
+    },
   });
   if (!reg) throw new PaymentError('Registration not found.');
   if (reg.status !== 'PENDING_PAYMENT') throw new PaymentError('This registration has nothing left to pay.');
+  if (reg.paidByRegistrationId) throw new PaymentError('Someone else is paying for this ticket.');
 
   const reuse = await reuseOpenSession(stripe, reg.payments);
   if (reuse) return reuse;
@@ -105,9 +110,11 @@ export async function startCheckout(registrationId) {
 
   let tier = reg.ticketTier;
   if (!tier) throw new PaymentError('This ticket type is no longer for sale. Contact the organizers.');
-  const charge = registrationCharge({ tierPriceCents: tier.priceCents, discountCents: reg.discountCents, donationCents: reg.donationCents });
-  if (charge.ticketCents > 0 && (!tier.stripePriceId || !tier.stripeProductId)) tier = await syncTier(tier, reg.event);
-  if (charge.ticketCents > 0 && !tier.stripePriceId) throw new PaymentError('Payment for this ticket type is not available right now. Contact the organizers.');
+  const friends = reg.boughtFor.length;
+  const charge = registrationCharge({ tierPriceCents: tier.priceCents, discountCents: reg.discountCents, donationCents: reg.donationCents, friends });
+  const needsPrice = charge.ticketCents > 0 || charge.friendsCents > 0;
+  if (needsPrice && (!tier.stripePriceId || !tier.stripeProductId)) tier = await syncTier(tier, reg.event);
+  if (needsPrice && !tier.stripePriceId) throw new PaymentError('Payment for this ticket type is not available right now. Contact the organizers.');
 
   // The synced Stripe price when it's the plain price; with a discount the
   // same product at the discounted amount, so the dashboard still groups it.
@@ -117,6 +124,7 @@ export async function startCheckout(registrationId) {
       ? { price_data: { currency: tier.currency, product: tier.stripeProductId, unit_amount: charge.ticketCents }, quantity: 1 }
       : { price: tier.stripePriceId, quantity: 1 });
   }
+  if (charge.friendsCents > 0) lineItems.push({ price: tier.stripePriceId, quantity: friends });
   if (charge.donationCents > 0) {
     lineItems.push({
       price_data: { currency: tier.currency, unit_amount: charge.donationCents, product_data: { name: `${reg.event.donationAddonLabel}: ${reg.event.title}` } },
@@ -229,7 +237,10 @@ async function markPaid(payment, session) {
   await captureFees(payment.id).catch((e) => console.error('stripe fee lookup failed', payment.id, e.message));
   if (result.confirmed) {
     await expireOtherSessions(targetOf(payment), payment.id);
-    if (result.reg) await notifyPaid(result.reg);
+    if (result.reg) {
+      await notifyPaid(result.reg);
+      await notifyFriendTickets(result.reg.id);
+    }
     if (result.order) await notifyOrderPaid(result.order);
   }
   return result;
@@ -258,6 +269,12 @@ async function confirmRegistration(tx, registrationId) {
     data: { status: 'CONFIRMED', badgeNumber },
     include: { event: true, user: true },
   });
+  // Friends' tickets this payment covers.
+  const friends = await tx.registration.findMany({ where: { paidByRegistrationId: reg.id, status: { in: ['PENDING_PAYMENT', 'CANCELLED'] } } });
+  for (const f of friends) {
+    const ev = f.badgeNumber == null ? await tx.event.update({ where: { id: reg.eventId }, data: { nextBadgeNumber: { increment: 1 } } }) : null;
+    await tx.registration.update({ where: { id: f.id }, data: { status: 'CONFIRMED', ...(ev ? { badgeNumber: ev.nextBadgeNumber - 1 } : {}) } });
+  }
   return { reg: updated, confirmed: true };
 }
 
@@ -301,6 +318,7 @@ async function releaseIfUnheld(registrationId) {
   if (live) return;
   const released = await prisma.registration.updateMany({ where: { id: registrationId, status: 'PENDING_PAYMENT' }, data: { status: 'CANCELLED' } });
   if (!released.count) return;
+  await prisma.registration.updateMany({ where: { paidByRegistrationId: registrationId, status: 'PENDING_PAYMENT' }, data: { status: 'CANCELLED' } });
   await releaseDiscount(registrationId);
   const reg = await prisma.registration.findUnique({ where: { id: registrationId } });
   await audit(null, 'registration.hold_expired', registrationId, { code: reg.code });
@@ -357,9 +375,11 @@ async function expireOtherSessions(target, keepPaymentId) {
 }
 
 /// For an attendee cancelling a registration that's still waiting on
-/// payment: close the checkout so it can't be paid afterwards.
+/// payment: close the checkout so it can't be paid afterwards, and drop the
+/// friends' tickets it would have paid for.
 export async function abandonPendingPayments(registrationId) {
   await expireOtherSessions({ registrationId }, null);
+  await prisma.registration.updateMany({ where: { paidByRegistrationId: registrationId, status: 'PENDING_PAYMENT' }, data: { status: 'CANCELLED' } });
 }
 
 /* ------------------------------------------------------------- refunds ---- */
@@ -399,7 +419,12 @@ async function applyRefundTotal(payment, refundedCents, totalCents) {
     const reg = await prisma.registration.findUnique({ where: { id: payment.registrationId } });
     if (reg && reg.status !== 'CANCELLED' && !reg.checkedInAt) {
       await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
-      await notifyWaitlistPromotion(await promoteFromWaitlist(reg.eventId));
+      // A full refund covers the friends' tickets it paid for too.
+      const friends = await prisma.registration.updateMany({
+        where: { paidByRegistrationId: reg.id, status: { not: 'CANCELLED' }, checkedInAt: null },
+        data: { status: 'CANCELLED' },
+      });
+      for (let i = 0; i <= friends.count; i++) await notifyWaitlistPromotion(await promoteFromWaitlist(reg.eventId));
     }
   } else {
     await prisma.$transaction(async (tx) => {
@@ -473,9 +498,15 @@ async function notifyRefund(payment, amountCents, full) {
 
 /// Telegram and email are both best-effort — a blocked bot or missing SMTP
 /// config shouldn't fail the refund or decision that triggered the notice.
-async function notifyPerson({ user, email, subject, text }) {
+export async function notifyPerson({ user, email, subject, text }) {
   if (user?.telegramId) await notifyUser(user.telegramId, text);
   if (email && env.smtp.enabled) await sendNoticeEmail(email, subject, text).catch((e) => console.error('notice email failed', e.message));
+}
+
+/// Every owner, by Telegram and/or email — for things only an owner can act on.
+export async function notifyOwners({ subject, text }) {
+  const owners = await prisma.user.findMany({ where: { role: 'OWNER' } });
+  for (const o of owners) await notifyPerson({ user: o, email: o.email, subject, text });
 }
 
 /* --------------------------------------------------------- cancelling ---- */
@@ -489,16 +520,23 @@ const refundable = (payments) =>
 ///   - otherwise (REQUEST, or money taken in person)  -> a request for an owner
 /// Returns { outcome: 'cancelled' | 'refunded' | 'requested' | 'already_requested', promoted }.
 export async function selfCancel(registrationId, note) {
-  const reg = await prisma.registration.findUnique({ where: { id: registrationId }, include: { event: true, payments: true } });
+  const reg = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    include: { event: true, payments: true, paidBy: { include: { payments: true } }, boughtFor: { where: { status: { not: 'CANCELLED' } } } },
+  });
   if (!reg || reg.status === 'CANCELLED') throw new PaymentError('This registration is already cancelled.');
-  const money = refundable(reg.payments);
+  // A friend's ticket is paid through the buyer's payment.
+  const money = refundable(reg.paidBy ? reg.paidBy.payments : reg.payments);
 
   if (reg.status === 'PENDING_PAYMENT' || !money.length) {
     return { outcome: 'cancelled', promoted: await cancelRegistration(reg) };
   }
   if (reg.checkedInAt) throw new PaymentError("You've already checked in, so this can't be cancelled here. Talk to the organizers.");
 
-  if (reg.event.cancelPolicy === 'AUTO_REFUND' && money.every((p) => p.method === 'STRIPE')) {
+  // One ticket out of a group purchase needs a partial refund an owner
+  // decides on, so it's always a request, whatever the policy.
+  const group = Boolean(reg.paidBy || reg.boughtFor.length);
+  if (!group && reg.event.cancelPolicy === 'AUTO_REFUND' && money.every((p) => p.method === 'STRIPE')) {
     for (const p of money) await refundPayment({ paymentId: p.id, actorId: null });
     const after = await prisma.registration.findUnique({ where: { id: reg.id } });
     const promoted = after.status === 'CANCELLED' ? null : await cancelRegistration(after);
@@ -512,6 +550,12 @@ export async function selfCancel(registrationId, note) {
     data: { cancelRequestedAt: new Date(), cancelRequestNote: note?.trim()?.slice(0, 500) || null },
   });
   await audit(null, 'registration.cancel_requested', reg.id, { code: reg.code });
+  await notifyOwners({
+    subject: `Cancellation request: ${reg.event.title}`,
+    text: `${reg.fursonaName || reg.legalName} (${reg.code}) asked to cancel their ${reg.tierName || ''} ticket for ${reg.event.title}.` +
+      (note?.trim() ? `\nReason: ${note.trim().slice(0, 500)}` : '') +
+      `\n\nApprove or decline: ${env.webUrl}/admin/events/${reg.eventId}/attendees`,
+  }).catch((e) => console.error('owner alert failed', reg.id, e.message));
   return { outcome: 'requested' };
 }
 
@@ -534,7 +578,24 @@ export async function decideCancelRequest({ registrationId, approve, actorId }) 
   }
 
   // Refund notices go out from applyRefundTotal as each payment is refunded.
-  for (const p of refundable(reg.payments)) await refundPayment({ paymentId: p.id, actorId });
+  // Within a group purchase only this ticket's share comes back: a friend's
+  // ticket refunds its price from the buyer's payment, and the buyer's own
+  // ticket refunds its (discounted) price while the friends keep theirs.
+  const group = await prisma.registration.findUnique({
+    where: { id: reg.id },
+    include: { ticketTier: true, paidBy: { include: { payments: true } }, boughtFor: { where: { status: { not: 'CANCELLED' } } } },
+  });
+  if (group.paidBy || group.boughtFor.length) {
+    let share = Math.max((group.ticketTier?.priceCents || 0) - (group.paidBy ? 0 : group.discountCents), 0);
+    for (const p of refundable(group.paidBy ? group.paidBy.payments : reg.payments)) {
+      if (share <= 0) break;
+      const amount = Math.min(share, p.amountCents - p.amountRefundedCents);
+      await refundPayment({ paymentId: p.id, amountCents: amount, actorId });
+      share -= amount;
+    }
+  } else {
+    for (const p of refundable(reg.payments)) await refundPayment({ paymentId: p.id, actorId });
+  }
   const after = await prisma.registration.findUnique({ where: { id: reg.id } });
   const promoted = after.status === 'CANCELLED' ? null : await cancelRegistration(after);
   await audit(actorId, 'registration.cancel_approved', reg.id, { code: reg.code });
@@ -697,7 +758,15 @@ export async function sweepExpiredHolds() {
 }
 
 export function startPaymentSweeper() {
-  const timer = setInterval(() => sweepExpiredHolds().catch((e) => console.error('payment sweep failed', e.message)), 60_000);
+  const tick = async () => {
+    await sweepExpiredHolds();
+    const r = await import('./reminders.js');
+    await r.sendHoldReminders();
+    await r.sendEventReminders();
+    await r.sendKnowBeforeYouGo();
+    await r.sendThankYous();
+  };
+  const timer = setInterval(() => tick().catch((e) => console.error('payment sweep failed', e.message)), 60_000);
   timer.unref();
   return timer;
 }
@@ -722,6 +791,23 @@ export async function syncSessionForUser(sessionId, userId) {
   }
   const order = await prisma.merchOrder.findUnique({ where: { id: payment.merchOrderId } });
   return { kind: 'merch', orderId: order.id, status: order.status };
+}
+
+/// Tells each friend about the ticket bought for them, and how to see it:
+/// signing in with the email (or Telegram) it was bought under.
+export async function notifyFriendTickets(buyerRegId) {
+  const buyer = await prisma.registration.findUnique({
+    where: { id: buyerRegId },
+    include: { event: true, boughtFor: { where: { status: 'CONFIRMED' }, include: { user: true } } },
+  });
+  for (const f of buyer?.boughtFor || []) {
+    const how = f.user.telegramId ? 'Send /mytickets to this bot, or sign in on the website,' : `Sign in at ${env.webUrl}/login with this email address`;
+    await notifyPerson({
+      user: f.user, email: f.email || f.user.email,
+      subject: `You have a ticket for ${buyer.event.title}`,
+      text: `${buyer.fursonaName || buyer.legalName} got you a ticket for ${buyer.event.title}.\n\nBadge code: ${f.code}\n${how} to see your ticket and QR code.`,
+    }).catch((e) => console.error('friend ticket notice failed', f.id, e.message));
+  }
 }
 
 async function notifyPaid(reg) {
@@ -790,9 +876,11 @@ export function paymentSummary(r) {
     discountCents: r.discountCents || 0,
     donationCents: r.donationCents || 0,
     // What checkout will charge (ticket after discount + donation).
-    chargeCents: owedCents + (r.donationCents || 0),
-    // A cancelled ticket owes nothing, whether or not it was refunded.
-    balanceDueCents: r.status === 'CANCELLED' ? 0 : Math.max(owedCents - Math.max(paidCents - donatedCents, 0), 0),
+    chargeCents: r.paidByRegistrationId ? 0
+      : owedCents + (r.donationCents || 0) + (r.boughtFor?.filter((f) => f.status === 'PENDING_PAYMENT').length || 0) * (priceCents || 0),
+    // A cancelled ticket owes nothing, whether or not it was refunded; nor
+    // does a friend's ticket, which the buyer's payment covers.
+    balanceDueCents: r.status === 'CANCELLED' || r.paidByRegistrationId ? 0 : Math.max(owedCents - Math.max(paidCents - donatedCents, 0), 0),
     payments: r.payments.map(shapePayment),
   };
 }

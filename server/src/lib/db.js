@@ -22,6 +22,9 @@ const RELATION_TO_MODEL = {
   registration: 'registration',
   registrations: 'registration',
   redemptions: 'registration',
+  paidBy: 'registration',
+  boughtFor: 'registration',
+  merchOrder: 'merchOrder',
 };
 
 function encryptData(model, data) {

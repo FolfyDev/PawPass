@@ -66,8 +66,8 @@ describe('bans', () => {
     assert.equal(res.status, 200);
   });
 
-  test('admin can list, create, and delete bans', async () => {
-    const { user, password } = await createStaff({ role: 'ADMIN' });
+  test('an owner can list, create, and delete bans', async () => {
+    const { user, password } = await createStaff({ role: 'OWNER' });
     const agent = request.agent(app);
     await agent.post('/api/auth/password').send({ email: user.email, password });
 
@@ -86,7 +86,7 @@ describe('bans', () => {
   });
 
   test('rejects a ban with no identifying field', async () => {
-    const { user, password } = await createStaff({ role: 'ADMIN' });
+    const { user, password } = await createStaff({ role: 'OWNER' });
     const agent = request.agent(app);
     await agent.post('/api/auth/password').send({ email: user.email, password });
 

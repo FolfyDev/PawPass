@@ -127,7 +127,8 @@ describe('auth', () => {
   test('rate limits repeated password attempts from the same client', async () => {
     const { user } = await createStaff();
     let sawTooMany = false;
-    for (let i = 0; i < 15; i++) {
+    // loginLimiter allows 30 per window.
+    for (let i = 0; i < 35; i++) {
       const res = await request(app).post('/api/auth/password').send({ email: user.email, password: 'wrong' });
       if (res.status === 429) {
         sawTooMany = true;
