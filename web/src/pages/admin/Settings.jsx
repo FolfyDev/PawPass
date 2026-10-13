@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const TEXT_FIELDS = [
   ['orgName', 'Organisation name'],
@@ -79,7 +80,7 @@ export default function Settings() {
 
   useEffect(() => { if (isOwner) api.get('/api/admin/settings').then(setS); }, [isOwner]);
   if (!isOwner) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
-  if (!s) return <p className="muted">Loading…</p>;
+  if (!s) return <PageSkeleton />;
 
   const save = async () => {
     await api.put('/api/admin/settings', s);

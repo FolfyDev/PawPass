@@ -201,7 +201,7 @@ a.stub:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 
 /* ---- tier list (event page, read-only) ---- */
 .tier-list { list-style: none; margin: 0; padding: 0; display: grid; }
-.tier-list li { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid var(--rule); }
+.tier-list li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid var(--rule); }
 .tier-list li:first-child { border-top: 0; padding-top: 0; }
 
 /* ---- tables ---- */
@@ -452,6 +452,8 @@ tr.clickable { cursor: pointer; }
   .schedule-time { padding-top: 0; grid-auto-flow: column; justify-content: start; gap: 8px; }
 }
 .session { display: grid; gap: 6px; }
+/* A grid child stretches to the full row by default; the track pill should hug its label. */
+.session > .pill { justify-self: start; }
 .session.starred { border-color: color-mix(in srgb, var(--signal) 45%, var(--rule)); }
 .star {
   flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--rule);
@@ -476,3 +478,55 @@ a.stat-link:hover, a.overview-row:hover { border-color: color-mix(in srgb, var(-
 .attention li .pill { flex: 0 0 auto; }
 .attention a { color: var(--ink); text-decoration: none; }
 .attention a:hover { text-decoration: underline; }
+
+/* ---- loading skeletons (components/Skeleton.jsx) ---- */
+.bone {
+  display: block; max-width: 100%; border-radius: 6px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ink) 7%, var(--card)) 0%,
+    color-mix(in srgb, var(--ink) 12%, var(--card)) 50%,
+    color-mix(in srgb, var(--ink) 7%, var(--card)) 100%);
+  background-size: 200% 100%;
+  animation: bone-shimmer 1.4s ease-in-out infinite;
+}
+.bone-lines { display: grid; gap: 8px; }
+@keyframes bone-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+/* Waits a beat before showing, so a fast load never flashes grey boxes. */
+.skeleton { animation: skeleton-in .2s ease-out .15s both; }
+@keyframes skeleton-in { from { opacity: 0; } }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* ---- audit log feed ---- */
+.chip.sm { font-size: 13px; padding: 7px 12px; }
+.audit-feed { list-style: none; margin: 0; padding: 0; }
+.audit-entry { display: grid; grid-template-columns: 64px 28px 1fr; gap: 12px; align-items: start; padding: 12px 18px; border-top: 1px solid var(--rule); }
+.audit-entry:first-child { border-top: 0; }
+.audit-time { font: 500 12px/28px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.audit-system { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--paper); border: 1px dashed var(--rule); color: var(--ink-3); font-size: 14px; }
+.audit-body { min-width: 0; padding-top: 3px; }
+.audit-line { margin: 0; overflow-wrap: anywhere; }
+.audit-target { font-weight: 600; color: var(--ink); }
+a.audit-target { color: var(--platform); }
+.audit-target.deleted { color: var(--ink-3); font-weight: 500; }
+.audit-details { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 6px 0 0; font-size: 13px; }
+.audit-details > div { display: flex; gap: 6px; min-width: 0; }
+.audit-details dt { color: var(--ink-3); }
+.audit-details dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .audit-entry { grid-template-columns: 28px 1fr; padding: 12px 14px; }
+  .audit-time { grid-column: 2; grid-row: 2; line-height: 1.4; }
+}
+
+/* ---- staff permission picker ---- */
+.perm-areas { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); align-items: start; }
+.perm-area { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 14px 8px; min-width: 0; }
+.perm-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 4px; }
+.perm-head .eyebrow { margin: 0; }
+.staff-actions { gap: 6px; flex-wrap: nowrap; justify-content: flex-end; }
+.staff-actions .btn { white-space: nowrap; }
+.perm { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; font-size: 14px; cursor: pointer; border-top: 1px solid var(--rule); }
+.perm:first-of-type { border-top: 0; }
+.perm input { margin-top: 3px; }
+.perm.inherited { cursor: default; }
+.perm.inherited strong { color: var(--ink-2); }

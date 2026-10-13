@@ -6,6 +6,7 @@ import { usePageMeta } from '../lib/meta.js';
 import { Field, fmtMoney } from '../components/Bits.jsx';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import { AREA_LABEL, VendorStatus } from '../components/VendorBits.jsx';
+import { PageSkeleton } from '../components/Skeleton.jsx';
 
 const BLANK = { area: 'DEALERS_DEN', tableTypeId: '', businessName: '', description: '', portfolio: '', assistants: '', notes: '' };
 const toBody = (d) => ({ ...d, portfolioUrls: d.portfolio.split(/\s+/).filter(Boolean), portfolio: undefined });
@@ -71,7 +72,7 @@ export default function VendorApply() {
   }, [params, setParams]);
 
   if (error) return <p className="note bad" style={{ marginTop: 40 }}>{error} <Link to={`/e/${slug}`}>Back to the event</Link></p>;
-  if (!data) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!data) return <PageSkeleton crumbs />;
 
   const live = (a) => ['SUBMITTED', 'WAITLISTED', 'ACCEPTED', 'CONFIRMED'].includes(a.status);
   const openAreas = Object.keys(AREA_LABEL).filter((a) => !data.mine.some((m) => m.area === a && live(m)));

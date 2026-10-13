@@ -4,6 +4,7 @@ import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, Pill, fmtMoney } from '../../components/Bits.jsx';
 import { localInZone } from '../../lib/tz.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const BLANK = { name: '', price: '', currency: 'usd', capacity: '', description: '', salesStartAt: '', salesEndAt: '', validDays: [] };
 const BLANK_CODE = { code: '', kind: 'percent', value: '', maxUses: '', tierIds: [], expiresAt: '' };
@@ -51,8 +52,8 @@ function SyncStatus({ tier, stripe }) {
 
 export default function Tiers() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canManage = can('tickets.manage');
   const [data, setData] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [adding, setAdding] = useState(BLANK);
@@ -85,7 +86,7 @@ export default function Tiers() {
     finally { setBusy(''); }
   };
 
-  if (!data) return <p className="muted">Loading…</p>;
+  if (!data) return <PageSkeleton />;
   const { tiers, stripe } = data;
   const setDraft = (tid, patch) => setDrafts((d) => ({ ...d, [tid]: { ...d[tid], ...patch } }));
 
@@ -147,13 +148,13 @@ export default function Tiers() {
           <p className="eyebrow">Event</p>
           <h1 style={{ margin: 0 }}>Tickets</h1>
         </div>
-        {isOwner && stripe && <button className="btn" disabled={busy === 'sync'} onClick={resync}>{busy === 'sync' ? 'Syncing…' : 'Resync with Stripe'}</button>}
+        {canManage && stripe && <button className="btn" disabled={busy === 'sync'} onClick={resync}>{busy === 'sync' ? 'Syncing…' : 'Resync with Stripe'}</button>}
       </div>
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
       {!stripe && <p className="small muted" style={{ marginTop: 0 }}>Stripe isn't set up, so paid tickets are paid at the door.</p>}
 
-      <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
+      <fieldset disabled={!canManage} style={{ border: 0, margin: 0, padding: 0 }}>
         <div className="stack">
           {tiers.length === 0 && (
             <p className="note bad" style={{ margin: 0 }}>No ticket types yet, so nobody can register. Add one below.</p>

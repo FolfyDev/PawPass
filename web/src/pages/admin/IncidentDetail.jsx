@@ -6,6 +6,7 @@ import { Field, Pill } from '../../components/Bits.jsx';
 import Breadcrumbs from '../../components/Breadcrumbs.jsx';
 import Modal from '../../components/Modal.jsx';
 import { CATEGORY_LABEL, SeverityPill, StatusPillIncident, PeopleEditor } from './Incidents.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const ROLE_LABEL = { SUBJECT: 'About', REPORTER: 'Reported by', WITNESS: 'Witness' };
 const toLocal = (d) => {
@@ -37,7 +38,7 @@ export default function IncidentDetail() {
   };
 
   if (missing) return <p className="note bad" style={{ marginTop: 40 }}>This report doesn't exist, or you can't see it. <Link to="/admin/incidents">Back to reports</Link></p>;
-  if (!inc) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!inc) return <PageSkeleton />;
 
   const open = inc.status === 'OPEN';
   const canEdit = inc.canManage || open;

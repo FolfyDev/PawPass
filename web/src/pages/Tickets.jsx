@@ -8,6 +8,7 @@ import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown
 import Modal from '../components/Modal.jsx';
 import PaymentNotice from '../components/PaymentNotice.jsx';
 import { VendorStatus } from '../components/VendorBits.jsx';
+import { TicketsSkeleton } from '../components/Skeleton.jsx';
 
 const TICKET_GRID = { display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' };
 
@@ -203,7 +204,7 @@ export default function Tickets() {
     }
   };
 
-  if (!tickets) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!tickets) return <TicketsSkeleton />;
 
   const cancelRoom = async (r) => {
     if (!confirm(`Cancel your room at ${r.hotel.name}?`)) return;

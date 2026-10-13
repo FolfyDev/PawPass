@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } from '../../lib/print.js';
@@ -56,10 +56,11 @@ function compareRows(a, b, key, dir) {
 
 export default function Attendees() {
   const { id } = useParams();
-  const { settings, user } = useSession();
-  const isOwner = user?.role === 'OWNER';
+  const { settings, can } = useSession();
+  const canRefund = can('payments.refund');
   const [rows, setRows] = useState(null);
-  const [q, setQ] = useState('');
+  // ?q= opens with a search filled in (links from the audit log use it).
+  const [q, setQ] = useState(useSearchParams()[0].get('q') || '');
   const [event, setEvent] = useState(null);
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
@@ -511,12 +512,12 @@ export default function Attendees() {
                   <strong>Cancellation requested</strong> {fmtDate(editing.cancelRequestedAt, event?.timezone)}
                   {editing.cancelRequestNote && <>: “{editing.cancelRequestNote}”</>}
                 </span>
-                {isOwner ? (
+                {canRefund ? (
                   <div className="row">
                     <button className="btn sm danger" onClick={() => decideCancel(true)}>Approve and refund {fmtMoney(editing.paidCents, editing.currency)}</button>
                     <button className="btn sm" onClick={() => decideCancel(false)}>Decline</button>
                   </div>
-                ) : <span className="small muted">An owner needs to approve or decline it.</span>}
+                ) : <span className="small muted">Someone with the Refunds and cancellations permission needs to approve or decline it.</span>}
               </div>
             )}
             {editing.status === 'PENDING_PAYMENT' && (
@@ -634,7 +635,7 @@ export default function Attendees() {
                         </td>
                         <td className="small muted">{p.note}</td>
                         <td style={{ textAlign: 'right' }}>
-                          {isOwner && ['PAID', 'PARTIALLY_REFUNDED'].includes(p.status) && (
+                          {canRefund && ['PAID', 'PARTIALLY_REFUNDED'].includes(p.status) && (
                             <button className="btn sm ghost" onClick={() => refund(p)}>Refund</button>
                           )}
                           {p.method !== 'STRIPE' && p.amountRefundedCents === 0 && <button className="btn sm ghost" onClick={() => undoPayment(p)}>Remove</button>}

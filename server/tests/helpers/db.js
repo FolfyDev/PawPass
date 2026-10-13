@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../../src/lib/db.js';
 import { blindIndex } from '../../src/lib/crypto.js';
+import { STAFF_DEFAULTS } from '../../src/lib/permissions.js';
 
 // Every test file imports this module before touching the app, so this is
 // the one place to flag "we're in the test suite" — the registration rate
@@ -61,6 +62,8 @@ const CLEAR_ORDER = [
   'botSession',
   'event',
   'badgeTemplate',
+  'staffGroupMember',
+  'staffGroup',
   'user',
   'setting',
 ];
@@ -110,7 +113,10 @@ export function createUser(overrides = {}) {
   });
 }
 
-export async function createStaff({ role = 'ADMIN', password = 'staff-password-123', ...overrides } = {}) {
+/// An admin lands in the "Staff" group with the default permissions, the
+/// same place the 0015 migration puts every existing admin. Pass
+/// `staffGroup: false` for an admin with only what `permissions` grants.
+export async function createStaff({ role = 'ADMIN', password = 'staff-password-123', staffGroup = true, ...overrides } = {}) {
   const n = next();
   const user = await prisma.user.create({
     data: {
@@ -121,6 +127,12 @@ export async function createStaff({ role = 'ADMIN', password = 'staff-password-1
       ...overrides,
     },
   });
+  if (role === 'ADMIN' && staffGroup) {
+    const group = await prisma.staffGroup.upsert({
+      where: { name: 'Staff' }, update: {}, create: { name: 'Staff', permissions: STAFF_DEFAULTS },
+    });
+    await prisma.staffGroupMember.create({ data: { userId: user.id, groupId: group.id } });
+  }
   return { user, password };
 }
 

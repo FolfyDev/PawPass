@@ -14,6 +14,7 @@ import { tierSaleState, checkDonation, checkDiscount, normalizeCode, PricingErro
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { escapeHtml as esc } from '../lib/html.js';
 import { sendRegistrationConfirmation, sendNoticeEmail } from '../lib/mailer.js';
+import { WITH_GROUPS, effectivePermissions } from '../lib/permissions.js';
 
 /// Telegram doesn't reliably auto-link plain URLs (localhost during local
 /// dev never gets linked at all), so any message with a link is sent with
@@ -701,10 +702,13 @@ export function createBot() {
   /* ---------------- admin: broadcast ---------------- */
 
   const isStaff = (user) => user.role === 'ADMIN' || user.role === 'OWNER';
+  // Messaging every attendee is its own permission (Admin -> Staff).
+  const canBroadcast = async (user) => isStaff(user)
+    && effectivePermissions(await prisma.user.findUnique({ where: { id: user.id }, include: WITH_GROUPS })).has('broadcast.telegram');
 
   bot.command('broadcast', async (ctx) => {
     const { user } = await load(ctx);
-    if (!isStaff(user)) return;
+    if (!(await canBroadcast(user))) return;
     const events = await prisma.event.findMany({ orderBy: { startsAt: 'desc' }, take: 20 });
     if (!events.length) return ctx.reply('There are no events yet.');
     const kb = new InlineKeyboard();
@@ -718,7 +722,7 @@ export function createBot() {
   bot.callbackQuery(/^bcastevent:(.+)$/, async (ctx) => {
     const { user } = await load(ctx);
     await ctx.answerCallbackQuery();
-    if (!isStaff(user)) return;
+    if (!(await canBroadcast(user))) return;
     const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
     if (!event) return ctx.reply('That event is gone.');
     const kb = new InlineKeyboard()
@@ -731,7 +735,7 @@ export function createBot() {
   bot.callbackQuery(/^bcastaudience:(.+):(all|confirmed|waitlist)$/, async (ctx) => {
     const { user, telegramId } = await load(ctx);
     await ctx.answerCallbackQuery();
-    if (!isStaff(user)) return;
+    if (!(await canBroadcast(user))) return;
     const event = await prisma.event.findUnique({ where: { id: ctx.match[1] } });
     if (!event) return ctx.reply('That event is gone.');
     const audience = ctx.match[2];
@@ -749,7 +753,7 @@ export function createBot() {
   bot.callbackQuery('bcastsend', async (ctx) => {
     const { session, user, telegramId, draft } = await load(ctx);
     await ctx.answerCallbackQuery();
-    if (!isStaff(user)) return;
+    if (!(await canBroadcast(user))) return;
     if (session.state !== S.BROADCAST_CONFIRM) return ctx.reply('There is nothing queued. Send /broadcast to start.');
     await reset(telegramId);
     const event = await prisma.event.findUnique({ where: { id: draft.eventId } });

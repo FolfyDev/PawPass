@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Empty } from '../../components/Bits.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 export default function Vouchers() {
   const { id } = useParams();
@@ -36,7 +37,7 @@ export default function Vouchers() {
     catch (e) { setMsg(e.message); }
   };
 
-  if (!event || !vouchers) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !vouchers) return <PageSkeleton />;
 
   return (
     <>

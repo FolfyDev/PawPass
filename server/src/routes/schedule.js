@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
-import { requireAdmin, requireUser, audit } from '../lib/auth.js';
+import { requireAdmin, requirePerm, requireUser, audit } from '../lib/auth.js';
 import { zonedTimeToUtc, formatInTimeZone } from '../lib/tz.js';
 import { eventDays } from '../lib/checkins.js';
 import { sessionPayload, submissionPayload, submissionsAccepting, ScheduleError } from '../lib/schedule.js';
@@ -140,7 +140,7 @@ scheduleAdminRouter.use(requireAdmin);
 const toUtcFor = (event) => (v) => zonedTimeToUtc(v, event.timezone);
 const loadEvent = (id) => prisma.event.findUnique({ where: { id } });
 
-scheduleAdminRouter.get('/events/:id/schedule', async (req, res) => {
+scheduleAdminRouter.get('/events/:id/schedule', requirePerm('schedule.manage', 'submissions.review', 'schedule.publish'), async (req, res) => {
   const event = await loadEvent(req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const [rooms, sessions] = await Promise.all([
@@ -159,7 +159,7 @@ scheduleAdminRouter.get('/events/:id/schedule', async (req, res) => {
   });
 });
 
-scheduleAdminRouter.post('/events/:id/rooms', async (req, res) => {
+scheduleAdminRouter.post('/events/:id/rooms', requirePerm('schedule.manage'), async (req, res) => {
   const event = await loadEvent(req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const name = String(req.body?.name || '').trim().slice(0, 120);
@@ -172,7 +172,7 @@ scheduleAdminRouter.post('/events/:id/rooms', async (req, res) => {
   res.json(room);
 });
 
-scheduleAdminRouter.patch('/rooms/:id', async (req, res) => {
+scheduleAdminRouter.patch('/rooms/:id', requirePerm('schedule.manage'), async (req, res) => {
   const room = await prisma.eventRoom.findUnique({ where: { id: req.params.id } });
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   const data = {};
@@ -186,7 +186,7 @@ scheduleAdminRouter.patch('/rooms/:id', async (req, res) => {
 });
 
 /// Sessions in it stay, without a room.
-scheduleAdminRouter.delete('/rooms/:id', async (req, res) => {
+scheduleAdminRouter.delete('/rooms/:id', requirePerm('schedule.manage'), async (req, res) => {
   const room = await prisma.eventRoom.findUnique({ where: { id: req.params.id } });
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   await prisma.eventRoom.delete({ where: { id: room.id } });
@@ -194,7 +194,7 @@ scheduleAdminRouter.delete('/rooms/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-scheduleAdminRouter.post('/events/:id/sessions', async (req, res) => {
+scheduleAdminRouter.post('/events/:id/sessions', requirePerm('schedule.manage'), async (req, res) => {
   const event = await loadEvent(req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   try {
@@ -205,7 +205,7 @@ scheduleAdminRouter.post('/events/:id/sessions', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-scheduleAdminRouter.patch('/sessions/:id', async (req, res) => {
+scheduleAdminRouter.patch('/sessions/:id', requirePerm('schedule.manage'), async (req, res) => {
   const session = await prisma.scheduleSession.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!session) return res.status(404).json({ error: 'Session not found.' });
   try {
@@ -216,7 +216,7 @@ scheduleAdminRouter.patch('/sessions/:id', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-scheduleAdminRouter.delete('/sessions/:id', async (req, res) => {
+scheduleAdminRouter.delete('/sessions/:id', requirePerm('schedule.manage'), async (req, res) => {
   const session = await prisma.scheduleSession.findUnique({ where: { id: req.params.id } });
   if (!session) return res.status(404).json({ error: 'Session not found.' });
   await prisma.scheduleSession.delete({ where: { id: session.id } });
@@ -231,7 +231,7 @@ const shapeSubmission = (s) => ({
   decidedBy: s.decidedBy?.displayName || null,
 });
 
-scheduleAdminRouter.get('/events/:id/submissions', async (req, res) => {
+scheduleAdminRouter.get('/events/:id/submissions', requirePerm('submissions.review', 'schedule.manage'), async (req, res) => {
   const where = { eventId: req.params.id };
   if (['SUBMITTED', 'ACCEPTED', 'DECLINED', 'WITHDRAWN'].includes(req.query.status)) where.status = req.query.status;
   const rows = await prisma.panelSubmission.findMany({
@@ -240,7 +240,7 @@ scheduleAdminRouter.get('/events/:id/submissions', async (req, res) => {
   res.json(rows.map(shapeSubmission));
 });
 
-scheduleAdminRouter.patch('/submissions/:id', async (req, res) => {
+scheduleAdminRouter.patch('/submissions/:id', requirePerm('submissions.review'), async (req, res) => {
   const s = await prisma.panelSubmission.findUnique({ where: { id: req.params.id } });
   if (!s) return res.status(404).json({ error: 'Submission not found.' });
   const reviewNote = String(req.body?.reviewNote ?? '').slice(0, 3000);
@@ -251,7 +251,7 @@ scheduleAdminRouter.patch('/submissions/:id', async (req, res) => {
 /// Accept (which creates an unscheduled, unpublished draft session from it)
 /// or decline. `message` goes to the submitter with the decision; the
 /// review note never does.
-scheduleAdminRouter.post('/submissions/:id/decision', async (req, res) => {
+scheduleAdminRouter.post('/submissions/:id/decision', requirePerm('submissions.review'), async (req, res) => {
   const decision = req.body?.decision;
   if (!['ACCEPTED', 'DECLINED'].includes(decision)) return res.status(400).json({ error: 'Accept or decline.' });
   const s = await prisma.panelSubmission.findUnique({ where: { id: req.params.id }, include: { user: true, event: true } });
@@ -285,7 +285,7 @@ scheduleAdminRouter.post('/submissions/:id/decision', async (req, res) => {
 });
 
 /// The whole schedule as a sheet, for printing or the program book.
-scheduleAdminRouter.get('/events/:id/schedule.csv', async (req, res) => {
+scheduleAdminRouter.get('/events/:id/schedule.csv', requirePerm('schedule.manage', 'submissions.review'), async (req, res) => {
   const event = await loadEvent(req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const sessions = await prisma.scheduleSession.findMany({

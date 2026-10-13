@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
-import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
+import { requireAdmin, requirePerm, audit } from '../lib/auth.js';
+import { effectivePermissions } from '../lib/permissions.js';
 import { findMatchingBan, norm, normHandle } from '../lib/bans.js';
 
 /// Confidential incident reports. Any staff member can file one and follow
@@ -8,7 +9,7 @@ import { findMatchingBan, norm, normHandle } from '../lib/bans.js';
 /// ban. An admin only ever sees the reports they filed — to anyone else a
 /// report they can't see simply doesn't exist (404, not 403).
 export const incidentRouter = Router();
-incidentRouter.use(requireAdmin);
+incidentRouter.use(requireAdmin, requirePerm('incidents.file', 'incidents.manage'));
 
 export const CATEGORIES = ['harassment', 'safety', 'medical', 'property', 'conduct', 'other'];
 const SEVERITIES = ['LOW', 'MEDIUM', 'HIGH'];
@@ -16,7 +17,9 @@ const ROLES = ['SUBJECT', 'REPORTER', 'WITNESS'];
 
 class IncidentError extends Error {}
 
-const isOwner = (user) => user.role === 'OWNER';
+/// Seeing every report, resolving them and turning one into a ban; everyone
+/// else with incidents.file sees only what they filed.
+const isOwner = (user) => effectivePermissions(user).has('incidents.manage');
 const visibleTo = (user) => (isOwner(user) ? {} : { filedById: user.id });
 const text = (v, max) => String(v ?? '').trim().slice(0, max);
 
@@ -185,7 +188,7 @@ incidentRouter.patch('/:id', async (req, res) => {
   const incident = await load(req);
   if (!incident) return res.status(404).json({ error: 'Report not found.' });
   const owner = isOwner(req.user);
-  if (!owner && incident.status !== 'OPEN') return res.status(403).json({ error: 'This report is resolved. Ask an owner to reopen it.' });
+  if (!owner && incident.status !== 'OPEN') return res.status(403).json({ error: 'This report is resolved. Ask someone who manages incident reports to reopen it.' });
   try {
     const data = incidentFields(req.body || {}, { owner });
     await prisma.incident.update({ where: { id: incident.id }, data });
@@ -214,7 +217,7 @@ incidentRouter.post('/:id/people', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-incidentRouter.delete('/:id/people/:personId', requireOwner, async (req, res) => {
+incidentRouter.delete('/:id/people/:personId', requirePerm('incidents.manage'), async (req, res) => {
   const incident = await load(req);
   if (!incident) return res.status(404).json({ error: 'Report not found.' });
   const { count } = await prisma.incidentPerson.deleteMany({ where: { id: req.params.personId, incidentId: incident.id } });
@@ -226,7 +229,7 @@ incidentRouter.delete('/:id/people/:personId', requireOwner, async (req, res) =>
 /// "Turn this into a ban": bans the person by their ticket's identity (or
 /// what was written down), linked back to this report. Same normalization
 /// as POST /admin/bans, so it matches future registrations the same way.
-incidentRouter.post('/:id/people/:personId/ban', requireOwner, async (req, res) => {
+incidentRouter.post('/:id/people/:personId/ban', requirePerm('incidents.manage'), async (req, res) => {
   const incident = await load(req);
   if (!incident) return res.status(404).json({ error: 'Report not found.' });
   const person = incident.people.find((p) => p.id === req.params.personId);
@@ -248,7 +251,7 @@ incidentRouter.post('/:id/people/:personId/ban', requireOwner, async (req, res) 
   res.json(await shapeIncident(await load(req), req.user));
 });
 
-incidentRouter.delete('/:id', requireOwner, async (req, res) => {
+incidentRouter.delete('/:id', requirePerm('incidents.manage'), async (req, res) => {
   const incident = await load(req);
   if (!incident) return res.status(404).json({ error: 'Report not found.' });
   await prisma.incident.delete({ where: { id: incident.id } });

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import { api } from './api.js';
 import { wipeOfflineCheckin, isNetworkError } from './offlineCheckin.js';
 
-// The last signed-in staff member (name and role only), so a door scanner
+// The last signed-in staff member (name, role and permissions only), so a door scanner
 // that's reloaded with no connection still opens instead of bouncing to the
 // sign-in page. Only ever used when the server can't be reached at all; the
 // server checks the real session cookie on every request regardless.
@@ -11,7 +11,7 @@ const OFFLINE_STAFF_DAYS = 4;
 const rememberStaff = (user) => {
   try {
     if (user && (user.role === 'ADMIN' || user.role === 'OWNER')) {
-      localStorage.setItem(OFFLINE_STAFF, JSON.stringify({ id: user.id, displayName: user.displayName, role: user.role, savedAt: Date.now() }));
+      localStorage.setItem(OFFLINE_STAFF, JSON.stringify({ id: user.id, displayName: user.displayName, role: user.role, permissions: user.permissions, savedAt: Date.now() }));
     } else localStorage.removeItem(OFFLINE_STAFF);
   } catch { /* no storage, no offline sign-in */ }
 };
@@ -57,8 +57,15 @@ export function SessionProvider({ children }) {
     setUser(null);
   };
 
+  // What this staff member may do (lib/permissions.js on the server). The
+  // server checks every request regardless; this only decides what to show.
+  const can = useCallback((perm) => user?.role === 'OWNER' || Boolean(user?.permissions?.includes(perm)), [user]);
+
   return (
-    <Ctx.Provider value={{ user, settings, config, loading, refresh, logout, isStaff: user?.role === 'ADMIN' || user?.role === 'OWNER' }}>
+    <Ctx.Provider value={{
+      user, settings, config, loading, refresh, logout, can,
+      isStaff: user?.role === 'ADMIN' || user?.role === 'OWNER', isOwner: user?.role === 'OWNER',
+    }}>
       {children}
     </Ctx.Provider>
   );

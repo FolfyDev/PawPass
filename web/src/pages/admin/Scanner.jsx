@@ -10,6 +10,7 @@ import { OfflineCheckin, isNetworkError } from '../../lib/offlineCheckin.js';
 import { registerOfflineShell } from '../../lib/offlineShell.js';
 import { StatusPill, Pill, fmtDate, fmtMoney } from '../../components/Bits.jsx';
 import StatusMark from '../../components/StatusMark.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const MODES = {
   checkin: { label: 'Check in', verb: 'Checked in' },
@@ -50,7 +51,7 @@ export default function Scanner() {
       });
   }, [eventId]);
 
-  if (event === undefined) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (event === undefined) return <PageSkeleton />;
   if (event === null) {
     return (
       <>

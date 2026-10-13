@@ -168,6 +168,10 @@ model User {
   /// SHA-256 of each unused recovery code; one is removed as it's used.
   totpRecoveryHashes String[]     @default([])
   role             Role           @default(USER)
+  /// Granted to this person directly, on top of their staff groups'
+  /// (lib/permissions.js). Only counts while role is ADMIN; owners have all.
+  permissions      String[]       @default([])
+  staffGroups      StaffGroupMember[]
   /// Bumped on logout or password change; a JWT's embedded `ver` claim must
   /// match this or loadUser() treats the request as signed out. Lets a
   /// logout invalidate the token everywhere, not just clear this browser's
@@ -1091,6 +1095,27 @@ model Ban {
   @@index([telegramUsername])
 }
 
+/// A named set of permissions staff can be put in, e.g. "Door team".
+model StaffGroup {
+  id          String             @id @default(cuid())
+  name        String             @unique
+  description String             @default("")
+  permissions String[]           @default([])
+  createdAt   DateTime           @default(now())
+  members     StaffGroupMember[]
+}
+
+model StaffGroupMember {
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groupId   String
+  group     StaffGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@id([userId, groupId])
+  @@index([groupId])
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   actorId   String?
@@ -1099,4 +1124,6 @@ model AuditLog {
   target    String?
   meta      Json     @default("{}")
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

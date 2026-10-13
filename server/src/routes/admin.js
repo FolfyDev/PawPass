@@ -8,7 +8,9 @@ import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { requireAdmin, requireOwner, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
+import { requireAdmin, requirePerm, requireOwner, can, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
+import { EVENT_FIELD_PERMISSION, WITH_GROUPS, cleanPermissions, permissionCatalog } from '../lib/permissions.js';
+import { describeAuditRows, AUDIT_AREAS } from '../lib/auditView.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier, HOLDS_SEAT } from '../lib/registrations.js';
 import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest, shapePayment, notifyPerson } from '../lib/payments.js';
@@ -102,7 +104,7 @@ function eventPayload(body, timeZone) {
   return data;
 }
 
-adminRouter.post('/events', requireOwner, async (req, res) => {
+adminRouter.post('/events', requirePerm('events.edit'), async (req, res) => {
   const timeZone = req.body.timezone || env.defaultTimezone;
   let data;
   try { data = eventPayload(req.body, timeZone); }
@@ -113,7 +115,15 @@ adminRouter.post('/events', requireOwner, async (req, res) => {
   res.json(event);
 });
 
-adminRouter.patch('/events/:id', requireOwner, async (req, res) => {
+adminRouter.patch('/events/:id', async (req, res) => {
+  // Full edits need events.edit; a section's own settings card (hotels,
+  // volunteers, schedule, vendors, donation add-on) only needs that section's.
+  if (!can(req, 'events.edit')) {
+    const keys = Object.keys(req.body || {});
+    if (!keys.length || keys.some((k) => !can(req, EVENT_FIELD_PERMISSION[k]))) {
+      return res.status(403).json({ error: "You don't have permission to do that. Ask an owner if you need it." });
+    }
+  }
   const before = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true, title: true } });
   if (!before) return res.status(404).json({ error: 'Event not found.' });
   const timeZone = req.body.timezone || before.timezone || env.defaultTimezone;
@@ -196,7 +206,7 @@ adminRouter.get('/events/:id/tiers', async (req, res) => {
   });
 });
 
-adminRouter.post('/events/:id/tiers', requireOwner, async (req, res) => {
+adminRouter.post('/events/:id/tiers', requirePerm('tickets.manage'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   let data;
@@ -208,7 +218,7 @@ adminRouter.post('/events/:id/tiers', requireOwner, async (req, res) => {
   res.json(shapeTier(tier));
 });
 
-adminRouter.patch('/tiers/:id', requireOwner, async (req, res) => {
+adminRouter.patch('/tiers/:id', requirePerm('tickets.manage'), async (req, res) => {
   const existing = await prisma.ticketTier.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!existing) return res.status(404).json({ error: 'Ticket type not found.' });
   let data;
@@ -226,7 +236,7 @@ adminRouter.patch('/tiers/:id', requireOwner, async (req, res) => {
 
 /// Only for tiers nobody has registered on — otherwise deactivate it, which
 /// stops sales but keeps the registrations' tier (and its price) intact.
-adminRouter.delete('/tiers/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/tiers/:id', requirePerm('tickets.manage'), async (req, res) => {
   const tier = await prisma.ticketTier.findUnique({ where: { id: req.params.id }, include: { _count: { select: { registrations: true } } } });
   if (!tier) return res.status(404).json({ error: 'Ticket type not found.' });
   if (tier._count.registrations > 0)
@@ -274,7 +284,7 @@ adminRouter.get('/events/:id/discounts', async (req, res) => {
   res.json(await prisma.discountCode.findMany({ where: { eventId: req.params.id }, orderBy: { createdAt: 'desc' } }));
 });
 
-adminRouter.post('/events/:id/discounts', requireOwner, async (req, res) => {
+adminRouter.post('/events/:id/discounts', requirePerm('tickets.manage'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   try {
@@ -288,7 +298,7 @@ adminRouter.post('/events/:id/discounts', requireOwner, async (req, res) => {
   }
 });
 
-adminRouter.patch('/discounts/:id', requireOwner, async (req, res) => {
+adminRouter.patch('/discounts/:id', requirePerm('tickets.manage'), async (req, res) => {
   const existing = await prisma.discountCode.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!existing) return res.status(404).json({ error: 'Discount code not found.' });
   try {
@@ -303,7 +313,7 @@ adminRouter.patch('/discounts/:id', requireOwner, async (req, res) => {
 });
 
 /// Registrations that used it keep their discount (it's snapshotted).
-adminRouter.delete('/discounts/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/discounts/:id', requirePerm('tickets.manage'), async (req, res) => {
   const code = await prisma.discountCode.findUnique({ where: { id: req.params.id } });
   if (!code) return res.status(404).json({ error: 'Discount code not found.' });
   await prisma.discountCode.delete({ where: { id: code.id } });
@@ -313,7 +323,7 @@ adminRouter.delete('/discounts/:id', requireOwner, async (req, res) => {
 
 /// Re-pushes every tier on the event to Stripe — for recovering from a sync
 /// error, or after adding STRIPE_SECRET_KEY to an instance that already had tiers.
-adminRouter.post('/events/:id/tiers/sync', requireOwner, async (req, res) => {
+adminRouter.post('/events/:id/tiers/sync', requirePerm('tickets.manage'), async (req, res) => {
   if (!stripeEnabled()) return res.status(400).json({ error: 'Stripe is not configured on this instance (STRIPE_SECRET_KEY).' });
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
@@ -324,7 +334,7 @@ adminRouter.post('/events/:id/tiers/sync', requireOwner, async (req, res) => {
   res.json({ ok: true, errors: synced.filter((t) => t.stripeSyncError).map((t) => ({ id: t.id, name: t.name, error: t.stripeSyncError })) });
 });
 
-adminRouter.delete('/events/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/events/:id', requirePerm('events.delete'), async (req, res) => {
   await prisma.event.delete({ where: { id: req.params.id } });
   await audit(req.user.id, 'event.delete', req.params.id, {});
   res.json({ ok: true });
@@ -335,7 +345,7 @@ adminRouter.delete('/events/:id', requireOwner, async (req, res) => {
 // legalName/fursonaName/email are encrypted at rest, so a substring search
 // across them can't happen in the database query — it's filtered here
 // instead, after Prisma has already decrypted the fetched rows.
-adminRouter.get('/events/:id/registrations', async (req, res) => {
+adminRouter.get('/events/:id/registrations', requirePerm('attendees.view'), async (req, res) => {
   const { q, status } = req.query;
   const regs = await prisma.registration.findMany({
     where: { eventId: req.params.id, ...(status ? { status } : {}) },
@@ -353,7 +363,7 @@ adminRouter.get('/events/:id/registrations', async (req, res) => {
   })));
 });
 
-adminRouter.get('/events/:id/registrations.csv', async (req, res) => {
+adminRouter.get('/events/:id/registrations.csv', requirePerm('attendees.view'), async (req, res) => {
   const regs = await prisma.registration.findMany({ where: { eventId: req.params.id }, include: { user: true, ...REG_INCLUDE }, orderBy: { createdAt: 'asc' } });
   const keys = ['code','status','legalName','fursonaName','email','telegram','checkedInAt','source','createdAt','tierName','badgeTier','tierPrice','paid','paymentMethod','balanceDue'];
   const dollars = (cents) => (cents == null ? '' : (cents / 100).toFixed(2));
@@ -371,7 +381,7 @@ adminRouter.get('/events/:id/registrations.csv', async (req, res) => {
   res.type('text/csv').set('Content-Disposition', 'attachment; filename="registrations.csv"').send([keys.join(','), ...rows].join('\n'));
 });
 
-adminRouter.post('/registrations', async (req, res) => {
+adminRouter.post('/registrations', requirePerm('attendees.edit'), async (req, res) => {
   // Walk-up registration typed in by staff at the door.
   const event = await prisma.event.findUnique({ where: { id: req.body.eventId } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
@@ -401,7 +411,7 @@ adminRouter.post('/registrations', async (req, res) => {
   }
 });
 
-adminRouter.patch('/registrations/:code', async (req, res) => {
+adminRouter.patch('/registrations/:code', requirePerm('attendees.edit'), async (req, res) => {
   const allowed = ['legalName','fursonaName','email','status','answers','ticketTierId'];
   const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
   if (data.ticketTierId !== undefined) {
@@ -433,7 +443,7 @@ adminRouter.patch('/registrations/:code', async (req, res) => {
 
 /// Money taken in person for a registration that was already created — e.g.
 /// someone who registered online on a pay-at-the-door tier, paying at check-in.
-adminRouter.post('/registrations/:code/payments', async (req, res) => {
+adminRouter.post('/registrations/:code/payments', requirePerm('attendees.edit'), async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { ticketTier: true } });
   if (!reg) return res.status(404).json({ error: 'Registration not found.' });
   try {
@@ -451,7 +461,7 @@ adminRouter.post('/registrations/:code/payments', async (req, res) => {
 
 /// Undoes a mistaken in-person entry. Stripe payments are refunded from the
 /// Stripe dashboard instead, and the refund webhook updates them here.
-adminRouter.delete('/payments/:id', async (req, res) => {
+adminRouter.delete('/payments/:id', requirePerm('attendees.edit'), async (req, res) => {
   const payment = await prisma.payment.findUnique({ where: { id: req.params.id }, include: { registration: true, vendorApplication: { include: { payments: true } } } });
   if (!payment) return res.status(404).json({ error: 'Payment not found.' });
   if (payment.method === 'STRIPE') return res.status(400).json({ error: 'Use Refund for Stripe payments instead.' });
@@ -476,7 +486,7 @@ adminRouter.delete('/payments/:id', async (req, res) => {
 /// through the Stripe API; in-person ones are recorded as handed back. A full
 /// refund cancels the ticket (or pre-order), same as a refund in the Stripe
 /// dashboard would. Owner-only: it moves real money.
-adminRouter.post('/payments/:id/refund', requireOwner, async (req, res) => {
+adminRouter.post('/payments/:id/refund', requirePerm('payments.refund'), async (req, res) => {
   const amountCents = req.body?.amount === undefined || req.body?.amount === '' ? undefined : toCents(req.body.amount);
   try {
     const payment = await refundPayment({ paymentId: req.params.id, amountCents, actorId: req.user.id });
@@ -496,7 +506,7 @@ adminRouter.post('/payments/:id/refund', requireOwner, async (req, res) => {
 
 /// Approve (refund + cancel) or decline an attendee's cancellation request.
 /// Owner-only, since approving moves money.
-adminRouter.post('/registrations/:code/cancel-request', requireOwner, async (req, res) => {
+adminRouter.post('/registrations/:code/cancel-request', requirePerm('payments.refund'), async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg) return res.status(404).json({ error: 'Registration not found.' });
   try {
@@ -513,7 +523,7 @@ adminRouter.post('/registrations/:code/cancel-request', requireOwner, async (req
 /// than fire-and-forget like the automatic send at registration time, since
 /// here an admin is directly waiting on the result and needs to know if it
 /// actually went out (e.g. SMTP not configured on this instance).
-adminRouter.post('/registrations/:code/resend-email', async (req, res) => {
+adminRouter.post('/registrations/:code/resend-email', requirePerm('attendees.edit'), async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { event: true } });
   if (!reg) return res.status(404).json({ error: 'Registration not found.' });
   if (!reg.email) return res.status(400).json({ error: 'This registration has no email on file.' });
@@ -531,7 +541,7 @@ adminRouter.post('/registrations/:code/resend-email', async (req, res) => {
 /// not the fuller GET /users (owner-only, since that exposes the whole staff
 /// roster) since this only needs to find an existing Telegram-linked account by
 /// name or username, and staff below owner are allowed to use it.
-adminRouter.get('/telegram-lookup', async (req, res) => {
+adminRouter.get('/telegram-lookup', requirePerm('attendees.view', 'attendees.edit'), async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json([]);
   const users = await prisma.user.findMany({
@@ -550,7 +560,7 @@ adminRouter.get('/telegram-lookup', async (req, res) => {
 /// Manually attach a Telegram identity to a registration's account — same
 /// empty-shell-vs-real-conflict handling as the self-service code flow (see
 /// linkTelegramIdentity), just admin-initiated and by search instead of a code.
-adminRouter.patch('/registrations/:code/telegram', async (req, res) => {
+adminRouter.patch('/registrations/:code/telegram', requirePerm('attendees.edit'), async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: { user: true } });
   if (!reg) return res.status(404).json({ error: 'Registration not found.' });
   const telegramId = String(req.body.telegramId || '').trim();
@@ -573,7 +583,7 @@ adminRouter.patch('/registrations/:code/telegram', async (req, res) => {
 /// over too, except ones that would collide with a registration the keeper
 /// already has for that event — those are left alone and reported back
 /// rather than silently dropped.
-adminRouter.post('/registrations/combine', async (req, res) => {
+adminRouter.post('/registrations/combine', requirePerm('attendees.edit'), async (req, res) => {
   const { keepCode, dropCode } = req.body || {};
   const [keep, drop] = await Promise.all([
     prisma.registration.findUnique({ where: { code: keepCode }, include: { user: true } }),
@@ -616,7 +626,7 @@ const PAYMENT_METHODS = STAFF_PAYMENT_METHODS;
 const ALL_PAYMENT_METHODS = [...STAFF_PAYMENT_METHODS, 'STRIPE'];
 class MerchError extends Error {}
 
-adminRouter.get('/events/:id/merch', async (req, res) => {
+adminRouter.get('/events/:id/merch', requirePerm('merch.sell', 'merch.manage', 'reconciliation.view'), async (req, res) => {
   const items = await prisma.merchItem.findMany({ where: { eventId: req.params.id }, orderBy: { createdAt: 'asc' } });
   const sales = await prisma.sale.findMany({
     where: { item: { eventId: req.params.id } },
@@ -659,7 +669,7 @@ adminRouter.get('/events/:id/merch', async (req, res) => {
 /// A donation taken in person at the table, not tied to a merch item or an
 /// event registration — e.g. a walk-up donation box. Rolls into the Cash
 /// reconciliation totals alongside ticket payments.
-adminRouter.post('/events/:id/donations', async (req, res) => {
+adminRouter.post('/events/:id/donations', requirePerm('merch.sell'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const amount = Number(req.body.amount);
@@ -680,7 +690,7 @@ adminRouter.post('/events/:id/donations', async (req, res) => {
 });
 
 /// Undoes a mistaken entry, mirroring /merch/sales/:id.
-adminRouter.delete('/donations/:id', async (req, res) => {
+adminRouter.delete('/donations/:id', requirePerm('merch.sell'), async (req, res) => {
   const donation = await prisma.donation.findUnique({ where: { id: req.params.id } });
   if (!donation) return res.status(404).json({ error: 'Donation not found.' });
   await prisma.donation.delete({ where: { id: donation.id } });
@@ -688,7 +698,7 @@ adminRouter.delete('/donations/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-adminRouter.post('/events/:id/merch', async (req, res) => {
+adminRouter.post('/events/:id/merch', requirePerm('merch.manage'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const { name, price, maxCount, preorder } = req.body;
@@ -702,7 +712,7 @@ adminRouter.post('/events/:id/merch', async (req, res) => {
   res.json({ ...item, remaining: item.maxCount });
 });
 
-adminRouter.patch('/merch/:id', async (req, res) => {
+adminRouter.patch('/merch/:id', requirePerm('merch.manage'), async (req, res) => {
   const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
   if (!item) return res.status(404).json({ error: 'Item not found.' });
   const data = {};
@@ -720,13 +730,13 @@ adminRouter.patch('/merch/:id', async (req, res) => {
   res.json({ ...updated, remaining: Math.max(updated.maxCount - updated.soldCount, 0) });
 });
 
-adminRouter.get('/registrations/:code/receipt', async (req, res) => {
+adminRouter.get('/registrations/:code/receipt', requirePerm('attendees.view', 'merch.sell'), async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code }, include: RECEIPT_INCLUDE });
   if (!reg) return res.status(404).send('Registration not found.');
   res.type('html').send(ticketReceipt(reg, await getSettings()));
 });
 
-adminRouter.get('/merch-orders/:id/receipt', async (req, res) => {
+adminRouter.get('/merch-orders/:id/receipt', requirePerm('attendees.view', 'merch.sell'), async (req, res) => {
   const order = await prisma.merchOrder.findUnique({ where: { id: req.params.id }, include: { event: true, user: true, items: true, payments: true } });
   if (!order) return res.status(404).send('Order not found.');
   res.type('html').send(orderReceipt(order, await getSettings()));
@@ -734,7 +744,7 @@ adminRouter.get('/merch-orders/:id/receipt', async (req, res) => {
 
 /// "Tell buyers it's ready": messages every paid, uncollected pre-order
 /// that hasn't been told yet.
-adminRouter.post('/events/:id/merch-orders/notify-ready', async (req, res) => {
+adminRouter.post('/events/:id/merch-orders/notify-ready', requirePerm('merch.sell'), async (req, res) => {
   const { notifyPreordersReady } = await import('../lib/reminders.js');
   const sent = await notifyPreordersReady(req.params.id);
   await audit(req.user.id, 'merch_order.notify_ready', req.params.id, { sent });
@@ -742,7 +752,7 @@ adminRouter.post('/events/:id/merch-orders/notify-ready', async (req, res) => {
 });
 
 /// Hands over (or un-hands) a paid pre-order at the merch table.
-adminRouter.post('/merch-orders/:id/pickup', async (req, res) => {
+adminRouter.post('/merch-orders/:id/pickup', requirePerm('merch.sell'), async (req, res) => {
   const order = await prisma.merchOrder.findUnique({ where: { id: req.params.id } });
   if (!order) return res.status(404).json({ error: 'Order not found.' });
   if (order.status !== 'PAID') return res.status(400).json({ error: 'Only paid orders can be picked up.' });
@@ -756,7 +766,7 @@ adminRouter.post('/merch-orders/:id/pickup', async (req, res) => {
   res.json(shapeOrder(updated));
 });
 
-adminRouter.delete('/merch/:id', async (req, res) => {
+adminRouter.delete('/merch/:id', requirePerm('merch.manage'), async (req, res) => {
   const item = await prisma.merchItem.findUnique({ where: { id: req.params.id } });
   if (!item) return res.status(404).json({ error: 'Item not found.' });
   if (item.soldCount > 0) return res.status(400).json({ error: 'This item has sales, so it cannot be deleted.' });
@@ -767,7 +777,7 @@ adminRouter.delete('/merch/:id', async (req, res) => {
 
 /// Compare-and-swap stock check so concurrent sales at the table can never
 /// oversell past maxCount, without needing a serializable transaction.
-adminRouter.post('/merch/:id/sale', async (req, res) => {
+adminRouter.post('/merch/:id/sale', requirePerm('merch.sell'), async (req, res) => {
   const quantity = req.body.quantity === undefined ? 1 : Number(req.body.quantity);
   if (!Number.isInteger(quantity) || quantity < 1) return res.status(400).json({ error: 'Quantity must be a positive whole number.' });
   if (!PAYMENT_METHODS.includes(req.body.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method.' });
@@ -800,7 +810,7 @@ adminRouter.post('/merch/:id/sale', async (req, res) => {
 
 /// Undoes a mistaken entry at the table — restocks the item and removes the
 /// sale, mirroring the existing /checkin/:code/undo pattern.
-adminRouter.delete('/merch/sales/:id', async (req, res) => {
+adminRouter.delete('/merch/sales/:id', requirePerm('merch.sell'), async (req, res) => {
   const sale = await prisma.sale.findUnique({ where: { id: req.params.id } });
   if (!sale) return res.status(404).json({ error: 'Sale not found.' });
   await prisma.$transaction([
@@ -831,7 +841,7 @@ const eventPayments = (eventId, include) => prisma.payment.findMany({
 /// payment method, net of refunds. Stripe also gets gross / fees / net, since
 /// that's what actually lands in the bank. Registrations on a paid tier that
 /// still owe money are called out separately, not counted.
-adminRouter.get('/events/:id/reconciliation', async (req, res) => {
+adminRouter.get('/events/:id/reconciliation', requirePerm('reconciliation.view'), async (req, res) => {
   const eventId = req.params.id;
   const [payments, sales, donationEntries, owing] = await Promise.all([
     eventPayments(eventId),
@@ -904,7 +914,7 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
 });
 
 /// Full sales log, not just the last 100 shown on screen.
-adminRouter.get('/events/:id/merch.csv', async (req, res) => {
+adminRouter.get('/events/:id/merch.csv', requirePerm('reconciliation.view'), async (req, res) => {
   const sales = await prisma.sale.findMany({
     where: { item: { eventId: req.params.id } },
     include: { item: true, processedBy: true },
@@ -927,7 +937,7 @@ adminRouter.get('/events/:id/merch.csv', async (req, res) => {
 /// ticket payments, merch sales, and in-person donations — for end-of-event
 /// bookkeeping. The on-screen reconciliation view only shows totals by
 /// method; this is the transaction-level detail behind them.
-adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
+adminRouter.get('/events/:id/reconciliation.csv', requirePerm('reconciliation.view'), async (req, res) => {
   const eventId = req.params.id;
   const [payments, sales, donationEntries] = await Promise.all([
     eventPayments(eventId, { registration: true, merchOrder: { include: { items: true, user: true } }, vendorApplication: { include: { tableType: true } }, processedBy: true }),
@@ -977,7 +987,7 @@ adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
 
 /* ---------------- vouchers ---------------- */
 
-adminRouter.get('/events/:id/vouchers', async (req, res) => {
+adminRouter.get('/events/:id/vouchers', requirePerm('vouchers.manage'), async (req, res) => {
   const vouchers = await prisma.voucherCode.findMany({
     where: { eventId: req.params.id },
     include: { redemptions: { select: { code: true, legalName: true, fursonaName: true } } },
@@ -988,7 +998,7 @@ adminRouter.get('/events/:id/vouchers', async (req, res) => {
 
 /// A handout sheet for staff: codes and their badge tier, ready to give to
 /// organizers/photographers ahead of time instead of reading them off a screen.
-adminRouter.get('/events/:id/vouchers.csv', async (req, res) => {
+adminRouter.get('/events/:id/vouchers.csv', requirePerm('vouchers.manage'), async (req, res) => {
   const vouchers = await prisma.voucherCode.findMany({
     where: { eventId: req.params.id },
     include: { redemptions: { select: { legalName: true, fursonaName: true } } },
@@ -1001,7 +1011,7 @@ adminRouter.get('/events/:id/vouchers.csv', async (req, res) => {
   res.type('text/csv').set('Content-Disposition', 'attachment; filename="vouchers.csv"').send([keys.join(','), ...rows].join('\n'));
 });
 
-adminRouter.post('/events/:id/vouchers', async (req, res) => {
+adminRouter.post('/events/:id/vouchers', requirePerm('vouchers.manage'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const badgeTier = String(req.body.badgeTier || '').trim();
@@ -1022,7 +1032,7 @@ adminRouter.post('/events/:id/vouchers', async (req, res) => {
   }
 });
 
-adminRouter.patch('/vouchers/:id', async (req, res) => {
+adminRouter.patch('/vouchers/:id', requirePerm('vouchers.manage'), async (req, res) => {
   const voucher = await prisma.voucherCode.findUnique({ where: { id: req.params.id } });
   if (!voucher) return res.status(404).json({ error: 'Voucher not found.' });
   const data = {};
@@ -1048,7 +1058,7 @@ adminRouter.patch('/vouchers/:id', async (req, res) => {
   }
 });
 
-adminRouter.delete('/vouchers/:id', async (req, res) => {
+adminRouter.delete('/vouchers/:id', requirePerm('vouchers.manage'), async (req, res) => {
   const voucher = await prisma.voucherCode.findUnique({ where: { id: req.params.id } });
   if (!voucher) return res.status(404).json({ error: 'Voucher not found.' });
   await prisma.voucherCode.delete({ where: { id: voucher.id } });
@@ -1108,7 +1118,7 @@ const eventShifts = (eventId) => prisma.volunteerShift.findMany({
   orderBy: [{ startsAt: 'asc' }, { role: 'asc' }],
 });
 
-adminRouter.get('/events/:id/volunteers', async (req, res) => {
+adminRouter.get('/events/:id/volunteers', requirePerm('volunteers.manage', 'volunteers.shifts'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const shifts = await eventShifts(event.id);
@@ -1124,7 +1134,7 @@ adminRouter.get('/events/:id/volunteers', async (req, res) => {
 
 /// The roster as a sheet, one row per sign-up — for printing a clipboard
 /// copy or sending to a volunteer lead.
-adminRouter.get('/events/:id/volunteers.csv', async (req, res) => {
+adminRouter.get('/events/:id/volunteers.csv', requirePerm('volunteers.manage', 'volunteers.shifts'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const shifts = await eventShifts(event.id);
@@ -1140,7 +1150,7 @@ adminRouter.get('/events/:id/volunteers.csv', async (req, res) => {
 /// Setting up shifts is event configuration, so owner-only like the rest of
 /// it. Running the roster on the day (adding, removing, attendance) is open
 /// to admins.
-adminRouter.post('/events/:id/shifts', requireOwner, async (req, res) => {
+adminRouter.post('/events/:id/shifts', requirePerm('volunteers.shifts'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   try {
@@ -1154,7 +1164,7 @@ adminRouter.post('/events/:id/shifts', requireOwner, async (req, res) => {
   }
 });
 
-adminRouter.patch('/shifts/:id', requireOwner, async (req, res) => {
+adminRouter.patch('/shifts/:id', requirePerm('volunteers.shifts'), async (req, res) => {
   const shift = await prisma.volunteerShift.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!shift) return res.status(404).json({ error: 'Shift not found.' });
   try {
@@ -1174,7 +1184,7 @@ adminRouter.patch('/shifts/:id', requireOwner, async (req, res) => {
 
 /// Only empty shifts can be deleted, so nobody silently loses a shift they
 /// signed up for. Remove the volunteers first (each one gets told).
-adminRouter.delete('/shifts/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/shifts/:id', requirePerm('volunteers.shifts'), async (req, res) => {
   const shift = await prisma.volunteerShift.findUnique({ where: { id: req.params.id } });
   if (!shift) return res.status(404).json({ error: 'Shift not found.' });
   const { count } = await prisma.volunteerShift.deleteMany({ where: { id: shift.id, filledCount: 0 } });
@@ -1185,7 +1195,7 @@ adminRouter.delete('/shifts/:id', requireOwner, async (req, res) => {
 
 /// Puts someone on a shift by their ticket code or Telegram @handle — for
 /// the person who asked at the desk instead of on the site.
-adminRouter.post('/shifts/:id/signups', async (req, res) => {
+adminRouter.post('/shifts/:id/signups', requirePerm('volunteers.manage'), async (req, res) => {
   const shift = await prisma.volunteerShift.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!shift) return res.status(404).json({ error: 'Shift not found.' });
   const found = await findPerson(req.body?.who);
@@ -1204,7 +1214,7 @@ adminRouter.post('/shifts/:id/signups', async (req, res) => {
   }
 });
 
-adminRouter.patch('/volunteer-signups/:id', async (req, res) => {
+adminRouter.patch('/volunteer-signups/:id', requirePerm('volunteers.manage'), async (req, res) => {
   const attendance = req.body?.attendance;
   if (!ATTENDANCE.includes(attendance)) return res.status(400).json({ error: 'Unknown attendance value.' });
   const signup = await prisma.volunteerSignup.findUnique({ where: { id: req.params.id } });
@@ -1220,7 +1230,7 @@ adminRouter.patch('/volunteer-signups/:id', async (req, res) => {
   res.json(shapeSignup(updated));
 });
 
-adminRouter.delete('/volunteer-signups/:id', async (req, res) => {
+adminRouter.delete('/volunteer-signups/:id', requirePerm('volunteers.manage'), async (req, res) => {
   const signup = await prisma.volunteerSignup.findUnique({ where: { id: req.params.id }, include: { user: true, shift: { include: { event: true } } } });
   if (!signup) return res.status(404).json({ error: 'Sign-up not found.' });
   await dropSignup(signup);
@@ -1254,7 +1264,7 @@ function shapeReservation(r) {
 
 const ADMIN_RESERVATION_INCLUDE = { user: true, block: { include: { hotel: { include: { event: true } } } } };
 
-adminRouter.get('/events/:id/hotels', async (req, res) => {
+adminRouter.get('/events/:id/hotels', requirePerm('hotels.requests', 'hotels.setup'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const hotels = await prisma.hotel.findMany({
@@ -1283,7 +1293,7 @@ adminRouter.get('/events/:id/hotels', async (req, res) => {
 });
 
 /// What the hotel needs to load the block: one row per live room.
-adminRouter.get('/room-blocks/:id/rooming-list.csv', async (req, res) => {
+adminRouter.get('/room-blocks/:id/rooming-list.csv', requirePerm('hotels.requests', 'hotels.setup'), async (req, res) => {
   const block = await prisma.roomBlock.findUnique({
     where: { id: req.params.id },
     include: { hotel: true, reservations: { where: { status: { in: LIVE } }, include: { user: true }, orderBy: [{ checkIn: 'asc' }, { createdAt: 'asc' }] } },
@@ -1301,7 +1311,7 @@ adminRouter.get('/room-blocks/:id/rooming-list.csv', async (req, res) => {
 /// Hotels and blocks are contract terms, so setting them up is owner-only.
 /// Working the requests (confirming, changing dates, cancelling, adding
 /// someone) is open to admins.
-adminRouter.post('/events/:id/hotels', requireOwner, async (req, res) => {
+adminRouter.post('/events/:id/hotels', requirePerm('hotels.setup'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   try {
@@ -1311,7 +1321,7 @@ adminRouter.post('/events/:id/hotels', requireOwner, async (req, res) => {
   } catch (e) { hotelError(res, e); }
 });
 
-adminRouter.patch('/hotels/:id', requireOwner, async (req, res) => {
+adminRouter.patch('/hotels/:id', requirePerm('hotels.setup'), async (req, res) => {
   const hotel = await prisma.hotel.findUnique({ where: { id: req.params.id } });
   if (!hotel) return res.status(404).json({ error: 'Hotel not found.' });
   try {
@@ -1322,7 +1332,7 @@ adminRouter.patch('/hotels/:id', requireOwner, async (req, res) => {
   } catch (e) { hotelError(res, e); }
 });
 
-adminRouter.delete('/hotels/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/hotels/:id', requirePerm('hotels.setup'), async (req, res) => {
   const hotel = await prisma.hotel.findUnique({ where: { id: req.params.id } });
   if (!hotel) return res.status(404).json({ error: 'Hotel not found.' });
   const live = await prisma.roomReservation.count({ where: { status: { in: LIVE }, block: { hotelId: hotel.id } } });
@@ -1332,7 +1342,7 @@ adminRouter.delete('/hotels/:id', requireOwner, async (req, res) => {
   res.json({ ok: true });
 });
 
-adminRouter.post('/hotels/:id/blocks', requireOwner, async (req, res) => {
+adminRouter.post('/hotels/:id/blocks', requirePerm('hotels.setup'), async (req, res) => {
   const hotel = await prisma.hotel.findUnique({ where: { id: req.params.id }, include: { event: true } });
   if (!hotel) return res.status(404).json({ error: 'Hotel not found.' });
   try {
@@ -1344,7 +1354,7 @@ adminRouter.post('/hotels/:id/blocks', requireOwner, async (req, res) => {
   } catch (e) { hotelError(res, e); }
 });
 
-adminRouter.patch('/room-blocks/:id', requireOwner, async (req, res) => {
+adminRouter.patch('/room-blocks/:id', requirePerm('hotels.setup'), async (req, res) => {
   const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id }, include: { nights: true, hotel: { include: { event: true } } } });
   if (!block) return res.status(404).json({ error: 'Room block not found.' });
   try {
@@ -1356,7 +1366,7 @@ adminRouter.patch('/room-blocks/:id', requireOwner, async (req, res) => {
 });
 
 /// Replaces the per-night inventory: `{ nights: [{ night, contracted, reportedPickup }] }`.
-adminRouter.put('/room-blocks/:id/nights', requireOwner, async (req, res) => {
+adminRouter.put('/room-blocks/:id/nights', requirePerm('hotels.setup'), async (req, res) => {
   const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id } });
   if (!block) return res.status(404).json({ error: 'Room block not found.' });
   try {
@@ -1366,7 +1376,7 @@ adminRouter.put('/room-blocks/:id/nights', requireOwner, async (req, res) => {
   } catch (e) { hotelError(res, e); }
 });
 
-adminRouter.delete('/room-blocks/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/room-blocks/:id', requirePerm('hotels.setup'), async (req, res) => {
   const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id } });
   if (!block) return res.status(404).json({ error: 'Room block not found.' });
   const live = await prisma.roomReservation.count({ where: { blockId: block.id, status: { in: LIVE } } });
@@ -1379,7 +1389,7 @@ adminRouter.delete('/room-blocks/:id', requireOwner, async (req, res) => {
 /// Books a room for someone by ticket code or @handle. Skips the one-room
 /// limit and the cutoff (staff only do that with the hotel's agreement),
 /// never the block's inventory.
-adminRouter.post('/room-blocks/:id/reservations', async (req, res) => {
+adminRouter.post('/room-blocks/:id/reservations', requirePerm('hotels.requests'), async (req, res) => {
   const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id }, include: { hotel: { include: { event: true } } } });
   if (!block) return res.status(404).json({ error: 'Room block not found.' });
   const found = await findPerson(req.body?.who);
@@ -1400,7 +1410,7 @@ adminRouter.post('/room-blocks/:id/reservations', async (req, res) => {
 
 /// Working a request: hotel confirmation number (which confirms it), dates,
 /// guest details, staff notes.
-adminRouter.patch('/room-reservations/:id', async (req, res) => {
+adminRouter.patch('/room-reservations/:id', requirePerm('hotels.requests'), async (req, res) => {
   const r = await prisma.roomReservation.findUnique({ where: { id: req.params.id }, include: ADMIN_RESERVATION_INCLUDE });
   if (!r) return res.status(404).json({ error: 'Room request not found.' });
   if (!LIVE.includes(r.status)) return res.status(400).json({ error: 'This room request was cancelled.' });
@@ -1443,7 +1453,7 @@ adminRouter.patch('/room-reservations/:id', async (req, res) => {
   res.json(shapeReservation(updated));
 });
 
-adminRouter.post('/room-reservations/:id/cancel', async (req, res) => {
+adminRouter.post('/room-reservations/:id/cancel', requirePerm('hotels.requests'), async (req, res) => {
   const r = await prisma.roomReservation.findUnique({ where: { id: req.params.id }, include: ADMIN_RESERVATION_INCLUDE });
   if (!r) return res.status(404).json({ error: 'Room request not found.' });
   if (!LIVE.includes(r.status)) return res.status(400).json({ error: 'This room request is already cancelled.' });
@@ -1475,7 +1485,7 @@ const scanReply = (reg, event, extra = {}) => ({
 /// lets staff admit someone past the day-pass or already-inside rule.
 /// A rejected scan comes back as 409 with `code` and the registration, so
 /// the scanner can show who it was and offer an override.
-adminRouter.post('/checkin', async (req, res) => {
+adminRouter.post('/checkin', requirePerm('checkin'), async (req, res) => {
   const reg = await prisma.registration.findFirst({ where: scanLookup(req.body.value), include: { event: true, user: true, ...REG_INCLUDE } });
   if (!reg) return res.status(404).json({ error: 'No ticket matches that code.' });
   if (req.body.eventId && reg.eventId !== req.body.eventId)
@@ -1494,7 +1504,7 @@ adminRouter.post('/checkin', async (req, res) => {
 });
 
 /// Takes back the ticket's most recent scan (entry or exit).
-adminRouter.post('/checkin/:code/undo', async (req, res) => {
+adminRouter.post('/checkin/:code/undo', requirePerm('checkin'), async (req, res) => {
   const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
   if (!reg) return res.status(404).json({ error: 'Ticket not found.' });
   const undone = await undoLastScan(reg.id);
@@ -1506,7 +1516,7 @@ adminRouter.post('/checkin/:code/undo', async (req, res) => {
 /// Everything a door scanner needs to keep working with no connection:
 /// each ticket's status, day pass, and this event's scans. QR secrets are
 /// only sent hashed, so a lost door laptop doesn't leak working tickets.
-adminRouter.get('/events/:id/checkin-manifest', async (req, res) => {
+adminRouter.get('/events/:id/checkin-manifest', requirePerm('checkin'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const [regs, scans] = await Promise.all([
@@ -1531,7 +1541,7 @@ adminRouter.get('/events/:id/checkin-manifest', async (req, res) => {
 /// at most once (by clientId), even if this request is retried. Scans the
 /// rules would now refuse are still recorded — the person is already
 /// through the door — and come back flagged for staff to follow up.
-adminRouter.post('/events/:id/checkin/sync', async (req, res) => {
+adminRouter.post('/events/:id/checkin/sync', requirePerm('checkin'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const scans = Array.isArray(req.body?.scans) ? req.body.scans.slice(0, 2000) : [];
@@ -1565,7 +1575,7 @@ adminRouter.post('/events/:id/checkin/sync', async (req, res) => {
 /// For the lobby display: each ticket's first entry today after `since`,
 /// numbered in the order people arrived today. A same-day re-entry isn't a
 /// new arrival; tomorrow, everyone is welcomed again.
-adminRouter.get('/events/:id/arrivals', async (req, res) => {
+adminRouter.get('/events/:id/arrivals', requirePerm('checkin'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const since = req.query.since ? new Date(String(req.query.since)) : new Date(0);
@@ -1592,19 +1602,19 @@ adminRouter.get('/events/:id/arrivals', async (req, res) => {
 });
 
 /// Who's inside now and today's arrivals, plus arrivals for every day.
-adminRouter.get('/events/:id/attendance', async (req, res) => {
+adminRouter.get('/events/:id/attendance', requirePerm('checkin'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const [today, days] = await Promise.all([todayCounts(event), dailyAttendance(event)]);
   res.json({ today, days, eventDays: eventDays(event), timezone: event.timezone });
 });
 
-adminRouter.get('/bans', async (_req, res) => {
+adminRouter.get('/bans', requirePerm('bans.view', 'bans.manage'), async (_req, res) => {
   const bans = await prisma.ban.findMany({ orderBy: { createdAt: 'desc' }, include: { createdBy: true } });
   res.json(bans);
 });
 
-adminRouter.get('/bans/attempts', async (_req, res) => {
+adminRouter.get('/bans/attempts', requirePerm('bans.view', 'bans.manage'), async (_req, res) => {
   const rows = await prisma.auditLog.findMany({
     where: { action: 'ban.blocked_registration' },
     orderBy: { createdAt: 'desc' },
@@ -1613,7 +1623,7 @@ adminRouter.get('/bans/attempts', async (_req, res) => {
   res.json(rows);
 });
 
-adminRouter.post('/bans', requireOwner, async (req, res) => {
+adminRouter.post('/bans', requirePerm('bans.manage'), async (req, res) => {
   const { legalName, email, telegramId, telegramUsername, reason } = req.body || {};
   // Normalized the same way findMatchingBan() reads incoming registrations,
   // so an inconsistently-spaced/accented ban record can't silently fail to
@@ -1632,7 +1642,7 @@ adminRouter.post('/bans', requireOwner, async (req, res) => {
   res.json(ban);
 });
 
-adminRouter.delete('/bans/:id', requireOwner, async (req, res) => {
+adminRouter.delete('/bans/:id', requirePerm('bans.manage'), async (req, res) => {
   const ban = await prisma.ban.delete({ where: { id: req.params.id } });
   await audit(req.user.id, 'ban.delete', req.params.id, { legalName: ban.legalName, email: ban.email });
   res.json({ ok: true });
@@ -1645,26 +1655,136 @@ adminRouter.delete('/bans/:id', requireOwner, async (req, res) => {
 // attendee search. displayName/telegramUsername aren't encrypted and could
 // still be matched in the query, but it's simplest to filter all three the
 // same way once the (already-decrypted) rows are in hand.
+/// A staff row for the Staff page: who they are, their groups, what they
+/// were granted directly, and what that all adds up to.
+const staffRow = (u) => ({
+  ...publicUser(u),
+  groups: u.staffGroups.map((m) => ({ id: m.group.id, name: m.group.name })),
+  directPermissions: u.permissions,
+});
+
 adminRouter.get('/users', requireOwner, async (req, res) => {
   const q = req.query.q ? String(req.query.q).toLowerCase() : '';
   const users = await prisma.user.findMany({
     where: q ? {} : { role: { in: ['ADMIN', 'OWNER'] } },
     orderBy: { createdAt: 'asc' },
     take: q ? undefined : 100,
+    include: WITH_GROUPS,
   });
   const filtered = q
     ? users.filter((u) => [u.displayName, u.telegramUsername, u.email].some((v) => v && v.toLowerCase().includes(q))).slice(0, 100)
     : users;
-  res.json(filtered.map(publicUser));
+  res.json(filtered.map(staffRow));
 });
 
+/// Owners only, and never your own. Removing staff access also drops their
+/// groups and direct permissions, so promoting them again starts clean.
+/// Promoting to admin takes the groups to put them in (`groupIds`).
 adminRouter.post('/users/:id/role', requireOwner, async (req, res) => {
   const role = req.body.role;
   if (!['USER', 'ADMIN', 'OWNER'].includes(role)) return res.status(400).json({ error: 'Unknown role.' });
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role.' });
-  const user = await prisma.user.update({ where: { id: req.params.id }, data: { role } });
-  await audit(req.user.id, 'user.role', user.id, { role });
-  res.json(publicUser(user));
+  const groupIds = Array.isArray(req.body.groupIds) ? req.body.groupIds.map(String) : [];
+  const user = await prisma.$transaction(async (tx) => {
+    const updated = await tx.user.update({ where: { id: req.params.id }, data: { role, ...(role === 'USER' ? { permissions: [] } : {}) } });
+    if (role === 'USER') await tx.staffGroupMember.deleteMany({ where: { userId: updated.id } });
+    if (role === 'ADMIN' && groupIds.length) {
+      const groups = await tx.staffGroup.findMany({ where: { id: { in: groupIds } }, select: { id: true } });
+      await tx.staffGroupMember.createMany({ data: groups.map((g) => ({ userId: updated.id, groupId: g.id })), skipDuplicates: true });
+    }
+    return tx.user.findUnique({ where: { id: updated.id }, include: WITH_GROUPS });
+  });
+  await audit(req.user.id, 'user.role', user.id, { role, groups: user.staffGroups.map((m) => m.group.name) });
+  res.json(staffRow(user));
+});
+
+/* ---------------- staff groups and permissions (owner only) ---------------- */
+
+adminRouter.get('/access', requireOwner, async (_req, res) => {
+  const groups = await prisma.staffGroup.findMany({
+    orderBy: { name: 'asc' },
+    include: { members: { include: { user: { select: { id: true, displayName: true, role: true } } } } },
+  });
+  res.json({
+    catalog: permissionCatalog(),
+    groups: groups.map((g) => ({
+      id: g.id, name: g.name, description: g.description, permissions: cleanPermissions(g.permissions),
+      // Someone demoted to attendee keeps no membership, but guard anyway.
+      members: g.members.filter((m) => m.user.role === 'ADMIN').map((m) => ({ id: m.user.id, displayName: m.user.displayName })),
+    })),
+  });
+});
+
+function groupPayload(body, existing) {
+  const data = {};
+  if (body.name !== undefined || !existing) {
+    const name = String(body.name ?? '').trim().slice(0, 60);
+    if (!name) throw new RegistrationError('Give the group a name.');
+    data.name = name;
+  }
+  if (body.description !== undefined) data.description = String(body.description ?? '').trim().slice(0, 300);
+  if (body.permissions !== undefined) data.permissions = cleanPermissions(body.permissions);
+  return data;
+}
+const groupError = (res, e) => {
+  if (e instanceof RegistrationError) return res.status(400).json({ error: e.message });
+  if (e.code === 'P2002') return res.status(400).json({ error: 'There is already a group with that name.' });
+  throw e;
+};
+
+adminRouter.post('/staff-groups', requireOwner, async (req, res) => {
+  try {
+    const group = await prisma.staffGroup.create({ data: groupPayload(req.body || {}) });
+    await audit(req.user.id, 'staff_group.create', group.id, { name: group.name, permissions: group.permissions });
+    res.json(group);
+  } catch (e) { groupError(res, e); }
+});
+
+adminRouter.patch('/staff-groups/:id', requireOwner, async (req, res) => {
+  const existing = await prisma.staffGroup.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: 'Group not found.' });
+  try {
+    const data = groupPayload(req.body || {}, existing);
+    const group = await prisma.staffGroup.update({ where: { id: existing.id }, data });
+    const added = (data.permissions || []).filter((p) => !existing.permissions.includes(p));
+    const removed = data.permissions ? existing.permissions.filter((p) => !data.permissions.includes(p)) : [];
+    await audit(req.user.id, 'staff_group.update', group.id, {
+      name: group.name, ...(data.name && data.name !== existing.name ? { renamedFrom: existing.name } : {}), added, removed,
+    });
+    res.json(group);
+  } catch (e) { groupError(res, e); }
+});
+
+adminRouter.delete('/staff-groups/:id', requireOwner, async (req, res) => {
+  const group = await prisma.staffGroup.findUnique({ where: { id: req.params.id } });
+  if (!group) return res.status(404).json({ error: 'Group not found.' });
+  await prisma.staffGroup.delete({ where: { id: group.id } });
+  await audit(req.user.id, 'staff_group.delete', group.id, { name: group.name });
+  res.json({ ok: true });
+});
+
+/// Sets one admin's groups and direct permissions in one go (the Staff
+/// page's access editor). Takes effect on their next request.
+adminRouter.put('/users/:id/access', requireOwner, async (req, res) => {
+  const target = await prisma.user.findUnique({ where: { id: req.params.id }, include: WITH_GROUPS });
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.role !== 'ADMIN') return res.status(400).json({ error: target.role === 'OWNER' ? 'Owners always have every permission.' : 'Make them staff first.' });
+  const permissions = cleanPermissions(req.body?.permissions);
+  const wanted = Array.isArray(req.body?.groupIds) ? req.body.groupIds.map(String) : [];
+  const groups = await prisma.staffGroup.findMany({ where: { id: { in: wanted } } });
+  const user = await prisma.$transaction(async (tx) => {
+    await tx.staffGroupMember.deleteMany({ where: { userId: target.id, groupId: { notIn: groups.map((g) => g.id) } } });
+    await tx.staffGroupMember.createMany({ data: groups.map((g) => ({ userId: target.id, groupId: g.id })), skipDuplicates: true });
+    await tx.user.update({ where: { id: target.id }, data: { permissions } });
+    return tx.user.findUnique({ where: { id: target.id }, include: WITH_GROUPS });
+  });
+  const before = new Set(target.staffGroups.map((m) => m.group.name));
+  const after = new Set(groups.map((g) => g.name));
+  await audit(req.user.id, 'user.access', user.id, {
+    joined: [...after].filter((n) => !before.has(n)), left: [...before].filter((n) => !after.has(n)),
+    granted: permissions.filter((p) => !target.permissions.includes(p)), revoked: target.permissions.filter((p) => !permissions.includes(p)),
+  });
+  res.json(staffRow(user));
 });
 
 adminRouter.post('/users/:id/password', requireOwner, async (req, res) => {
@@ -1698,11 +1818,11 @@ adminRouter.post('/users/:id/2fa/reset', requireOwner, async (req, res) => {
 
 /* ---------------- email ---------------- */
 
-adminRouter.get('/campaigns', async (_req, res) => {
+adminRouter.get('/campaigns', requirePerm('email.draft', 'email.send'), async (_req, res) => {
   res.json(await prisma.emailCampaign.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }));
 });
 
-adminRouter.post('/campaigns', async (req, res) => {
+adminRouter.post('/campaigns', requirePerm('email.draft', 'email.send'), async (req, res) => {
   const c = await prisma.emailCampaign.create({
     data: {
       eventId: req.body.eventId || null,
@@ -1714,7 +1834,7 @@ adminRouter.post('/campaigns', async (req, res) => {
   res.json(c);
 });
 
-adminRouter.post('/campaigns/:id/send', requireOwner, async (req, res) => {
+adminRouter.post('/campaigns/:id/send', requirePerm('email.send'), async (req, res) => {
   if (!env.smtp.enabled) return res.status(503).json({ error: 'SMTP is not configured on this instance.' });
   try {
     const result = await sendCampaign(req.params.id, { dryRun: Boolean(req.body.dryRun) });
@@ -1761,9 +1881,31 @@ adminRouter.put('/settings', requireOwner, async (req, res) => {
   res.json(s);
 });
 
-adminRouter.get('/audit', requireOwner, async (_req, res) => {
-  const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
-  res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
+/// Newest first, a page at a time: `before` is the last row's id from the
+/// previous page. `area` is one of AUDIT_AREAS, `actor` a user id (or
+/// "system" for things nobody did by hand).
+adminRouter.get('/audit', requirePerm('audit.view'), async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const where = {};
+  const area = AUDIT_AREAS.find(([key]) => key === req.query.area);
+  if (area) where.OR = area[2].map((prefix) => ({ action: { startsWith: prefix } }));
+  if (req.query.actor === 'system') where.actorId = null;
+  else if (req.query.actor) where.actorId = String(req.query.actor);
+  if (req.query.before) {
+    const cursor = await prisma.auditLog.findUnique({ where: { id: String(req.query.before) }, select: { createdAt: true, id: true } });
+    if (cursor) where.AND = [{ OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }];
+  }
+  const rows = await prisma.auditLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, include: { actor: true } });
+  const page = rows.slice(0, limit);
+  const actors = req.query.before ? undefined : await prisma.user.findMany({
+    where: { auditEntries: { some: {} } }, select: { id: true, displayName: true }, orderBy: { displayName: 'asc' },
+  });
+  res.json({
+    rows: await describeAuditRows(page),
+    next: rows.length > limit ? page[page.length - 1].id : null,
+    areas: AUDIT_AREAS.map(([key, label]) => ({ key, label })),
+    actors,
+  });
 });
 
 /* ---------------- data retention (owner only) ---------------- */
@@ -1803,7 +1945,7 @@ adminRouter.post('/events/:id/purge', requireOwner, async (req, res) => {
 // Buckets registration counts per calendar day in UTC — daily granularity is
 // plenty for a signup trend line, and it sidesteps per-event timezone
 // handling that would otherwise be needed to bucket "by day" correctly.
-adminRouter.get('/analytics', requireOwner, async (req, res) => {
+adminRouter.get('/analytics', requirePerm('analytics.view'), async (req, res) => {
   const eventId = req.query.eventId || undefined;
   const daysParam = Number(req.query.days);
   const days = Number.isFinite(daysParam) ? daysParam : 30;
@@ -1849,7 +1991,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'vendorTableType', 'vendorApplication', 'payment', 'sale', 'donation', 'emailCampaign', 'eventRoom', 'scheduleSession', 'sessionStar', 'panelSubmission', 'incident', 'incidentPerson', 'incidentNote', 'ban', 'auditLog'];
+const BACKUP_MODELS = ['user', 'staffGroup', 'staffGroupMember', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'vendorTableType', 'vendorApplication', 'payment', 'sale', 'donation', 'emailCampaign', 'eventRoom', 'scheduleSession', 'sessionStar', 'panelSubmission', 'incident', 'incidentPerson', 'incidentNote', 'ban', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 

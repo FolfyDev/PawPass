@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Pill, fmtDate, fmtMoney } from '../../components/Bits.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const compact = (n) => new Intl.NumberFormat(undefined, { notation: n >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(n);
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -49,7 +50,7 @@ export default function Overview() {
   useEffect(() => { setD(null); api.get(`/api/admin/events/${id}/overview`).then(setD).catch((e) => setError(e.message)); }, [id]);
 
   if (error) return <p className="note bad" style={{ marginTop: 40 }}>{error}</p>;
-  if (!d) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!d) return <PageSkeleton />;
   const { event: e, registrations: r } = d;
   const base = `/admin/events/${id}`;
   const capTone = e.capacity && r.confirmed >= e.capacity ? 'stop' : e.capacity && r.confirmed >= e.capacity * 0.9 ? 'signal' : 'go';

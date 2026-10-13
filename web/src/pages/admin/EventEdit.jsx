@@ -5,11 +5,12 @@ import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
 import { forgetEventTitle } from '../../lib/eventTitle.js';
 import { localInZone } from '../../lib/tz.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 export default function EventEdit() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canEdit = can('events.edit');
   const nav = useNavigate();
   const [e, setE] = useState(null);
   const [templates, setTemplates] = useState([]);
@@ -29,7 +30,7 @@ export default function EventEdit() {
     api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers)).catch(() => setTiers([]));
   }, [id]);
 
-  if (!e) return <p className="muted">Loading…</p>;
+  if (!e) return <PageSkeleton />;
   const set = (k, v) => setE({ ...e, [k]: v });
   const fields = e.customFields || [];
 
@@ -69,7 +70,7 @@ export default function EventEdit() {
           <a className="btn" href={`/e/${e.slug}`} target="_blank" rel="noreferrer">
             {e.published ? 'View public page' : 'Preview (unpublished)'}
           </a>
-          {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
+          {canEdit && <button className="btn primary" onClick={save}>Save changes</button>}
         </div>
       </div>
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
@@ -79,7 +80,7 @@ export default function EventEdit() {
         </p>
       )}
 
-      <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
+      <fieldset disabled={!canEdit} style={{ border: 0, margin: 0, padding: 0 }}>
       <div className="stack">
         <section className="card stack">
           <h2 style={{ margin: 0 }}>Basics</h2>
@@ -128,7 +129,7 @@ export default function EventEdit() {
             </label>
             <label className="choice">
               <input type="radio" name="cancelPolicy" checked={e.cancelPolicy !== 'AUTO_REFUND'} onChange={() => set('cancelPolicy', 'REQUEST')} />
-              <span><strong>Request a cancellation</strong> (an owner approves it)</span>
+              <span><strong>Request a cancellation</strong> (staff with the refunds permission approve it)</span>
             </label>
           </div>
           <Field label="Accent colour"><input type="color" value={e.accentColor} onChange={(ev) => set('accentColor', ev.target.value)} style={{ width: 70, padding: 4 }} /></Field>

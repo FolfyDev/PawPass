@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 const minus = (n) => (n ? `−${money(n)}` : money(0));
@@ -64,7 +65,7 @@ export default function Reconciliation() {
     api.get(`/api/admin/events/${id}/reconciliation`).then(setData);
   }, [id]);
 
-  if (!event || !data) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !data) return <PageSkeleton />;
 
   return (
     <>

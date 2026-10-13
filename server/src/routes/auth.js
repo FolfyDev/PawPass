@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken';
 import QRCode from 'qrcode';
 import { newSecret, verifyCode, otpauthUrl, newRecoveryCodes, hashRecoveryCode } from '../lib/totp.js';
 import { getSettings } from '../lib/settings.js';
+import { effectivePermissions } from '../lib/permissions.js';
 
 export const authRouter = Router();
 
@@ -321,6 +322,8 @@ export const publicUser = (u) => ({
   legalName: u.legalName,
   fursonaName: u.fursonaName,
   hasPassword: Boolean(u.passwordHash),
+  // Only meaningful with the user's groups loaded (WITH_GROUPS), as /me does.
+  permissions: u.staffGroups || u.role !== 'ADMIN' ? [...effectivePermissions(u)] : undefined,
   hasTwoFactor: Boolean(u.totpEnabledAt),
   recoveryCodesLeft: u.totpEnabledAt ? u.totpRecoveryHashes.length : null,
 });

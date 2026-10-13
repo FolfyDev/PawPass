@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { requireAdmin, requireOwner, requireUser, audit } from '../lib/auth.js';
+import { requireAdmin, requirePerm, requireUser, audit } from '../lib/auth.js';
 import { formatInTimeZone } from '../lib/tz.js';
 import { stripeEnabled } from '../lib/stripe.js';
 import {
@@ -128,7 +128,7 @@ const shapeForStaff = (a) => ({
   payments: a.payments.map(shapePayment),
 });
 
-vendorAdminRouter.get('/events/:id/vendors', async (req, res) => {
+vendorAdminRouter.get('/events/:id/vendors', requirePerm('vendors.review', 'vendors.setup'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const [types, apps] = await Promise.all([
@@ -142,7 +142,7 @@ vendorAdminRouter.get('/events/:id/vendors', async (req, res) => {
   });
 });
 
-vendorAdminRouter.post('/events/:id/vendor-tables', requireOwner, async (req, res) => {
+vendorAdminRouter.post('/events/:id/vendor-tables', requirePerm('vendors.setup'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   try {
@@ -152,7 +152,7 @@ vendorAdminRouter.post('/events/:id/vendor-tables', requireOwner, async (req, re
   } catch (e) { fail(res, e); }
 });
 
-vendorAdminRouter.patch('/vendor-tables/:id', requireOwner, async (req, res) => {
+vendorAdminRouter.patch('/vendor-tables/:id', requirePerm('vendors.setup'), async (req, res) => {
   const type = await prisma.vendorTableType.findUnique({ where: { id: req.params.id } });
   if (!type) return res.status(404).json({ error: 'Table type not found.' });
   try {
@@ -170,7 +170,7 @@ vendorAdminRouter.patch('/vendor-tables/:id', requireOwner, async (req, res) => 
   } catch (e) { fail(res, e); }
 });
 
-vendorAdminRouter.delete('/vendor-tables/:id', requireOwner, async (req, res) => {
+vendorAdminRouter.delete('/vendor-tables/:id', requirePerm('vendors.setup'), async (req, res) => {
   const type = await prisma.vendorTableType.findUnique({ where: { id: req.params.id } });
   if (!type) return res.status(404).json({ error: 'Table type not found.' });
   const used = await prisma.vendorApplication.count({ where: { tableTypeId: type.id, status: { in: LIVE } } });
@@ -182,7 +182,7 @@ vendorAdminRouter.delete('/vendor-tables/:id', requireOwner, async (req, res) =>
 
 /// Accept (onto a table type; free tables are confirmed at once), waitlist,
 /// or decline. `message` is added to what the applicant receives.
-vendorAdminRouter.post('/vendor-applications/:id/decision', async (req, res) => {
+vendorAdminRouter.post('/vendor-applications/:id/decision', requirePerm('vendors.review'), async (req, res) => {
   const { decision, tableTypeId, message, reviewNote } = req.body || {};
   if (!['ACCEPTED', 'WAITLISTED', 'DECLINED'].includes(decision)) return res.status(400).json({ error: 'Accept, waitlist, or decline.' });
   const extra = String(message || '').trim().slice(0, 2000);
@@ -227,7 +227,7 @@ vendorAdminRouter.post('/vendor-applications/:id/decision', async (req, res) => 
   } catch (e) { fail(res, e); }
 });
 
-vendorAdminRouter.patch('/vendor-applications/:id', async (req, res) => {
+vendorAdminRouter.patch('/vendor-applications/:id', requirePerm('vendors.review'), async (req, res) => {
   const app = await prisma.vendorApplication.findUnique({ where: { id: req.params.id } });
   if (!app) return res.status(404).json({ error: 'Application not found.' });
   const data = {};
@@ -240,7 +240,7 @@ vendorAdminRouter.patch('/vendor-applications/:id', async (req, res) => {
 
 /// Takes a table back. Money already paid isn't refunded automatically —
 /// use the refund button on the payment, which can do part or all of it.
-vendorAdminRouter.post('/vendor-applications/:id/cancel', async (req, res) => {
+vendorAdminRouter.post('/vendor-applications/:id/cancel', requirePerm('vendors.review'), async (req, res) => {
   const app = await prisma.vendorApplication.findUnique({ where: { id: req.params.id }, include: { event: true, user: true } });
   if (!app) return res.status(404).json({ error: 'Application not found.' });
   const { count } = await prisma.vendorApplication.updateMany({ where: { id: app.id, status: { in: HOLDS_TABLE } }, data: { status: 'CANCELLED' } });
@@ -255,7 +255,7 @@ vendorAdminRouter.post('/vendor-applications/:id/cancel', async (req, res) => {
 
 /// Money taken another way (cash at the desk, an invoice). Confirms the
 /// table once the fee is covered.
-vendorAdminRouter.post('/vendor-applications/:id/payments', async (req, res) => {
+vendorAdminRouter.post('/vendor-applications/:id/payments', requirePerm('vendors.review'), async (req, res) => {
   const app = await prisma.vendorApplication.findUnique({ where: { id: req.params.id }, include: { payments: true } });
   if (!app) return res.status(404).json({ error: 'Application not found.' });
   if (!HOLDS_TABLE.includes(app.status)) return res.status(400).json({ error: 'Only an accepted application takes payments.' });
@@ -276,7 +276,7 @@ vendorAdminRouter.post('/vendor-applications/:id/payments', async (req, res) => 
 });
 
 /// Floor-plan sheet: who's where, what they owe.
-vendorAdminRouter.get('/events/:id/vendors.csv', async (req, res) => {
+vendorAdminRouter.get('/events/:id/vendors.csv', requirePerm('vendors.review', 'vendors.setup'), async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const apps = await prisma.vendorApplication.findMany({ where: { eventId: event.id }, include: ADMIN_INCLUDE, orderBy: [{ area: 'asc' }, { tableNumber: 'asc' }, { businessName: 'asc' }] });

@@ -5,6 +5,7 @@ import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import { Field, Pill } from '../components/Bits.jsx';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
+import { PageSkeleton } from '../components/Skeleton.jsx';
 
 const LENGTHS = [30, 45, 60, 90, 120];
 const BLANK = { title: '', description: '', hosts: '', lengthMinutes: 60, availability: '', notes: '' };
@@ -58,7 +59,7 @@ export default function SubmitPanel() {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [slug, user]);
 
   if (error) return <p className="note bad" style={{ marginTop: 40 }}>{error} <Link to={`/e/${slug}`}>Back to the event</Link></p>;
-  if (!data) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!data) return <PageSkeleton crumbs />;
 
   const submit = async (e) => {
     e.preventDefault();

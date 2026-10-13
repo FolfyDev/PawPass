@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Empty, Field, Pill, fmtMoney, fmtNight, addDays } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const BLANK_HOTEL = { name: '', address: '', url: '', phone: '', description: '' };
 const BLANK_BLOCK = {
@@ -169,146 +170,29 @@ function PickupMeter({ block }) {
   );
 }
 
-function stayOptions(block) {
-  const nights = block.nights.map((n) => n.night);
-  return { checkIns: nights, checkOuts: nights.map((n) => addDays(n, 1)) };
-}
-
-function ReservationForm({ value, onChange, block }) {
-  const set = (patch) => onChange({ ...value, ...patch });
-  const { checkIns, checkOuts } = stayOptions(block);
-  return (
-    <div className="stack">
-      <div className="grid-2">
-        {'who' in value && <Field label="Who" help="Ticket code or @telegram"><input value={value.who} onChange={(e) => set({ who: e.target.value })} /></Field>}
-        <Field label="Guest name" help={'who' in value ? 'Blank = legal name on their ticket' : 'As on their ID'}>
-          <input value={value.guestName} onChange={(e) => set({ guestName: e.target.value })} />
-        </Field>
-        <Field label="Check-in">
-          <select value={value.checkIn} onChange={(e) => set({ checkIn: e.target.value })}>
-            <option value="">Choose</option>
-            {checkIns.map((d) => <option key={d} value={d}>{fmtNight(d)}</option>)}
-          </select>
-        </Field>
-        <Field label="Check-out">
-          <select value={value.checkOut} onChange={(e) => set({ checkOut: e.target.value })}>
-            <option value="">Choose</option>
-            {checkOuts.filter((d) => !value.checkIn || d > value.checkIn).map((d) => <option key={d} value={d}>{fmtNight(d)}</option>)}
-          </select>
-        </Field>
-        <Field label="Guests"><input type="number" min="1" max={block.maxGuests} value={value.guests} onChange={(e) => set({ guests: e.target.value })} /></Field>
-        {'confirmationNumber' in value && (
-          <Field label="Hotel confirmation #" help="Entering it confirms the room">
-            <input value={value.confirmationNumber} onChange={(e) => set({ confirmationNumber: e.target.value })} />
-          </Field>
-        )}
-      </div>
-      <Field label="Roommates" help="Optional"><input value={value.roommates} onChange={(e) => set({ roommates: e.target.value })} /></Field>
-      <Field label="Staff note" help="Optional, never shown to them"><input value={value.staffNote} onChange={(e) => set({ staffNote: e.target.value })} /></Field>
-    </div>
-  );
-}
-
-function Reservations({ block, onChange, setMsg }) {
-  const [showCancelled, setShowCancelled] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [adding, setAdding] = useState(null);
-  const [formMsg, setFormMsg] = useState('');
+/// Room requests live on their own page (RoomRequests.jsx); a block just
+/// shows where it stands and links there, filtered to it.
+function RequestSummary({ block }) {
+  const { id } = useParams();
   const live = block.reservations.filter((r) => r.status !== 'CANCELLED');
-  const cancelled = block.reservations.filter((r) => r.status === 'CANCELLED');
-  const shown = showCancelled ? block.reservations : live;
-
-  const quickConfirm = async (r, confirmationNumber) => {
-    setMsg('');
-    try { await api.patch(`/api/admin/room-reservations/${r.id}`, { confirmationNumber }); onChange(); }
-    catch (e) { setMsg(e.message); }
-  };
-  const cancel = async (r) => {
-    if (!confirm(`Cancel ${r.guestName}'s room? They'll be told, and the nights go back into the block. Remember to tell the hotel if it was already booked.`)) return;
-    setMsg('');
-    try { await api.post(`/api/admin/room-reservations/${r.id}/cancel`); onChange(); }
-    catch (e) { setMsg(e.message); }
-  };
-  const save = async () => {
-    setFormMsg('');
-    try {
-      if (adding) await api.post(`/api/admin/room-blocks/${block.id}/reservations`, adding);
-      else await api.patch(`/api/admin/room-reservations/${editing.id}`, editing.draft);
-      setAdding(null); setEditing(null); onChange();
-    } catch (e) { setFormMsg(e.message); }
-  };
-
+  const waiting = live.filter((r) => r.status === 'REQUESTED').length;
   return (
-    <div className="stack">
-      <div className="spread">
-        <h3 style={{ margin: 0 }}>Room requests <span className="muted small">({live.length})</span></h3>
-        <div className="row">
-          {cancelled.length > 0 && (
-            <button className="btn ghost sm" onClick={() => setShowCancelled(!showCancelled)}>{showCancelled ? 'Hide' : 'Show'} {cancelled.length} cancelled</button>
-          )}
-          <a className="btn sm" href={`${api.base}/api/admin/room-blocks/${block.id}/rooming-list.csv`}>Rooming list CSV</a>
-          <button className="btn sm" disabled={!block.nights.length} onClick={() => { setFormMsg(''); setAdding({ who: '', guestName: '', checkIn: '', checkOut: '', guests: 1, roommates: '', staffNote: '' }); }}>Add room</button>
-        </div>
+    <div className="spread" style={{ padding: '12px 14px', borderRadius: 10, background: 'color-mix(in srgb, var(--ink-3) 7%, var(--card))' }}>
+      <span className="small">
+        <strong>{live.length}</strong> room request{live.length === 1 ? '' : 's'}
+        {waiting > 0 && <> · <span style={{ color: 'var(--signal)', fontWeight: 600 }}>{waiting} waiting on the hotel</span></>}
+      </span>
+      <div className="row" style={{ gap: 8 }}>
+        <a className="btn ghost sm" href={`${api.base}/api/admin/room-blocks/${block.id}/rooming-list.csv`}>Rooming list CSV</a>
+        <Link className="btn sm" to={`/admin/events/${id}/rooms?block=${block.id}${waiting ? '&status=requested' : ''}`}>Manage requests →</Link>
       </div>
-      {shown.length === 0 ? <p className="small muted" style={{ margin: 0 }}>No requests yet.</p> : (
-        <div style={{ overflow: 'auto' }}>
-          <table>
-            <thead><tr><th>Guest</th><th>Stay</th><th>Room</th><th>Status</th><th>Confirmation #</th><th /></tr></thead>
-            <tbody>
-              {shown.map((r) => (
-                <tr key={r.id} style={r.status === 'CANCELLED' ? { opacity: 0.55 } : undefined}>
-                  <td>
-                    {r.guestName}
-                    <div className="small muted">{[r.person.email, r.person.telegramUsername && `@${r.person.telegramUsername}`].filter(Boolean).join(' · ')}</div>
-                  </td>
-                  <td className="small" style={{ whiteSpace: 'nowrap' }}>
-                    {fmtNight(r.checkIn)} – {fmtNight(r.checkOut)}
-                    <div className="muted">{r.nights} night{r.nights === 1 ? '' : 's'}</div>
-                  </td>
-                  <td className="small muted">
-                    {r.guests} guest{r.guests === 1 ? '' : 's'}{r.roommates ? ` · ${r.roommates}` : ''}
-                    {r.note && <div>“{r.note}”</div>}
-                    {r.staffNote && <div><em>Staff: {r.staffNote}</em></div>}
-                  </td>
-                  <td>
-                    {r.status === 'CONFIRMED' ? <Pill tone="go">Confirmed</Pill> : r.status === 'CANCELLED' ? <Pill tone="stop">Cancelled</Pill> : <Pill tone="wait">Requested</Pill>}
-                  </td>
-                  <td>
-                    {r.status === 'CANCELLED' ? <span className="small muted">{r.confirmationNumber || '-'}</span> : (
-                      <input defaultValue={r.confirmationNumber || ''} placeholder="From hotel" style={{ width: 110 }}
-                        onBlur={(e) => e.target.value.trim() !== (r.confirmationNumber || '') && quickConfirm(r, e.target.value.trim())} />
-                    )}
-                  </td>
-                  <td>
-                    {r.status !== 'CANCELLED' && (
-                      <div className="stack" style={{ gap: 4, justifyItems: 'end' }}>
-                        <button className="btn sm" onClick={() => { setFormMsg(''); setEditing({ id: r.id, draft: { guestName: r.guestName, checkIn: r.checkIn, checkOut: r.checkOut, guests: r.guests, roommates: r.roommates, staffNote: r.staffNote || '', confirmationNumber: r.confirmationNumber || '' } }); }}>Edit</button>
-                        <button className="btn sm danger" onClick={() => cancel(r)}>Cancel</button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {(adding || editing) && (
-        <Modal title={adding ? `Add a room · ${block.name}` : 'Edit room request'} onClose={() => { setAdding(null); setEditing(null); }} footer={<>
-          <button className="btn ghost" onClick={() => { setAdding(null); setEditing(null); }}>Close</button>
-          <button className="btn primary" onClick={save}>{adding ? 'Add room' : 'Save'}</button>
-        </>}>
-          {formMsg && <p className="note bad">{formMsg}</p>}
-          <ReservationForm block={block} value={adding || editing.draft} onChange={(v) => (adding ? setAdding(v) : setEditing({ ...editing, draft: v }))} />
-        </Modal>
-      )}
     </div>
   );
 }
 
-function BlockCard({ block, tz, isOwner, onChange, onEdit, setMsg }) {
+function BlockCard({ block, tz, canSetUp, onChange, onEdit, setMsg }) {
   // A block is no use without its nights, so a new one opens straight into them.
-  const [editingNights, setEditingNights] = useState(isOwner && block.nights.length === 0);
+  const [editingNights, setEditingNights] = useState(canSetUp && block.nights.length === 0);
   const managed = block.mode === 'ORGANIZER_MANAGED';
   const remove = async () => {
     if (!confirm(`Delete the ${block.name} block?`)) return;
@@ -330,7 +214,7 @@ function BlockCard({ block, tz, isOwner, onChange, onEdit, setMsg }) {
           </p>
           {block.staffNotes && <p className="small" style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}><em>{block.staffNotes}</em></p>}
         </div>
-        {isOwner && (
+        {canSetUp && (
           <div className="row">
             <button className="btn sm" onClick={() => setEditingNights(!editingNights)}>{editingNights ? 'Close nights' : 'Nights'}</button>
             <button className="btn sm" onClick={() => onEdit(block)}>Edit</button>
@@ -344,7 +228,7 @@ function BlockCard({ block, tz, isOwner, onChange, onEdit, setMsg }) {
       {editingNights ? (
         <NightsEditor block={block} onSaved={() => { setEditingNights(false); onChange(); }} />
       ) : block.nights.length === 0 ? (
-        <p className="small muted" style={{ margin: 0 }}>No nights set up yet.{isOwner && ' Use Nights to add the contracted rooms per night.'}</p>
+        <p className="small muted" style={{ margin: 0 }}>No nights set up yet.{canSetUp && ' Use Nights to add the contracted rooms per night.'}</p>
       ) : (
         <div style={{ overflow: 'auto' }}>
           <table>
@@ -358,15 +242,15 @@ function BlockCard({ block, tz, isOwner, onChange, onEdit, setMsg }) {
         </div>
       )}
 
-      {managed && <Reservations block={block} onChange={onChange} setMsg={setMsg} />}
+      {managed && <RequestSummary block={block} />}
     </div>
   );
 }
 
 export default function Hotels() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canSetUp = can('hotels.setup');
   const [event, setEvent] = useState(null);
   const [data, setData] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -410,7 +294,7 @@ export default function Hotels() {
     catch (e) { setMsg(e.message); }
   };
 
-  if (!event || !data || !settings) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !data || !settings) return <PageSkeleton />;
 
   const blocks = data.hotels.flatMap((h) => h.blocks);
   const contracted = blocks.reduce((n, b) => n + b.contracted, 0);
@@ -424,13 +308,13 @@ export default function Hotels() {
           <p className="eyebrow">{event.title}</p>
           <h1 style={{ margin: 0 }}>Hotels</h1>
         </div>
-        {isOwner && <button className="btn primary" onClick={() => open({ kind: 'hotel', draft: BLANK_HOTEL })}>Add hotel</button>}
+        {canSetUp && <button className="btn primary" onClick={() => open({ kind: 'hotel', draft: BLANK_HOTEL })}>Add hotel</button>}
       </div>
 
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 
       <div className="card" style={{ marginBottom: 24 }}>
-        <fieldset disabled={!isOwner} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
+        <fieldset disabled={!canSetUp} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
           <label className="row">
             <input type="checkbox" checked={settings.hotelsEnabled} onChange={(e) => setSettings({ ...settings, hotelsEnabled: e.target.checked })} />
             <span>Show "Where to stay" on the event page</span>
@@ -438,9 +322,9 @@ export default function Hotels() {
           <Field label="Note above the hotel list" help="Optional, e.g. book by the cutoff to get the rate">
             <textarea style={{ minHeight: 70 }} value={settings.hotelInfo} onChange={(e) => setSettings({ ...settings, hotelInfo: e.target.value })} />
           </Field>
-          {isOwner
+          {canSetUp
             ? <div className="row"><button className="btn primary" onClick={saveSettings}>Save</button>{note && <span className="small muted">{note}</span>}</div>
-            : <p className="small muted" style={{ margin: 0 }}>Only owners can set up hotels and blocks. You can work the room requests: confirm, change dates, add, and cancel.</p>}
+            : <p className="small muted" style={{ margin: 0 }}>Setting up hotels and blocks needs the Hotels and room blocks permission. You can work the <Link to={`/admin/events/${id}/rooms`}>room requests</Link>: confirm, change dates, add, and cancel.</p>}
         </fieldset>
       </div>
 
@@ -452,10 +336,10 @@ export default function Hotels() {
           <p className="value">{contracted ? Math.round((pickedUp / contracted) * 100) : 0}%</p>
           <p className="small muted" style={{ margin: 0 }}>{pickedUp} room nights</p>
         </div>
-        <div className="card stat-tile"><p className="eyebrow" style={{ margin: 0 }}>Awaiting hotel</p><p className="value">{waiting}</p><p className="small muted" style={{ margin: 0 }}>requests with no confirmation #</p></div>
+        <Link className="card stat-tile stat-link" to={`/admin/events/${id}/rooms?status=requested`}><p className="eyebrow" style={{ margin: 0 }}>Awaiting hotel</p><p className="value">{waiting}</p><p className="small muted" style={{ margin: 0 }}>requests with no confirmation #</p></Link>
       </div>
 
-      {data.hotels.length === 0 && <Empty title="No hotels yet">{isOwner ? 'Add your partner hotels and their room blocks.' : 'An owner can add them.'}</Empty>}
+      {data.hotels.length === 0 && <Empty title="No hotels yet">{canSetUp ? 'Add your partner hotels and their room blocks.' : 'Someone with the Hotels and room blocks permission can add them.'}</Empty>}
 
       <div className="stack" style={{ gap: 20 }}>
         {data.hotels.map((h) => (
@@ -468,7 +352,7 @@ export default function Hotels() {
                   {h.url && <> · <a href={h.url} target="_blank" rel="noreferrer">Website</a></>}
                 </p>
               </div>
-              {isOwner && (
+              {canSetUp && (
                 <div className="row">
                   <button className="btn sm" onClick={() => open({ kind: 'block', hotelId: h.id, draft: BLANK_BLOCK })}>Add room block</button>
                   <button className="btn sm" onClick={() => open({ kind: 'hotel', id: h.id, draft: { name: h.name, address: h.address || '', url: h.url || '', phone: h.phone || '', description: h.description } })}>Edit</button>
@@ -478,7 +362,7 @@ export default function Hotels() {
             </div>
             {h.blocks.length === 0 && <p className="small muted" style={{ margin: 0 }}>No room blocks yet.</p>}
             {h.blocks.map((b) => (
-              <BlockCard key={b.id} block={b} tz={tz} isOwner={isOwner} onChange={load} setMsg={setMsg}
+              <BlockCard key={b.id} block={b} tz={tz} canSetUp={canSetUp} onChange={load} setMsg={setMsg}
                 onEdit={(blk) => open({ kind: 'block', id: blk.id, draft: toBlockDraft(blk, tz) })} />
             ))}
           </div>

@@ -5,6 +5,7 @@ import { usePageMeta } from '../../lib/meta.js';
 import { Empty, Field, Pill } from '../../components/Bits.jsx';
 import Breadcrumbs from '../../components/Breadcrumbs.jsx';
 import Modal from '../../components/Modal.jsx';
+import { RowsSkeleton } from '../../components/Skeleton.jsx';
 
 export const CATEGORY_LABEL = {
   harassment: 'Harassment', safety: 'Safety', medical: 'Medical', property: 'Lost / damaged property', conduct: 'Code of conduct', other: 'Other',
@@ -97,7 +98,7 @@ export default function Incidents() {
         <button className="btn signal" onClick={startNew}>New report</button>
       </div>
       <p className="small muted" style={{ marginTop: 0 }}>
-        Confidential. {data?.canManage ? 'You can see every report.' : 'You can see the reports you filed; owners see all of them.'} Details and the people involved are encrypted.
+        Confidential. {data?.canManage ? 'You can see every report.' : 'You can see the reports you filed; staff who manage incident reports see all of them.'} Details and the people involved are encrypted.
       </p>
 
       <div className="filter-row">
@@ -113,7 +114,7 @@ export default function Incidents() {
         <input placeholder="Search summaries" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} style={{ maxWidth: 240 }} />
       </div>
 
-      {!data ? <p className="muted">Loading…</p> : data.incidents.length === 0 ? (
+      {!data ? <RowsSkeleton /> : data.incidents.length === 0 ? (
         <Empty title={filter.status === 'OPEN' ? 'No open reports' : 'No reports'}>Use New report to write one down while it's fresh.</Empty>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>

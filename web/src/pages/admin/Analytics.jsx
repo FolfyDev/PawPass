@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { usePageMeta } from '../../lib/meta.js';
+import { RowsSkeleton } from '../../components/Skeleton.jsx';
 
 const RANGE_OPTIONS = [
   { label: '7 days', days: 7 },
@@ -113,23 +114,23 @@ function SourceBars({ bySource }) {
 }
 
 export default function Analytics() {
-  const { user } = useSession();
+  const { can } = useSession();
   usePageMeta({ title: 'Analytics', noindex: true });
-  const isOwner = user.role === 'OWNER';
+  const canView = can('analytics.view');
   const [events, setEvents] = useState([]);
   const [eventId, setEventId] = useState('');
   const [days, setDays] = useState(30);
   const [data, setData] = useState(null);
   const [showTable, setShowTable] = useState(false);
 
-  useEffect(() => { if (isOwner) api.get('/api/admin/events').then(setEvents); }, [isOwner]);
+  useEffect(() => { if (canView) api.get('/api/admin/events').then(setEvents); }, [canView]);
   useEffect(() => {
-    if (!isOwner) return;
+    if (!canView) return;
     const q = new URLSearchParams({ days, ...(eventId && { eventId }) });
     api.get(`/api/admin/analytics?${q}`).then(setData);
-  }, [isOwner, eventId, days]);
+  }, [canView, eventId, days]);
 
-  if (!isOwner) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
+  if (!canView) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
 
   return (
     <>
@@ -148,7 +149,7 @@ export default function Analytics() {
         </div>
       </div>
 
-      {!data ? <p className="muted">Loading…</p> : (
+      {!data ? <RowsSkeleton /> : (
         <>
           <div className="grid-4" style={{ marginBottom: 20 }}>
             <div className="card stat-tile">

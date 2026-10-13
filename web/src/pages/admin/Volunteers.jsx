@@ -5,6 +5,7 @@ import { useSession } from '../../lib/session.jsx';
 import { Empty, Field, Pill, fmtTimeRange, fmtHours } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const BLANK = { role: '', location: '', startsAt: '', endsAt: '', slots: 2, description: '' };
 
@@ -102,8 +103,8 @@ function Roster({ shift, onChange, setMsg }) {
 
 export default function Volunteers() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canSetUp = can('volunteers.shifts');
   const [event, setEvent] = useState(null);
   const [data, setData] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -155,7 +156,7 @@ export default function Volunteers() {
     document.getElementById('add-shift')?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  if (!event || !data || !settings) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !data || !settings) return <PageSkeleton />;
 
   const filled = data.shifts.reduce((n, s) => n + s.filledCount, 0);
   const slots = data.shifts.reduce((n, s) => n + s.slots, 0);
@@ -174,7 +175,7 @@ export default function Volunteers() {
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 
       <div className="card" style={{ marginBottom: 24 }}>
-      <fieldset disabled={!isOwner} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
+      <fieldset disabled={!canSetUp} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
         <label className="row">
           <input type="checkbox" checked={settings.volunteersEnabled} onChange={(e) => setSettings({ ...settings, volunteersEnabled: e.target.checked })} />
           <span>Let people sign up for shifts on the event page</span>
@@ -182,13 +183,13 @@ export default function Volunteers() {
         <Field label="Instructions for volunteers" help="Where to report, what to wear, who to ask for">
           <textarea style={{ minHeight: 80 }} value={settings.volunteerInfo} onChange={(e) => setSettings({ ...settings, volunteerInfo: e.target.value })} />
         </Field>
-        {isOwner && (
+        {canSetUp && (
           <div className="row">
             <button className="btn primary" onClick={saveSettings}>Save</button>
             {note && <span className="small muted">{note}</span>}
           </div>
         )}
-        {!isOwner && <p className="small muted" style={{ margin: 0 }}>Only owners can change these or set up shifts. You can add and remove volunteers and mark attendance.</p>}
+        {!canSetUp && <p className="small muted" style={{ margin: 0 }}>Changing these and setting up shifts needs the Volunteer shifts permission. You can add and remove volunteers and mark attendance.</p>}
       </fieldset>
       </div>
 
@@ -202,7 +203,7 @@ export default function Volunteers() {
         <div className="card stat-tile"><p className="eyebrow" style={{ margin: 0 }}>Hours worked</p><p className="value">{fmtHours(worked)}</p></div>
       </div>
 
-      {data.shifts.length === 0 && <Empty title="No shifts yet">{isOwner ? 'Add the first one below.' : 'An owner can set them up.'}</Empty>}
+      {data.shifts.length === 0 && <Empty title="No shifts yet">{canSetUp ? 'Add the first one below.' : 'Someone with the Volunteer shifts permission can set them up.'}</Empty>}
       <div className="stack" style={{ gap: 16, marginBottom: 24 }}>
         {data.shifts.map((s) => (
           <div key={s.id} className="card stack">
@@ -216,7 +217,7 @@ export default function Volunteers() {
               </div>
               <div className="row">
                 <Pill tone={s.remaining === 0 ? 'go' : 'wait'}>{s.filledCount} / {s.slots}</Pill>
-                {isOwner && <>
+                {canSetUp && <>
                   <button className="btn sm" onClick={() => duplicate(s)}>Next block</button>
                   <button className="btn sm" onClick={() => setEditing({
                     id: s.id,
@@ -231,7 +232,7 @@ export default function Volunteers() {
         ))}
       </div>
 
-      {isOwner && (
+      {canSetUp && (
         <div id="add-shift" className="card stack" style={{ marginBottom: 24 }}>
           <h2 style={{ margin: 0 }}>Add a shift</h2>
           <p className="small muted" style={{ margin: 0 }}>Times are in the event's timezone ({tz}).</p>

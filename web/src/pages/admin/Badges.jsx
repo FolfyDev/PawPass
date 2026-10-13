@@ -14,7 +14,7 @@ const NEW_ELEMENT = {
 
 
 export default function Badges() {
-  const { user } = useSession();
+  const { can } = useSession();
   const [templates, setTemplates] = useState([]);
   const [t, setT] = useState(null);
   const [sel, setSel] = useState(null);
@@ -91,7 +91,7 @@ export default function Badges() {
   const duplicate = async () => { await api.post(`/api/badges/templates/${t.id}/duplicate`); load(); };
   const remove = async () => { if (confirm(`Delete "${t.name}"?`)) { await api.del(`/api/badges/templates/${t.id}`); setT(null); load(); } };
 
-  if (user.role !== 'OWNER')
+  if (!can('badges.design'))
     return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
 
   if (!t) return (

@@ -83,16 +83,16 @@ publicRouter.get('/events/:slug', async (req, res) => {
   // Capacity counts confirmed spots plus ones held for someone mid-checkout
   // (released if that checkout expires); the "registered" number shown is
   // confirmed only.
-  const held = await prisma.registration.count({ where: { eventId: event.id, status: { in: HOLDS_SEAT } } });
+  // None of these depend on each other, so they go to the database together.
+  const [held, mine, tiers, heldPerTier] = await Promise.all([
+    prisma.registration.count({ where: { eventId: event.id, status: { in: HOLDS_SEAT } } }),
+    req.user
+      ? prisma.registration.findUnique({ where: { eventId_userId: { eventId: event.id, userId: req.user.id } }, include: REG_INCLUDE })
+      : null,
+    activeTiers(event.id),
+    heldByTier(event.id),
+  ]);
   const state = registrationWindowState(event, held);
-  let mine = null;
-  if (req.user) {
-    mine = await prisma.registration.findUnique({
-      where: { eventId_userId: { eventId: event.id, userId: req.user.id } },
-      include: REG_INCLUDE,
-    });
-  }
-  const [tiers, heldPerTier] = await Promise.all([activeTiers(event.id), heldByTier(event.id)]);
   res.json({
     ...summarize(event), description: event.description, tosTitle: event.tosTitle, tosBody: event.tosBody,
     customFields: event.customFields, state, registration: mine && shapeReg(mine),

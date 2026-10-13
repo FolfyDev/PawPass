@@ -6,11 +6,12 @@ import { Empty, Field, fmtMoney, PaymentButtons } from '../../components/Bits.js
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
 import { AREA_LABEL, VendorStatus } from '../../components/VendorBits.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const FILTERS = [['SUBMITTED', 'To review'], ['WAITLISTED', 'Waitlist'], ['ACCEPTED', 'Fee due'], ['CONFIRMED', 'Confirmed'], ['', 'All']];
 const BLANK_TYPE = { area: 'DEALERS_DEN', name: '', price: '', quantity: '', description: '' };
 
-function TableTypes({ eventId, types, isOwner, onChange, setMsg }) {
+function TableTypes({ eventId, types, canSetUp, onChange, setMsg }) {
   const [adding, setAdding] = useState(BLANK_TYPE);
   const add = async (e) => {
     e.preventDefault();
@@ -37,12 +38,12 @@ function TableTypes({ eventId, types, isOwner, onChange, setMsg }) {
                 <td>{t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free'}</td>
                 <td>
                   <strong style={t.taken >= t.quantity ? { color: 'var(--stop)' } : undefined}>{t.taken}</strong> of{' '}
-                  {isOwner
+                  {canSetUp
                     ? <input type="number" min={t.taken} defaultValue={t.quantity} style={{ width: 70 }} aria-label="How many" onBlur={(e) => Number(e.target.value) !== t.quantity && update(t, { quantity: Number(e.target.value) })} />
                     : t.quantity}
                 </td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {isOwner && <>
+                  {canSetUp && <>
                     <button className="btn sm ghost" onClick={() => update(t, { active: !t.active })}>{t.active ? 'Hide' : 'Show'}</button>
                     <button className="btn sm ghost" onClick={() => remove(t)}>Delete</button>
                   </>}
@@ -52,7 +53,7 @@ function TableTypes({ eventId, types, isOwner, onChange, setMsg }) {
           </tbody>
         </table>
       )}
-      {isOwner && (
+      {canSetUp && (
         <form className="row" onSubmit={add} style={{ alignItems: 'flex-end' }}>
           <Field label="Area">
             <select value={adding.area} onChange={(e) => setAdding({ ...adding, area: e.target.value })}>
@@ -69,7 +70,7 @@ function TableTypes({ eventId, types, isOwner, onChange, setMsg }) {
   );
 }
 
-function Application({ a, isOwner, payOnline, onChange, onDecide, setMsg }) {
+function Application({ a, canRefund, payOnline, onChange, onDecide, setMsg }) {
   const [paying, setPaying] = useState(null);
   const run = async (fn) => { setMsg(''); try { await fn(); onChange(); } catch (e) { setMsg(e.message); } };
   const holds = ['ACCEPTED', 'CONFIRMED'].includes(a.status);
@@ -111,7 +112,7 @@ function Application({ a, isOwner, payOnline, onChange, onDecide, setMsg }) {
             <li key={p.id}>
               {fmtMoney(p.amountCents, p.currency)} by {p.method.toLowerCase()} · {p.status.toLowerCase().replace('_', ' ')}
               {p.amountRefundedCents > 0 && ` · ${fmtMoney(p.amountRefundedCents, p.currency)} refunded`}
-              {isOwner && ['PAID', 'PARTIALLY_REFUNDED'].includes(p.status) && (
+              {canRefund && ['PAID', 'PARTIALLY_REFUNDED'].includes(p.status) && (
                 <button className="btn sm ghost" style={{ marginLeft: 6 }} onClick={() => {
                   const amt = prompt(`Refund how much? Leave blank for all ${fmtMoney(p.amountCents - p.amountRefundedCents, p.currency)} left. A full refund releases the table.`);
                   if (amt !== null) run(() => api.post(`/api/admin/payments/${p.id}/refund`, { amount: amt }));
@@ -155,8 +156,8 @@ function Application({ a, isOwner, payOnline, onChange, onDecide, setMsg }) {
 
 export default function AdminVendors() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canSetUp = can('vendors.setup');
   const [event, setEvent] = useState(null);
   const [data, setData] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -171,7 +172,7 @@ export default function AdminVendors() {
     setSettings((s) => s || { vendorsOpen: d.open, vendorsCloseAt: localInZone(d.closesAt, d.timezone), vendorInfo: d.info });
   });
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); load(); /* eslint-disable-next-line */ }, [id]);
-  if (!event || !data || !settings) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !data || !settings) return <PageSkeleton />;
 
   const saveSettings = async () => {
     setMsg(''); setNote('');
@@ -208,7 +209,7 @@ export default function AdminVendors() {
 
       <div className="grid-2" style={{ alignItems: 'start', marginBottom: 20 }}>
         <div className="card">
-          <fieldset disabled={!isOwner} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
+          <fieldset disabled={!canSetUp} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
             <label className="row"><input type="checkbox" checked={settings.vendorsOpen} onChange={(e) => setSettings({ ...settings, vendorsOpen: e.target.checked })} /> Take applications</label>
             <Field label="Applications close" help={`Optional, ${data.timezone}`}>
               <input type="datetime-local" value={settings.vendorsCloseAt} onChange={(e) => setSettings({ ...settings, vendorsCloseAt: e.target.value })} />
@@ -216,12 +217,12 @@ export default function AdminVendors() {
             <Field label="Guidelines" help="Shown above the form: what you accept, load-in times, rules">
               <textarea style={{ minHeight: 90 }} value={settings.vendorInfo} onChange={(e) => setSettings({ ...settings, vendorInfo: e.target.value })} />
             </Field>
-            {isOwner
+            {canSetUp
               ? <div className="row"><button className="btn primary sm" onClick={saveSettings}>Save</button>{note && <span className="small muted">{note}</span>}</div>
-              : <p className="small muted" style={{ margin: 0 }}>Owners open applications and set table fees. You can review, assign tables, and record payments.</p>}
+              : <p className="small muted" style={{ margin: 0 }}>Opening applications and setting table fees needs the Vendor tables permission. You can review, assign tables, and record payments.</p>}
           </fieldset>
         </div>
-        <TableTypes eventId={id} types={data.tableTypes} isOwner={isOwner} onChange={load} setMsg={setMsg} />
+        <TableTypes eventId={id} types={data.tableTypes} canSetUp={canSetUp} onChange={load} setMsg={setMsg} />
       </div>
 
       <div className="filter-row">
@@ -239,7 +240,7 @@ export default function AdminVendors() {
       {apps.length === 0 ? <Empty title="Nothing here">Applications show up under To review as they come in.</Empty> : (
         <div className="stack" style={{ gap: 14 }}>
           {apps.map((a) => (
-            <Application key={a.id} a={a} isOwner={isOwner} payOnline={data.payOnline} onChange={load} setMsg={setMsg}
+            <Application key={a.id} a={a} canRefund={can('payments.refund')} payOnline={data.payOnline} onChange={load} setMsg={setMsg}
               onDecide={(app, decision) => setDeciding({ a: app, decision, tableTypeId: app.tableTypeId || typesFor(app)[0]?.id || '', message: '' })} />
           ))}
         </div>

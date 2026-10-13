@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Empty, PaymentButtons, Pill, fmtMoney } from '../../components/Bits.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const money = (n) => (n == null ? '-' : `$${Number(n).toFixed(2)}`);
 
@@ -18,8 +19,8 @@ export default function Merch() {
   const [newItem, setNewItem] = useState({ name: '', price: '', maxCount: '' });
   const [sellDrafts, setSellDrafts] = useState({}); // itemId -> { quantity, paymentMethod, paymentNote }
   const [msg, setMsg] = useState('');
-  const { user } = useSession();
-  const isOwner = user?.role === 'OWNER';
+  const { can } = useSession();
+  const canRefund = can('payments.refund');
   const [preorders, setPreorders] = useState([]);
   const [preorderTotal, setPreorderTotal] = useState(0);
   const [stripeOn, setStripeOn] = useState(false);
@@ -121,7 +122,7 @@ export default function Merch() {
     catch (e) { setMsg(e.message); }
   };
 
-  if (!event || !items) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !items) return <PageSkeleton />;
 
   return (
     <>
@@ -208,7 +209,7 @@ export default function Merch() {
                       {o.status === 'PAID' && (o.pickedUpAt
                         ? <button className="btn sm ghost" onClick={() => pickup(o, false)}>Undo pickup</button>
                         : <button className="btn sm primary" onClick={() => pickup(o, true)}>Mark picked up</button>)}
-                      {isOwner && o.status === 'PAID' && o.paymentId && <button className="btn sm ghost" onClick={() => refundOrder(o)}>Refund</button>}
+                      {canRefund && o.status === 'PAID' && o.paymentId && <button className="btn sm ghost" onClick={() => refundOrder(o)}>Refund</button>}
                     </td>
                   </tr>
                 ))}

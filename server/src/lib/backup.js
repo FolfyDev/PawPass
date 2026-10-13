@@ -1,9 +1,10 @@
 import { nanoid } from 'nanoid';
+import { STAFF_DEFAULTS } from './permissions.js';
 
 /// Version of the data.json inside a backup zip. Bump it alongside any schema
 /// migration that changes the shape of a backed-up model, and add a step to
 /// UPGRADES below so older backups still restore.
-export const BACKUP_VERSION = 9;
+export const BACKUP_VERSION = 10;
 
 /// Each step converts a backup from version N to N + 1. They mirror the SQL
 /// migrations in prisma/migrations — a restore of an old backup should end up
@@ -93,6 +94,19 @@ const UPGRADES = {
   /// v8 -> v9 (0014_vendors): only new tables and nullable/defaulted columns.
   8(data) {
     return { vendorTableType: [], vendorApplication: [], ...data };
+  },
+  /// v9 -> v10 (0015_staff_permissions): every admin goes into a "Staff"
+  /// group with what admins could do before, same as the migration, so an
+  /// older backup doesn't restore its admins with no access at all.
+  9(data) {
+    if (data.staffGroup) return data;
+    const admins = (data.user || []).filter((u) => u.role === 'ADMIN');
+    return {
+      ...data,
+      user: (data.user || []).map((u) => ({ permissions: [], ...u })),
+      staffGroup: [{ id: 'staff_default', name: 'Staff', description: 'Everything admins could do before permissions existed.', permissions: STAFF_DEFAULTS }],
+      staffGroupMember: admins.map((u) => ({ userId: u.id, groupId: 'staff_default' })),
+    };
   },
 };
 

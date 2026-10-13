@@ -6,6 +6,7 @@ import { usePageMeta } from '../lib/meta.js';
 import { downloadIcs } from '../lib/ics.js';
 import { Empty, Pill, fmtNight } from '../components/Bits.jsx';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
+import { ScheduleSkeleton } from '../components/Skeleton.jsx';
 
 const timeIn = (d, tz) => new Date(d).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZone: tz });
 const dayOf = (d, tz) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz });
@@ -39,7 +40,7 @@ export default function Schedule() {
   const tracks = useMemo(() => [...new Set((data?.sessions || []).map((s) => s.track).filter(Boolean))].sort(), [data]);
 
   if (error) return <p className="note bad" style={{ marginTop: 40 }}>{error} <Link to={`/e/${slug}`}>Back to the event</Link></p>;
-  if (!data || !event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!data || !event) return <ScheduleSkeleton />;
   const tz = data.timezone;
 
   const toggleStar = async (s) => {

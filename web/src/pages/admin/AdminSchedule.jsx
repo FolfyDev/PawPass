@@ -5,6 +5,7 @@ import { useSession } from '../../lib/session.jsx';
 import { Empty, Field, Pill, fmtNight } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const timeIn = (d, tz) => new Date(d).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZone: tz });
 const dayOf = (d, tz) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz });
@@ -76,8 +77,8 @@ function Rooms({ eventId, rooms, onChange, setMsg }) {
 
 export default function AdminSchedule() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canPublish = can('schedule.publish');
   const [event, setEvent] = useState(null);
   const [data, setData] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -97,7 +98,7 @@ export default function AdminSchedule() {
   });
   useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); load(); /* eslint-disable-next-line */ }, [id]);
 
-  if (!event || !data || !settings) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !data || !settings) return <PageSkeleton />;
   const tz = data.timezone;
 
   const saveSettings = async () => {
@@ -153,7 +154,7 @@ export default function AdminSchedule() {
 
       <div className="grid-2" style={{ alignItems: 'start', marginBottom: 20 }}>
         <div className="card">
-          <fieldset disabled={!isOwner} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
+          <fieldset disabled={!canPublish} className="stack" style={{ border: 0, margin: 0, padding: 0 }}>
             <label className="row"><input type="checkbox" checked={settings.scheduleEnabled} onChange={(e) => setSettings({ ...settings, scheduleEnabled: e.target.checked })} /> Show the schedule publicly</label>
             <label className="row"><input type="checkbox" checked={settings.submissionsOpen} onChange={(e) => setSettings({ ...settings, submissionsOpen: e.target.checked })} /> Take panel submissions</label>
             {settings.submissionsOpen && <>
@@ -164,9 +165,9 @@ export default function AdminSchedule() {
                 <textarea style={{ minHeight: 80 }} value={settings.submissionInfo} onChange={(e) => setSettings({ ...settings, submissionInfo: e.target.value })} />
               </Field>
             </>}
-            {isOwner
+            {canPublish
               ? <div className="row"><button className="btn primary sm" onClick={saveSettings}>Save</button>{note && <span className="small muted">{note}</span>}</div>
-              : <p className="small muted" style={{ margin: 0 }}>Owners turn these on. You can build the schedule and review submissions.</p>}
+              : <p className="small muted" style={{ margin: 0 }}>Turning these on needs the Publish the schedule permission. You can build the schedule and review submissions.</p>}
             {event.submissionsOpen && <Link className="small" to={`/e/${event.slug}/submit`} target="_blank">The submission form ↗</Link>}
           </fieldset>
         </div>

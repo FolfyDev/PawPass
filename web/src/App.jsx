@@ -11,6 +11,7 @@ import Account from './pages/Account.jsx';
 import Terms from './pages/Terms.jsx';
 import Privacy from './pages/Privacy.jsx';
 import NotFound from './pages/NotFound.jsx';
+import { Bone, PageSkeleton } from './components/Skeleton.jsx';
 
 // Lazy-loaded: the admin console (and the changelog, staff-only same as it)
 // is only ever reached by staff, so it has no business shipping in the
@@ -30,6 +31,7 @@ const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
 const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
 const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
 const AdminHotels = lazy(() => import('./pages/admin/Hotels.jsx'));
+const AdminRoomRequests = lazy(() => import('./pages/admin/RoomRequests.jsx'));
 const AdminSchedule = lazy(() => import('./pages/admin/AdminSchedule.jsx'));
 const AdminSubmissions = lazy(() => import('./pages/admin/AdminSubmissions.jsx'));
 const AdminVendors = lazy(() => import('./pages/admin/AdminVendors.jsx'));
@@ -51,7 +53,23 @@ const AdminAnalytics = lazy(() => import('./pages/admin/Analytics.jsx'));
 export default function App() {
   const { user, settings, isStaff, logout, loading } = useSession();
   const { theme, toggleTheme } = useTheme();
-  if (loading) return null;
+  // Until the session is known the links can't be drawn yet, but the frame
+  // can: same bar, same height, so nothing shifts when it fills in.
+  if (loading) {
+    return (
+      <>
+        <nav className="nav" aria-hidden="true">
+          <div className="nav-inner">
+            <span className="brand"><span className="brand-mark" /><Bone w={90} h={16} /></span>
+            <Bone w={52} h={14} />
+            <span className="nav-spacer" />
+            <Bone w={70} h={32} r={10} />
+          </div>
+        </nav>
+        <main className="shell"><PageSkeleton /></main>
+      </>
+    );
+  }
 
     const banner = theme === 'light' && settings?.useLightBanner && settings?.logoUrlLight
     ? settings.logoUrlLight
@@ -83,7 +101,7 @@ export default function App() {
       </nav>
 
       <main className="shell">
-        <Suspense fallback={<p className="muted" style={{ paddingTop: 40 }}>Loading…</p>}>
+        <Suspense fallback={<PageSkeleton />}>
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/e/:slug" element={<EventPage />} />
@@ -112,6 +130,7 @@ export default function App() {
               <Route path="events/:id/vouchers" element={<AdminVouchers />} />
               <Route path="events/:id/volunteers" element={<AdminVolunteers />} />
               <Route path="events/:id/hotels" element={<AdminHotels />} />
+              <Route path="events/:id/rooms" element={<AdminRoomRequests />} />
               <Route path="events/:id/schedule" element={<AdminSchedule />} />
               <Route path="events/:id/submissions" element={<AdminSubmissions />} />
               <Route path="events/:id/vendors" element={<AdminVendors />} />
@@ -138,7 +157,7 @@ export default function App() {
         <div className="hero-rule" />
         <p className="small muted">
           PawPass • Mobile Event Management<br />
-          PROD-2026.2.0.0 • © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
+          PROD-2026.2.1.0• © {new Date().getFullYear()} • <a href="https://pawpass.folfy.dev">PawPass Team</a>
           <br />
           <Link to="/legal/terms">Terms of Service</Link> • <Link to="/legal/privacy">Privacy Policy</Link>
           {isStaff && <> • <Link to="/changelog">Changelog</Link></>}

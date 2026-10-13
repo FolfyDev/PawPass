@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Empty, Field, Pill } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
+import { PageSkeleton, RowsSkeleton } from '../../components/Skeleton.jsx';
 
 const FILTERS = [['SUBMITTED', 'To review'], ['ACCEPTED', 'Accepted'], ['DECLINED', 'Declined'], ['WITHDRAWN', 'Withdrawn'], ['', 'All']];
 const STATUS = {
@@ -36,7 +37,7 @@ export default function AdminSubmissions() {
     } catch (e) { setMsg(e.message); }
   };
 
-  if (!event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event) return <PageSkeleton />;
 
   return (
     <>
@@ -55,7 +56,7 @@ export default function AdminSubmissions() {
         {FILTERS.map(([v, label]) => <button key={label} aria-current={status === v ? 'true' : undefined} onClick={() => setStatus(v)}>{label}</button>)}
       </div>
 
-      {!rows ? <p className="muted">Loading…</p> : rows.length === 0 ? (
+      {!rows ? <RowsSkeleton /> : rows.length === 0 ? (
         <Empty title={status === 'SUBMITTED' ? 'Nothing to review' : 'No submissions here'}>New submissions show up under To review.</Empty>
       ) : (
         <div className="stack" style={{ gap: 14 }}>

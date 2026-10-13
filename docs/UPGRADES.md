@@ -118,6 +118,7 @@ The schema is versioned in `server/prisma/migrations/`, one folder per change:
 | `0007_volunteers` | Volunteer shifts and sign-ups. Additive only; sign-up stays hidden until turned on per event. Backups go to version 4. |
 | `0014_vendors` | Dealers' den / artist alley table types and applications, and payments that pay for one. Widens the `Payment_one_target` check constraint to three targets. Backups go to version 9. |
 | `0013_schedule` | Event schedule (rooms, sessions, attendee stars) and panel submissions. Additive only; both hidden until turned on per event. Backups go to version 8. |
+| `0015_staff_permissions` | Staff groups and per-person permissions (Admin → Staff). Every existing admin is put in a new "Staff" group holding exactly what admins could do before, so nobody's access changes until an owner edits it. Backups go to version 10; older ones restore their admins into that group too. |
 | `0012_data_retention` | Marks events whose personal data was cleared. Retention is off until an owner picks a period in Settings. |
 | `0011_two_factor` | Optional authenticator-app two-factor for staff password sign-in. Additive only; off for everyone until they set it up. |
 | `0010_incidents` | Confidential incident reports, the people involved, follow-up notes, and a link from a ban to its report. Additive only. Backups go to version 7. |

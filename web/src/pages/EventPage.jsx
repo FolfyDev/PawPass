@@ -8,6 +8,7 @@ import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import Turnstile from '../components/Turnstile.jsx';
 import PaymentNotice from '../components/PaymentNotice.jsx';
+import { EventPageSkeleton } from '../components/Skeleton.jsx';
 
 /// One answer input per custom question — shared by the registration popup.
 function AnswerInput({ f, answers, setAnswer }) {
@@ -181,7 +182,7 @@ export default function EventPage() {
   };
 
   if (error && !event) return <p className="note bad" style={{ marginTop: 40 }}>{error}</p>;
-  if (!event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event) return <EventPageSkeleton />;
 
   const tiers = event.tiers || [];
   const reg = event.registration;

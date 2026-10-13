@@ -5,6 +5,7 @@ import { useSession } from '../../lib/session.jsx';
 import { Field, PaymentButtons, fmtMoney, fieldsForTier } from '../../components/Bits.jsx';
 import { printBadge } from '../../lib/print.js';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const BLANK_FORM = { legalName: '', fursonaName: '', email: '', answers: {}, ticketTierId: '', paymentMethod: '', paymentAmount: null, paymentNote: '', tosAccepted: false };
 
@@ -28,7 +29,7 @@ export default function Kiosk() {
     api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers.filter((t) => t.active)));
   }, [id]);
 
-  if (!event) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event) return <PageSkeleton />;
 
   // With a single tier there's nothing to pick.
   const tierId = form.ticketTierId || (tiers.length === 1 ? tiers[0].id : '');

@@ -19,6 +19,7 @@
 // without re-running them.
 
 import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import { PrismaClient } from '@prisma/client';
 
 const BASELINE = '0001_v1_baseline';
@@ -38,10 +39,14 @@ const MARKERS = [
   ['0012_data_retention', 'Event', 'dataPurgedAt'],
   ['0013_schedule', 'ScheduleSession'],
   ['0014_vendors', 'VendorApplication'],
+  ['0015_staff_permissions', 'StaffGroup'],
 ];
 
 const prisma = new PrismaClient();
-const prismaCli = (...args) => execFileSync('npx', ['prisma', ...args], { stdio: 'inherit' });
+// The CLI straight from node_modules: going through npx adds most of a second
+// to every container start just to find it.
+const PRISMA_BIN = createRequire(import.meta.url).resolve('prisma/build/index.js');
+const prismaCli = (...args) => execFileSync(process.execPath, [PRISMA_BIN, ...args], { stdio: 'inherit' });
 
 async function tableExists(name) {
   const [row] = await prisma.$queryRaw`SELECT to_regclass(${`public."${name}"`}) IS NOT NULL AS "exists"`;
@@ -56,15 +61,13 @@ async function columnExists(table, column) {
 
 async function probe() {
   try {
+    // Every start after the first lands here: deploy alone knows what's left.
+    if (await tableExists('_prisma_migrations')) return { adopted: true, hasData: true, pushed: [] };
     const pushed = [];
     for (const [migration, table, column] of MARKERS) {
       if (column ? await columnExists(table, column) : await tableExists(table)) pushed.push(migration);
     }
-    return {
-      adopted: await tableExists('_prisma_migrations'),
-      hasData: await tableExists('Event'),
-      pushed,
-    };
+    return { adopted: false, hasData: await tableExists('Event'), pushed };
   } catch (e) {
     // P1003: the database itself doesn't exist yet — `migrate deploy` creates it.
     if (e.errorCode === 'P1003' || /does not exist/.test(e.message)) return { adopted: false, hasData: false, pushed: [] };

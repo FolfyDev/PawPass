@@ -4,6 +4,20 @@
     "date": "2026-10-08",
     "current": true,
     "highlights": [
+      "Strip Integration",
+      "New attendee list view with search, filters, and export to CSV",
+      "New attendee edit popup with status change, ticket transfer, and refund buttons",
+      "New event settings page with registration options, ticket types, and sale windows",
+      "New cash page with Stripe fees and net payout, donation add-on, and merch pre-orders",
+      "New analytics dashboard with charts and tables for registrations, payments, and refunds",
+      "Updated UI",
+      "General stability and bug fixes"
+    ]
+  },
+  {
+    "version": "2.0.1",
+    "date": "2026-10-08",
+    "highlights": [
       "Optional donation add-on at checkout, with suggested amounts or a custom one",
       "Discount codes: percent or amount off, limited by tier, uses, and expiry",
       "Sale windows per ticket type, e.g. early bird until a date",

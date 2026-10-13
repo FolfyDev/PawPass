@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
-import { requireAdmin } from '../lib/auth.js';
+import { requireAdmin, can } from '../lib/auth.js';
 import { todayCounts } from '../lib/checkins.js';
 import { blockTotals } from '../lib/hotels.js';
 import { HOLDS_TABLE } from '../lib/vendors.js';
@@ -19,7 +19,8 @@ overviewRouter.get('/events/:id/overview', async (req, res) => {
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const id = event.id;
   const now = new Date();
-  const owner = req.user.role === 'OWNER';
+  // Incident counts follow the incident list: all reports, or only your own.
+  const owner = can(req, 'incidents.manage');
 
   const [regGroups, cancelRequests, arrived, today, payments, shifts, blocks, sessions, submissions, vendorGroups, tableTypes, incidents, tiersOnSale] = await Promise.all([
     prisma.registration.groupBy({ by: ['status'], where: { eventId: id }, _count: { _all: true } }),
@@ -64,7 +65,7 @@ overviewRouter.get('/events/:id/overview', async (req, res) => {
   if (!event.published && phase !== 'ended') add('warn', 'The event isn\'t published, so nobody can register yet.', 'details');
   if (!tiersOnSale && phase !== 'ended') add('bad', 'No ticket type is on sale.', 'tickets');
   if (openIncidents.HIGH) add('bad', `${openIncidents.HIGH} high-severity incident report${openIncidents.HIGH === 1 ? ' is' : 's are'} open.`, '/admin/incidents');
-  if (cancelRequests) add('warn', `${cancelRequests} cancellation request${cancelRequests === 1 ? '' : 's'} waiting on an owner.`, 'attendees');
+  if (cancelRequests) add('warn', `${cancelRequests} cancellation request${cancelRequests === 1 ? '' : 's'} waiting on a decision.`, 'attendees');
   if (regs.PENDING_PAYMENT) add('info', `${regs.PENDING_PAYMENT} registration${regs.PENDING_PAYMENT === 1 ? ' is' : 's are'} mid-checkout.`, 'attendees');
   if (event.capacity && (regs.CONFIRMED || 0) >= event.capacity * 0.9 && phase !== 'ended')
     add('info', `${regs.CONFIRMED} of ${event.capacity} spots taken.${regs.WAITLIST ? ` ${regs.WAITLIST} on the waitlist.` : ''}`, 'attendees');
@@ -75,7 +76,7 @@ overviewRouter.get('/events/:id/overview', async (req, res) => {
     }
   }
   const awaitingHotel = blocks.reduce((n, b) => n + b._count.reservations, 0);
-  if (awaitingHotel) add('info', `${awaitingHotel} hotel request${awaitingHotel === 1 ? '' : 's'} waiting on a confirmation number.`, 'hotels');
+  if (awaitingHotel) add('info', `${awaitingHotel} hotel request${awaitingHotel === 1 ? '' : 's'} waiting on a confirmation number.`, 'rooms?status=requested');
   if (thinShifts.length) add('warn', `${thinShifts.length} volunteer shift${thinShifts.length === 1 ? ' is' : 's are'} less than half full in the next week.`, 'volunteers');
   if (submissions) add('info', `${submissions} panel submission${submissions === 1 ? '' : 's'} to review.`, 'submissions');
   if (unscheduled) add('info', `${unscheduled} session${unscheduled === 1 ? '' : 's'} with no time yet.`, 'schedule');

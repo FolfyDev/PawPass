@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { env } from './env.js';
 import { prisma } from './db.js';
 import { blindIndex } from './crypto.js';
+import { WITH_GROUPS, effectivePermissions } from './permissions.js';
 
 export const COOKIE = 'pawpass_session';
 const SESSION_MS = 24 * 3600 * 1000;
@@ -116,7 +117,7 @@ export async function loadUser(req, _res, next) {
   if (token) {
     try {
       const payload = jwt.verify(token, env.jwtSecret, { algorithms: ['HS256'] });
-      const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+      const user = await prisma.user.findUnique({ where: { id: payload.sub }, include: WITH_GROUPS });
       // A token issued before the user's last logout/password-change carries
       // a stale `ver` — treat it the same as no session at all.
       req.user = user && user.tokenVersion === payload.ver ? user : null;
@@ -124,6 +125,7 @@ export async function loadUser(req, _res, next) {
       req.user = null;
     }
   }
+  req.perms = effectivePermissions(req.user);
   next();
 }
 
@@ -137,6 +139,15 @@ export const requireAdmin = (req, res, next) =>
 
 export const requireOwner = (req, res, next) =>
   req.user?.role === 'OWNER' ? next() : res.status(403).json({ error: 'Owner access only.' });
+
+/// Staff with any one of these permissions (lib/permissions.js) get through.
+/// Mount after requireAdmin; owners always pass.
+export const requirePerm = (...keys) => (req, res, next) =>
+  keys.some((k) => req.perms?.has(k))
+    ? next()
+    : res.status(403).json({ error: "You don't have permission to do that. Ask an owner if you need it." });
+
+export const can = (req, key) => Boolean(req.perms?.has(key));
 
 
 export function localDevAuthAvailable() {
