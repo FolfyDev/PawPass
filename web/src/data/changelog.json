@@ -1,15 +1,20 @@
 [
   {
-    "version": "2.1.0",
-    "date": "2026-10-08",
+    "version": "2026.2.1.0",
+    "date": "2026-10-13",
     "current": true,
     "highlights": [
-      "Strip Integration",
+      "Stripe integration",
       "New attendee list view with search, filters, and export to CSV",
       "New attendee edit popup with status change, ticket transfer, and refund buttons",
       "New event settings page with registration options, ticket types, and sale windows",
       "New cash page with Stripe fees and net payout, donation add-on, and merch pre-orders",
       "New analytics dashboard with charts and tables for registrations, payments, and refunds",
+      "Turn event features (vouchers, volunteers, hotels, schedule, vendors, merch, kiosk) on or off from the event details page",
+      "Update check in Settings, with stable and dev release channels",
+      "Version numbers now follow the release tags",
+      "Docker setup works on Windows",
+      "A Telegram bot error no longer stops the server",
       "Updated UI",
       "General stability and bug fixes"
     ]

@@ -203,7 +203,7 @@ for steps 2–3 above, pointed at the release's tag. `UPDATE_CHECK=false` in
 
 The build's version is `APP_VERSION` in
 [server/src/lib/version.js](../server/src/lib/version.js), in the tag format
-(`2026.1.0.0`). When cutting a release:
+(`2026.2.1.0`). When cutting a release:
 
 1. Set `APP_VERSION` to the tag you're about to publish and commit it.
 2. Publish the release with that exact tag, from `main` for stable or from

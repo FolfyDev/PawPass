@@ -40,6 +40,7 @@ const MARKERS = [
   ['0013_schedule', 'ScheduleSession'],
   ['0014_vendors', 'VendorApplication'],
   ['0015_staff_permissions', 'StaffGroup'],
+  ['0016_event_features', 'Event', 'disabledFeatures'],
 ];
 
 const prisma = new PrismaClient();
