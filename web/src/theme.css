@@ -232,25 +232,43 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 /* ---- admin frame ---- */
 .admin { display: grid; grid-template-columns: 210px 1fr; gap: 28px; align-items: start; }
 .admin-content { min-width: 0; }
-.side { position: sticky; top: 70px; display: grid; gap: 2px; }
-.side a { display: block; padding: 9px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }
+.side { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow-y: auto; }
+.side-links { display: grid; gap: 2px; }
+.side-group { display: grid; gap: 2px; margin-bottom: 10px; align-content: start; }
+.side-group .eyebrow { padding: 6px 12px 2px; margin: 0; }
+.side a { display: block; padding: 8px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }
+.side a:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .side a[aria-current='page'] { background: var(--ink); color: var(--paper); }
-/* Below the breakpoint the sidebar sits above the content instead of beside
-   it, so a tall sticky column of links would either eat the screen or hide
-   content as you scroll — turn it into a wrapped row of pills instead,
-   the same pattern already used for the per-event .tabbar below. */
-@media (max-width: 860px) {
-  .admin { grid-template-columns: 1fr; }
-  .side { position: static; display: flex; flex-wrap: wrap; gap: 6px; }
-  .side .eyebrow { display: none; }
-  .side a { padding: 7px 12px; }
+.side .side-back { font-size: 13px; color: var(--ink-2); }
+.side-event {
+  margin: 4px 12px 12px; font: 700 17px/1.25 var(--display); color: var(--ink);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
 }
+/* Inside an event, the instance-wide links stay reachable but step back. */
+.side-quiet { padding-top: 10px; border-top: 1px solid var(--rule); }
+.side-quiet a { padding: 6px 12px; font-size: 13px; }
+.side-toggle { display: none; }
 
-/* ---- per-event sub-nav ---- */
-.tabbar { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; flex-wrap: wrap; }
-.tabbar a { padding: 7px 14px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 600; }
-.tabbar a:hover { background: var(--paper); }
-.tabbar a[aria-current='page'] { background: var(--ink); color: var(--paper); }
+/* Below the breakpoint the sidebar sits above the content. A wall of
+   wrapped links pushed every page down, so it folds into one button that
+   names where you are and opens the full menu. */
+@media (max-width: 860px) {
+  .admin { grid-template-columns: 1fr; gap: 16px; }
+  .side { position: static; max-height: none; overflow: visible; }
+  .side-toggle {
+    display: flex; gap: 10px; align-items: center; width: 100%; padding: 11px 14px; border-radius: 10px;
+    border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: 600 14px var(--body); cursor: pointer; text-align: left;
+  }
+  .side-toggle > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side:not(.open) .side-links { display: none; }
+  .side.open .side-links { margin-top: 8px; padding: 10px; border: 1px solid var(--rule); border-radius: 12px; background: var(--card); }
+  .side.open .side-links { grid-template-columns: 1fr 1fr; column-gap: 8px; }
+  .side.open .side-back, .side.open .side-event { grid-column: 1 / -1; }
+  /* Overview gets its own row; the instance links share one full row in two columns. */
+  .side.open .side-group:first-of-type, .side.open .side-quiet { grid-column: 1 / -1; }
+  .side.open .side-quiet { grid-template-columns: 1fr 1fr; }
+  .side.open .side-quiet .eyebrow { grid-column: 1 / -1; }
+}
 
 /* ---- scanner ---- */
 .scanner { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 1; max-width: 460px; }
@@ -405,9 +423,11 @@ tr.refunded-row td .mono { text-decoration: line-through; text-decoration-color:
 .link-btn { background: none; border: 0; padding: 0; font: 600 13px/1.4 var(--body); color: var(--platform); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- hotel block pickup meter ---- */
-.pickup-meter { position: relative; height: 8px; border-radius: 99px; background: var(--rule); overflow: hidden; }
-.pickup-meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--go); }
-.pickup-meter.short > span { background: var(--signal); }
+/* The track is a lighter step of the fill's own hue, so the state reads
+   across the whole bar, not just the filled part. */
+.pickup-meter { --meter: var(--go); position: relative; height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--meter) 18%, var(--card)); overflow: hidden; }
+.pickup-meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--meter); }
+.pickup-meter.short { --meter: var(--signal); }
 /* The contract's pickup target, as a tick on the track. */
 .pickup-meter > i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); opacity: .55; }
 
@@ -439,3 +459,20 @@ tr.clickable { cursor: pointer; }
 }
 .star:hover { border-color: var(--signal); }
 .star.on { background: var(--signal); border-color: var(--signal); color: #fff; }
+
+/* ---- event overview ---- */
+/* A share of a limit: the fill carries the state, the track is a lighter
+   step of the same hue (same rule as .pickup-meter). */
+.meter { --meter: var(--go); position: relative; height: 8px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--meter) 18%, var(--card)); }
+.meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--meter); }
+.meter.signal { --meter: var(--signal); }
+.meter.stop { --meter: var(--stop); }
+.overview-stats .stat-tile { align-content: start; }
+a.stat-link, a.overview-row { color: inherit; text-decoration: none; transition: border-color .15s; }
+a.stat-link:hover, a.overview-row:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--rule)); }
+.attention { list-style: none; margin: 0; padding: 0; display: grid; }
+.attention li { display: flex; gap: 10px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--rule); }
+.attention li:first-child { border-top: 0; padding-top: 0; }
+.attention li .pill { flex: 0 0 auto; }
+.attention a { color: var(--ink); text-decoration: none; }
+.attention a:hover { text-decoration: underline; }

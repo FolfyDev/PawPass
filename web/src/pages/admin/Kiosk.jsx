@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, PaymentButtons, fmtMoney, fieldsForTier } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 import { printBadge } from '../../lib/print.js';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
 
@@ -92,7 +91,6 @@ export default function Kiosk() {
           <h1 style={{ margin: 0 }}>Kiosk</h1>
         </div>
       </div>
-      <EventTabs id={id} />
 
       <div className="card" style={{ maxWidth: 560 }}>
         {result ? (

@@ -11,6 +11,7 @@ No payments, no ticket pricing, no Stripe keys — every ticket is free.
 
 - **Attendee side** — browse events, register, accept the terms, keep the ticket in your wallet app
 - **Telegram bot** — `/register` walks through the whole thing and finishes with `/accept`
+- **Event overview** — one page per event with the headline numbers and a "needs attention" list (panels to review, fees due, hotel blocks short of target, thin volunteer shifts…), with the event's sections grouped in the sidebar
 - **Admin side** — schedule events, scan to check in, design badges, print, mass email
 - **Schedule & panel submissions** — rooms and sessions with double-booking checks, a public schedule attendees can star and export to their calendar, and a submission form with a review queue that feeds accepted panels onto the schedule
 - **Dealers' den & artist alley** — table types with fees and limits, applications with portfolios, a review queue, table numbers, and fees paid online through Stripe or recorded in person

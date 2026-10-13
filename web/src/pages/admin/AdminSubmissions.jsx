@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Empty, Field, Pill } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 import Modal from '../../components/Modal.jsx';
 
 const FILTERS = [['SUBMITTED', 'To review'], ['ACCEPTED', 'Accepted'], ['DECLINED', 'Declined'], ['WITHDRAWN', 'Withdrawn'], ['', 'All']];
@@ -50,7 +49,6 @@ export default function AdminSubmissions() {
           ? <Link className="btn" to={`/e/${event.slug}/submit`} target="_blank">Submission form ↗</Link>
           : <span className="small muted">Submissions are closed. Owners open them on the Schedule tab.</span>}
       </div>
-      <EventTabs id={id} />
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 
       <div className="seg" style={{ marginBottom: 16 }}>

@@ -18,7 +18,7 @@ export default function Events() {
     if (!title) return;
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     const e = await api.post('/api/admin/events', { title, slug });
-    nav(`/admin/events/${e.id}`);
+    nav(`/admin/events/${e.id}/details`);
   };
 
   return (

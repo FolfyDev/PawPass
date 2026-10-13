@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { Empty } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 
 export default function Vouchers() {
   const { id } = useParams();
@@ -48,7 +47,6 @@ export default function Vouchers() {
         </div>
         <a className="btn" href={`${api.base}/api/admin/events/${id}/vouchers.csv`}>Export CSV</a>
       </div>
-      <EventTabs id={id} />
       <p className="small muted" style={{ marginTop: -8, marginBottom: 16 }}>
         Free entry with a guaranteed spot. The badge tier prints on their badge.
       </p>

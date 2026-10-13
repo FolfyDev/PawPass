@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
-import EventTabs from '../../components/EventTabs.jsx';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 const minus = (n) => (n ? `−${money(n)}` : money(0));
@@ -76,7 +75,6 @@ export default function Reconciliation() {
         </div>
         <a className="btn" href={`${api.base}/api/admin/events/${id}/reconciliation.csv`}>Export CSV</a>
       </div>
-      <EventTabs id={id} />
 
       <div className="card row" style={{ marginBottom: 20, gap: 40, alignItems: 'flex-end' }}>
         <Stat label="Grand total" value={money(data.grandTotal)} big />

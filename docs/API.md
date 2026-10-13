@@ -101,6 +101,7 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/admin/checkin/:code/undo` | Takes back the ticket's latest scan |
 | GET | `/api/admin/events/:id/checkin-manifest` | The offline scanner's copy: each ticket's status, day pass and scans; QR secrets only as SHA-256 hashes |
 | POST | `/api/admin/events/:id/checkin/sync` | `{ scans: [{ clientId, code, direction, at, force }] }` — offline scans, recorded at their own time and at most once per `clientId`; ones the rules now refuse are recorded and `flagged` |
+| GET | `/api/admin/events/:id/overview` | Headline numbers from every part of the event, and an `attention` list of to-dos (`level`, `text`, `tab`) |
 | GET | `/api/admin/events/:id/attendance` | `today` (`inside`, `entered`, `limit`) and arrivals per day |
 | GET | `/api/admin/events/:id/arrivals` | `?since=` — each ticket's first entry today, numbered, for the lobby display |
 | GET | `/api/admin/users` | No `q` returns staff only |

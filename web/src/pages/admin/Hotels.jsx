@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Empty, Field, Pill, fmtMoney, fmtNight, addDays } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
 
@@ -427,7 +426,6 @@ export default function Hotels() {
         </div>
         {isOwner && <button className="btn primary" onClick={() => open({ kind: 'hotel', draft: BLANK_HOTEL })}>Add hotel</button>}
       </div>
-      <EventTabs id={id} />
 
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 

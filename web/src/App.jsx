@@ -22,6 +22,7 @@ const VendorApply = lazy(() => import('./pages/VendorApply.jsx'));
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout.jsx'));
 const AdminEvents = lazy(() => import('./pages/admin/Events.jsx'));
 const AdminEventEdit = lazy(() => import('./pages/admin/EventEdit.jsx'));
+const AdminOverview = lazy(() => import('./pages/admin/Overview.jsx'));
 const AdminAttendees = lazy(() => import('./pages/admin/Attendees.jsx'));
 const AdminKiosk = lazy(() => import('./pages/admin/Kiosk.jsx'));
 const AdminTiers = lazy(() => import('./pages/admin/Tiers.jsx'));
@@ -101,7 +102,8 @@ export default function App() {
             <Route path="/admin/scan/:eventId/display" element={isStaff ? <AdminCheckInDisplay /> : <Navigate to="/login" />} />
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<AdminEvents />} />
-              <Route path="events/:id" element={<AdminEventEdit />} />
+              <Route path="events/:id" element={<AdminOverview />} />
+              <Route path="events/:id/details" element={<AdminEventEdit />} />
               <Route path="events/:id/tickets" element={<AdminTiers />} />
               <Route path="events/:id/attendees" element={<AdminAttendees />} />
               <Route path="events/:id/kiosk" element={<AdminKiosk />} />

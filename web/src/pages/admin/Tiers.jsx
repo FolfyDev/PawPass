@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, Pill, fmtMoney } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 import { localInZone } from '../../lib/tz.js';
 
 const BLANK = { name: '', price: '', currency: 'usd', capacity: '', description: '', salesStartAt: '', salesEndAt: '', validDays: [] };
@@ -150,7 +149,6 @@ export default function Tiers() {
         </div>
         {isOwner && stripe && <button className="btn" disabled={busy === 'sync'} onClick={resync}>{busy === 'sync' ? 'Syncing…' : 'Resync with Stripe'}</button>}
       </div>
-      <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
       {!stripe && <p className="small muted" style={{ marginTop: 0 }}>Stripe isn't set up, so paid tickets are paid at the door.</p>}

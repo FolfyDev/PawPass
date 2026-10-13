@@ -6,7 +6,6 @@ import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } fro
 import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate, fmtMoney, fieldsForTier } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 
 const PAGE_SIZES = [10, 20, 50, 100];
 const BULK_SORT_KEYS = [['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'], ['code', 'Code']];
@@ -332,7 +331,6 @@ export default function Attendees() {
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
       </div>
-      <EventTabs id={id} />
 
       <div className="row" style={{ marginBottom: 14 }}>
         <input placeholder="Search name, fursona, code or email" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 340 }} />

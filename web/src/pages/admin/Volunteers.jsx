@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Empty, Field, Pill, fmtTimeRange, fmtHours } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
 
@@ -171,7 +170,6 @@ export default function Volunteers() {
         </div>
         <a className="btn" href={`${api.base}/api/admin/events/${id}/volunteers.csv`}>Export CSV</a>
       </div>
-      <EventTabs id={id} />
 
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 

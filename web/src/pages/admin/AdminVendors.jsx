@@ -3,7 +3,6 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Empty, Field, fmtMoney, PaymentButtons } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 import Modal from '../../components/Modal.jsx';
 import { localInZone } from '../../lib/tz.js';
 import { AREA_LABEL, VendorStatus } from '../../components/VendorBits.jsx';
@@ -205,7 +204,6 @@ export default function AdminVendors() {
           <a className="btn" href={`${api.base}/api/admin/events/${id}/vendors.csv`}>Export CSV</a>
         </div>
       </div>
-      <EventTabs id={id} />
       {msg && <p className="note bad" style={{ marginBottom: 14 }}>{msg}</p>}
 
       <div className="grid-2" style={{ alignItems: 'start', marginBottom: 20 }}>

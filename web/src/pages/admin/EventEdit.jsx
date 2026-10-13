@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
+import { forgetEventTitle } from '../../lib/eventTitle.js';
 import { localInZone } from '../../lib/tz.js';
 
 export default function EventEdit() {
@@ -34,7 +34,7 @@ export default function EventEdit() {
   const fields = e.customFields || [];
 
   const save = async () => {
-    try { await api.patch(`/api/admin/events/${id}`, e); setMsg('Saved.'); setMsgOk(true); setTimeout(() => setMsg(''), 2000); }
+    try { await api.patch(`/api/admin/events/${id}`, e); forgetEventTitle(id); setMsg('Saved.'); setMsgOk(true); setTimeout(() => setMsg(''), 2000); }
     catch (err) { setMsg(err.message); setMsgOk(false); }
   };
 
@@ -72,7 +72,6 @@ export default function EventEdit() {
           {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
         </div>
       </div>
-      <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
       {e.dataPurgedAt && (
         <p className="note" style={{ marginBottom: 16 }}>
