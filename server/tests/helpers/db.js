@@ -31,6 +31,9 @@ assertTestDatabase();
 const CLEAR_ORDER = [
   'auditLog',
   'ban',
+  'incidentNote',
+  'incidentPerson',
+  'incident',
   'sale',
   'donation',
   'stripeEvent',

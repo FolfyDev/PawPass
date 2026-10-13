@@ -417,3 +417,6 @@ tr.refunded-row td .mono { text-decoration: line-through; text-decoration-color:
 .door-stats > div { display: grid; gap: 2px; }
 .door-stats .eyebrow { margin: 0; }
 .door-stats strong { font: 600 26px/1.1 var(--display); }
+
+/* Rows that open something when clicked (incident list). */
+tr.clickable { cursor: pointer; }

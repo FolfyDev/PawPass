@@ -106,6 +106,22 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET/PUT | `/api/admin/settings` | |
 | GET | `/api/admin/audit` | |
 
+## Incidents — requires ADMIN or OWNER
+
+Owners see every report; an admin only sees reports they filed (any other ID is a 404).
+Details, outcome, people, and notes are encrypted at rest.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/admin/incidents` | `?eventId=` `?status=OPEN\|RESOLVED` `?q=` (searches summaries only) |
+| POST | `/api/admin/incidents` | `{ eventId, occurredAt, location, category, severity, summary, details, people: [{ role, registrationCode, name, contact }] }` |
+| GET/PATCH | `/api/admin/incidents/:id` | Only owners can set `status` or `resolution`; the filer can edit while it's open |
+| DELETE | `/api/admin/incidents/:id` | **Owner only.** Bans made from it stay |
+| POST | `/api/admin/incidents/:id/notes` | `{ body }` |
+| POST | `/api/admin/incidents/:id/people` | `{ role: SUBJECT \| REPORTER \| WITNESS, registrationCode, name, contact }` |
+| DELETE | `/api/admin/incidents/:id/people/:personId` | **Owner only** |
+| POST | `/api/admin/incidents/:id/people/:personId/ban` | **Owner only.** `{ reason }` — bans by their ticket's identity, linked to the report |
+
 ## Badges — requires ADMIN or OWNER
 
 | Method | Path | Notes |

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
@@ -76,7 +77,10 @@ export default function Bans() {
                       ? <>{b.telegramUsername ? `@${b.telegramUsername}` : ''}{b.telegramId ? <><br />id {b.telegramId}</> : ''}</>
                       : '-'}
                   </td>
-                  <td className="small muted">{b.reason || '-'}</td>
+                  <td className="small muted">
+                    {b.reason || '-'}
+                    {b.incidentId && <> · <Link to={`/admin/incidents/${b.incidentId}`}>Incident report</Link></>}
+                  </td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>
                     {new Date(b.createdAt).toLocaleDateString()}{b.createdBy ? ` - ${b.createdBy.displayName}` : ''}
                   </td>

@@ -65,6 +65,25 @@ enum VolunteerAttendance {
   NO_SHOW
 }
 
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum IncidentStatus {
+  OPEN
+  RESOLVED
+}
+
+enum IncidentRole {
+  /// Who the report is about.
+  SUBJECT
+  /// Who brought it to staff.
+  REPORTER
+  WITNESS
+}
+
 enum ScanDirection {
   ENTRY
   EXIT
@@ -134,6 +153,8 @@ model User {
   volunteerMarks   VolunteerSignup[] @relation("VolunteerAttendanceMarkedBy")
   roomReservations RoomReservation[]
   scansMade        CheckIn[]      @relation("ScansMade")
+  incidentsFiled   Incident[]     @relation("IncidentsFiled")
+  incidentNotes    IncidentNote[]
 }
 
 model Event {
@@ -203,6 +224,7 @@ model Event {
   volunteerShifts  VolunteerShift[]
   hotels           Hotel[]
   checkIns         CheckIn[]
+  incidents        Incident[]
 }
 
 model Registration {
@@ -287,6 +309,7 @@ model Registration {
   printCount    Int                @default(0)
   createdAt     DateTime           @default(now())
   checkIns      CheckIn[]
+  incidentRoles IncidentPerson[]
 
   @@unique([eventId, userId])
   @@index([eventId, status])
@@ -577,6 +600,73 @@ model VolunteerSignup {
   @@index([userId])
 }
 
+/// A confidential code-of-conduct / safety report. Any staff member can
+/// file one; only owners see every report (admins see the ones they filed).
+/// Free text and the people involved are encrypted at rest (lib/db.js).
+model Incident {
+  id           String           @id @default(cuid())
+  eventId      String?
+  event        Event?           @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  occurredAt   DateTime
+  location     String?
+  /// harassment | safety | medical | property | conduct | other
+  category     String           @default("conduct")
+  severity     IncidentSeverity @default(MEDIUM)
+  status       IncidentStatus   @default(OPEN)
+  /// Short, plain title for the list, e.g. "Unwanted contact in dealers den".
+  /// Kept unencrypted so the list can be searched; details go in `details`.
+  summary      String
+  /// Encrypted.
+  details      String           @default("")
+  /// Encrypted. What was decided and done.
+  resolution   String           @default("")
+  resolvedAt   DateTime?
+  filedById    String?
+  filedBy      User?            @relation("IncidentsFiled", fields: [filedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  people       IncidentPerson[]
+  notes        IncidentNote[]
+  bans         Ban[]
+
+  @@index([eventId, status])
+  @@index([filedById])
+}
+
+/// Someone involved in an incident: linked to their ticket when there is
+/// one, or just a name and contact as given.
+model IncidentPerson {
+  id             String        @id @default(cuid())
+  incidentId     String
+  incident       Incident      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  role           IncidentRole  @default(SUBJECT)
+  registrationId String?
+  registration   Registration? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  /// Encrypted, as are contact and notes.
+  name           String        @default("")
+  contact        String        @default("")
+  notes          String        @default("")
+  createdAt      DateTime      @default(now())
+
+  @@index([incidentId])
+  @@index([registrationId])
+}
+
+/// Follow-ups on an incident, append-only, in order.
+model IncidentNote {
+  id         String   @id @default(cuid())
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  authorId   String?
+  author     User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Encrypted.
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([incidentId])
+}
+
 /// One scan at the door: an entry or exit on a given day. A ticket gets in
 /// once per day (again after an exit scan); occupancy is everyone whose
 /// latest scan today was an entry.
@@ -781,6 +871,9 @@ model Ban {
   createdById      String?
   createdBy        User?    @relation("BansCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt        DateTime @default(now())
+  /// The incident report this ban came out of, if any.
+  incidentId       String?
+  incident         Incident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
 
   @@index([legalName])
   @@index([email])

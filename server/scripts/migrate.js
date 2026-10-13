@@ -33,6 +33,7 @@ const MARKERS = [
   ['0007_volunteers', 'VolunteerShift'],
   ['0008_hotels', 'Hotel'],
   ['0009_checkin_days', 'CheckIn'],
+  ['0010_incidents', 'Incident'],
 ];
 
 const prisma = new PrismaClient();

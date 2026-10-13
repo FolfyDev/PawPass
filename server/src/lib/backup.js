@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 /// Version of the data.json inside a backup zip. Bump it alongside any schema
 /// migration that changes the shape of a backed-up model, and add a step to
 /// UPGRADES below so older backups still restore.
-export const BACKUP_VERSION = 6;
+export const BACKUP_VERSION = 7;
 
 /// Each step converts a backup from version N to N + 1. They mirror the SQL
 /// migrations in prisma/migrations — a restore of an old backup should end up
@@ -81,6 +81,10 @@ const UPGRADES = {
       direction: 'ENTRY', at: r.checkedInAt, scannedById: r.checkedInById || null, createdAt: r.checkedInAt,
     }));
     return { checkIn, ...data };
+  },
+  /// v6 -> v7 (0010_incidents): only new tables and a nullable column.
+  6(data) {
+    return { incident: [], incidentPerson: [], incidentNote: [], ...data };
   },
 };
 

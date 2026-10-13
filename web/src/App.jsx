@@ -37,6 +37,8 @@ const AdminBans = lazy(() => import('./pages/admin/Bans.jsx'));
 const AdminAuditLog = lazy(() => import('./pages/admin/AuditLog.jsx'));
 const AdminSettings = lazy(() => import('./pages/admin/Settings.jsx'));
 const AdminBackup = lazy(() => import('./pages/admin/Backup.jsx'));
+const AdminIncidents = lazy(() => import('./pages/admin/Incidents.jsx'));
+const AdminIncidentDetail = lazy(() => import('./pages/admin/IncidentDetail.jsx'));
 const AdminAnalytics = lazy(() => import('./pages/admin/Analytics.jsx'));
 
 export default function App() {
@@ -105,6 +107,8 @@ export default function App() {
               <Route path="email" element={<AdminEmail />} />
               <Route path="staff" element={<AdminStaff />} />
               <Route path="bans" element={<AdminBans />} />
+              <Route path="incidents" element={<AdminIncidents />} />
+              <Route path="incidents/:id" element={<AdminIncidentDetail />} />
               <Route path="audit" element={<AdminAuditLog />} />
               <Route path="analytics" element={<AdminAnalytics />} />
               <Route path="settings" element={<AdminSettings />} />

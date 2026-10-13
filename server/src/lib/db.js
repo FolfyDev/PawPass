@@ -16,6 +16,18 @@ const FIELD_CONFIG = {
     { field: 'guestName' },
     { field: 'roommates' },
   ],
+  incident: [
+    { field: 'details' },
+    { field: 'resolution' },
+  ],
+  incidentPerson: [
+    { field: 'name' },
+    { field: 'contact' },
+    { field: 'notes' },
+  ],
+  incidentNote: [
+    { field: 'body' },
+  ],
 };
 
 const RELATION_TO_MODEL = {
@@ -36,6 +48,14 @@ const RELATION_TO_MODEL = {
   blocks: 'roomBlock',
   block: 'roomBlock',
   reservations: 'roomReservation',
+  // Incidents: incident -> people (-> registration) / notes. IncidentPerson
+  // also has a plain `notes` column; it's decrypted as a field before this
+  // relation pass sees it, and a string is left alone here.
+  people: 'incidentPerson',
+  notes: 'incidentNote',
+  incident: 'incident',
+  author: 'user',
+  filedBy: 'user',
 };
 
 function encryptData(model, data) {
