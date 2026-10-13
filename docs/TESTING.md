@@ -36,20 +36,12 @@ changed them from the defaults.
 
 ## What a clean run looks like
 
-33 tests, and as of this writing **5 pre-existing failures that are not
-regressions** — don't chase these unless you're specifically fixing them:
+Every test passes. The suite pins its own settings in
+[tests/setup-env.js](../server/tests/setup-env.js) (local URLs; no SMTP,
+Telegram, Stripe, or Turnstile), so your own `.env` can't change the result.
+That file is also why a test run never emails or messages anyone.
 
-| Test | File | Why it fails |
-|---|---|---|
-| `admin can list, create, and delete bans` | [bans.test.js:69](../server/tests/bans.test.js#L69) | Test creates an `ADMIN`-role staffer, but [admin.js:544](../server/src/routes/admin.js#L544) requires `requireOwner`. Route and test disagree on who should manage bans — needs a product decision, not a code fix. |
-| `rejects a ban with no identifying field` | [bans.test.js:88](../server/tests/bans.test.js#L88) | Same cause as above. |
-| `requests and redeems an email sign-in code` | [auth.test.js:95](../server/tests/auth.test.js#L95) | `loginLimiter`'s in-memory counter isn't reset between tests. Earlier tests in the same file exhaust its 10-request/15-min budget, so later ones get `429` instead of their expected status. |
-| `requesting an email code for an unknown address does not reveal that` | [auth.test.js:111](../server/tests/auth.test.js#L111) | Same cause. |
-| `rejects an email code for the wrong address` | [auth.test.js:118](../server/tests/auth.test.js#L118) | Same cause. |
-
-If you see a **different** set of failures, or more than 5, something you
-changed broke something — bisect from there. If you see fewer, someone fixed
-one of the above (update this table).
+If a test fails, something you changed broke it.
 
 ## Manual smoke test (nothing here is covered by the automated suite)
 
