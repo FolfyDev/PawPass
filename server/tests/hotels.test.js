@@ -17,7 +17,7 @@ function confirmTicket(event, user, overrides = {}) {
   regSeq += 1;
   return prisma.registration.create({
     data: {
-      eventId: event.id, userId: user.id, code: `HTL-${regSeq}${Date.now()}`, secret: `hotel-secret-${regSeq}-${Date.now()}`,
+      eventId: event.id, userId: user.id, code: `HTL-${regSeq}-${Date.now()}`, secret: `hotel-secret-${regSeq}-${Date.now()}`,
       legalName: 'Robin Guest', fursonaName: 'Robin', status: 'CONFIRMED', ...overrides,
     },
   });

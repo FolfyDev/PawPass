@@ -14,11 +14,12 @@ const HOUR = 3600_000;
 
 let seq = 0;
 async function ticket(event, overrides = {}) {
-  seq += 1;
+  // Taken before the await: these run concurrently in some tests.
+  const n = ++seq;
   const user = await createUser();
   return prisma.registration.create({
     data: {
-      eventId: event.id, userId: user.id, code: `CHK-${seq}${Date.now()}`, secret: `chk-secret-${seq}-${Date.now()}`,
+      eventId: event.id, userId: user.id, code: `CHK-${n}-${Date.now()}`, secret: `chk-secret-${n}-${Date.now()}`,
       legalName: 'Door Person', fursonaName: 'Doorie', status: 'CONFIRMED', ticketTierId: event.ticketTiers[0]?.id, ...overrides,
     },
   });
