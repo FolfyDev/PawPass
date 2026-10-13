@@ -19,12 +19,15 @@ const RELATION_TO_MODEL = {
   checkedInBy: 'user',
   createdBy: 'user',
   processedBy: 'user',
+  markedBy: 'user',
   registration: 'registration',
   registrations: 'registration',
   redemptions: 'registration',
   paidBy: 'registration',
   boughtFor: 'registration',
   merchOrder: 'merchOrder',
+  // Volunteer roster: shift -> signups -> user.
+  signups: 'volunteerSignup',
 };
 
 function encryptData(model, data) {

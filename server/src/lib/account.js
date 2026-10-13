@@ -20,6 +20,11 @@ export async function exportAccount(userId) {
     include: { event: true, items: true, payments: true },
     orderBy: { createdAt: 'asc' },
   });
+  const shifts = await prisma.volunteerSignup.findMany({
+    where: { userId },
+    include: { shift: { include: { event: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
   const pay = (p) => ({
     method: p.method, status: p.status, amount: p.amountCents / 100, refunded: p.amountRefundedCents / 100,
     currency: p.currency, paidAt: p.paidAt, stripeReference: p.stripePaymentIntentId,
@@ -40,6 +45,10 @@ export async function exportAccount(userId) {
       event: o.event.title, status: o.status, pickedUpAt: o.pickedUpAt, orderedAt: o.createdAt,
       items: o.items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.unitPriceCents / 100 })),
       payments: o.payments.map(pay),
+    })),
+    volunteerShifts: shifts.map((s) => ({
+      event: s.shift.event.title, role: s.shift.role, startsAt: s.shift.startsAt, endsAt: s.shift.endsAt,
+      location: s.shift.location, note: s.note, attendance: s.attendance, signedUpAt: s.createdAt,
     })),
   };
 }
@@ -69,6 +78,8 @@ export async function deleteAccount(userId) {
     where: { userId, OR: [{ status: 'PENDING' }, { status: 'PAID', pickedUpAt: null, event: { endsAt: { gt: now } } }] },
   });
   if (orders) throw new AccountError('You have a pre-order waiting. Pick it up or ask the organizers to refund it first.');
+  const shifts = await prisma.volunteerSignup.count({ where: { userId, shift: { endsAt: { gt: now } } } });
+  if (shifts) throw new AccountError(`Drop your volunteer shift${shifts === 1 ? '' : 's'} first, so the organizers know to find someone else.`);
 
   await prisma.$transaction(async (tx) => {
     for (const reg of await tx.registration.findMany({ where: { userId }, select: { id: true } })) {
@@ -77,6 +88,9 @@ export async function deleteAccount(userId) {
         data: { legalName: 'Deleted user', fursonaName: '', email: null, answers: {}, cancelRequestNote: null },
       });
     }
+    // Past shifts stay for the organizers' hour counts; the note is the only
+    // free text on them.
+    await tx.volunteerSignup.updateMany({ where: { userId }, data: { note: null } });
     if (user.telegramId) {
       await tx.loginCode.deleteMany({ where: { telegramId: user.telegramId } });
       await tx.botSession.deleteMany({ where: { telegramId: user.telegramId } });

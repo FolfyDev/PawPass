@@ -11,6 +11,7 @@ const TABS = [
   ['merch', 'Merch'],
   ['reconciliation', 'Cash'],
   ['vouchers', 'Vouchers'],
+  ['volunteers', 'Volunteers'],
 ];
 
 export default function EventTabs({ id }) {

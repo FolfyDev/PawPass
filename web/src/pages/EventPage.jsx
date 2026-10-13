@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown, fieldsForTier } from '../components/Bits.jsx';
+import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown, fieldsForTier, fmtTimeRange } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import Turnstile from '../components/Turnstile.jsx';
@@ -75,28 +75,35 @@ export default function EventPage() {
   const [captchaToken, setCaptchaToken] = useState('');
   const [going, setGoing] = useState(null);
   const [merch, setMerch] = useState(null);
-
-  const load = () => api.get(`/api/events/${slug}`).then((e) => {
-    setEvent(e);
-    setForm((f) => ({
-      ...f,
-      legalName: e.registration?.legalName || user?.legalName || '',
-      fursonaName: e.registration?.fursonaName || user?.fursonaName || '',
-      email: e.registration?.email || user?.email || '',
-      // Preselect when there's nothing to choose between.
-      ticketTierId: f.ticketTierId || (e.tiers?.filter(buyable).length === 1 ? e.tiers.find(buyable).id : ''),
-    }));
-  }).catch((err) => setError(err.message));
-
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [slug, user]);
+  const [volunteer, setVolunteer] = useState(null);
+  // The shift being signed up for, in the confirm popup: { shift, note }.
+  const [joining, setJoining] = useState(null);
+  const [volunteerMsg, setVolunteerMsg] = useState('');
+  const loadVolunteer = () => api.get(`/api/events/${slug}/volunteer`).then(setVolunteer).catch(() => setVolunteer(null));
   useEffect(() => {
-    if (!user) { setGoing(null); return; }
-    api.get(`/api/events/${slug}/rsvps`).then(setGoing).catch(() => setGoing([]));
-  }, [slug, user]);
-  useEffect(() => {
-    if (!user) { setMerch(null); return; }
-    api.get(`/api/events/${slug}/merch`).then(setMerch).catch(() => setMerch([]));
-  }, [slug, user]);
+    if (event?.volunteers) loadVolunteer(); else setVolunteer(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, user, event?.volunteers]);
+
+  const joinShift = async () => {
+    setVolunteerMsg('');
+    setBusy(true);
+    try {
+      await api.post(`/api/events/${slug}/volunteer/${joining.shift.id}`, { note: joining.note });
+      setJoining(null);
+      setVolunteerMsg(`You're on the ${joining.shift.role} shift. Thank you!`);
+      loadVolunteer();
+    } catch (e) { setVolunteerMsg(e.message); setJoining(null); }
+    finally { setBusy(false); }
+  };
+
+  const dropShift = async (shift) => {
+    if (!confirm(`Drop your ${shift.role} shift? Your spot opens up for someone else.`)) return;
+    setVolunteerMsg('');
+    try { await api.del(`/api/my/volunteer-shifts/${shift.mine.id}`); loadVolunteer(); }
+    catch (e) { setVolunteerMsg(e.message); }
+  };
+
   // Back from Stripe's "cancel" link.
   useEffect(() => {
     if (params.get('payment') === 'cancelled') {
@@ -395,6 +402,54 @@ export default function EventPage() {
             </div>
           )}
         </section>
+      )}
+
+      {volunteer && (volunteer.shifts.length > 0 || volunteerMsg) && (
+        <section style={{ marginTop: 28 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Volunteer</p>
+          <div className="card stack">
+            {volunteer.info && <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{volunteer.info}</p>}
+            {volunteerMsg && <p className="note" style={{ margin: 0 }}>{volunteerMsg}</p>}
+            {!user && <p className="small muted" style={{ margin: 0 }}><Link to="/login">Sign in</Link> to take a shift.</p>}
+            <ul className="tier-list">
+              {volunteer.shifts.map((s) => (
+                <li key={s.id}>
+                  <div>
+                    <strong>{s.role}</strong>
+                    <p className="small muted" style={{ margin: '2px 0 0' }}>
+                      {fmtTimeRange(s.startsAt, s.endsAt, event.timezone)}{s.location ? ` · ${s.location}` : ''}
+                    </p>
+                    {s.description && <p className="small muted" style={{ margin: '2px 0 0', whiteSpace: 'pre-wrap' }}>{s.description}</p>}
+                  </div>
+                  <div className="stack" style={{ justifyItems: 'end', gap: 6 }}>
+                    {s.mine ? <Pill tone="go">You're on this shift</Pill>
+                      : s.remaining === 0 ? <Pill tone="stop">Full</Pill>
+                      : <span className="small muted">{s.remaining} of {s.slots} open</span>}
+                    {user && (s.mine
+                      ? <button className="btn ghost sm" onClick={() => dropShift(s)}>Drop shift</button>
+                      : s.remaining > 0 && <button className="btn sm" onClick={() => setJoining({ shift: s, note: '' })}>Sign up</button>)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
+
+      {joining && (
+        <Modal title={`Volunteer · ${joining.shift.role}`} onClose={() => setJoining(null)} footer={<>
+          <button className="btn ghost" disabled={busy} onClick={() => setJoining(null)}>Cancel</button>
+          <button className="btn signal" disabled={busy} data-busy={busy ? 'true' : undefined} onClick={joinShift}>{busy ? 'Signing up…' : 'Sign me up'}</button>
+        </>}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            {fmtTimeRange(joining.shift.startsAt, joining.shift.endsAt, event.timezone)}{joining.shift.location ? ` · ${joining.shift.location}` : ''}
+          </p>
+          <Field label="Anything the organizers should know?" help="Optional">
+            <textarea style={{ minHeight: 70 }} maxLength={500} value={joining.note} placeholder="e.g. I can only stay until 11:30"
+              onChange={(e) => setJoining({ ...joining, note: e.target.value })} />
+          </Field>
+          <p className="small muted" style={{ marginBottom: 0 }}>The organizers will see your name and contact details so they can reach you about the shift.</p>
+        </Modal>
       )}
 
       {step && (

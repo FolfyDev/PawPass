@@ -12,6 +12,8 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/events/:slug/register` | `{ legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, friends: [{ name, contact }], acceptedTos }`. A paid tier with Stripe configured returns `status: PENDING_PAYMENT` and a `checkoutUrl` to redirect to |
 | POST | `/api/events/:slug/discount` | `{ code, ticketTierId }` — preview the discounted price without using the code |
 | POST | `/api/events/:slug/merch/orders` | Signed in, confirmed attendee. `{ items: [{ itemId, quantity }] }` → `checkoutUrl` |
+| GET | `/api/events/:slug/volunteer` | Volunteer `info` and upcoming `shifts` with open slots (counts only). 404 unless the event has volunteering on |
+| POST | `/api/events/:slug/volunteer/:shiftId` | Signed in. `{ note }`. Refuses full, started, and overlapping shifts |
 | POST | `/api/stripe/webhook` | Stripe only — signature-verified against `STRIPE_WEBHOOK_SECRET` |
 | GET | `/t/:secret` | The URL inside every QR — human-readable landing page |
 
@@ -42,7 +44,9 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET | `/api/my/merch-orders` · POST `/api/my/merch-orders/:id/pay` |
 | GET | `/api/my/tickets/:code/receipt` · `/api/my/merch-orders/:id/receipt` (printable HTML) |
 | GET | `/api/my/data` (JSON download of everything held about you) |
-| POST | `/api/my/account/delete`: `{ confirm: 'DELETE' }`. Anonymises the account; refused while upcoming tickets are live |
+| POST | `/api/my/account/delete`: `{ confirm: 'DELETE' }`. Anonymises the account; refused while upcoming tickets or volunteer shifts are live |
+| GET | `/api/my/volunteer-shifts` |
+| DELETE | `/api/my/volunteer-shifts/:id` — drop a shift; refused once it has started |
 
 ## Admin — requires ADMIN or OWNER
 
@@ -68,6 +72,13 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/admin/events/:id/merch-orders/notify-ready` | Tell paid, uncollected pre-order buyers it's ready |
 | GET | `/api/admin/registrations/:code/receipt` · `/api/admin/merch-orders/:id/receipt` | Printable receipts |
 | GET | `/api/admin/events/:id/reconciliation` | Totals by method: tickets, in-person donations, merch |
+| GET | `/api/admin/events/:id/volunteers` | Shifts with their rosters, plus hours per volunteer |
+| GET | `/api/admin/events/:id/volunteers.csv` | One row per sign-up |
+| POST | `/api/admin/events/:id/shifts` | **Owner only.** `{ role, startsAt, endsAt, slots, location, description }` — times are wall-clock in the event's timezone |
+| PATCH/DELETE | `/api/admin/shifts/:id` | **Owner only.** Slots can't go below sign-ups; delete refuses a shift anyone is on |
+| POST | `/api/admin/shifts/:id/signups` | `{ who }` — a ticket code or `@telegram` username. Messages them on Telegram |
+| PATCH | `/api/admin/volunteer-signups/:id` | `{ attendance }`: `PENDING`, `PRESENT`, `NO_SHOW` |
+| DELETE | `/api/admin/volunteer-signups/:id` | Frees the slot and messages them on Telegram |
 | POST | `/api/admin/checkin` | `{ value }` — a ticket URL, a secret, or a typed code |
 | POST | `/api/admin/checkin/:code/undo` | |
 | GET | `/api/admin/users` | No `q` returns staff only |

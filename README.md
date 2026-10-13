@@ -13,6 +13,7 @@ No payments, no ticket pricing, no Stripe keys — every ticket is free.
 - **Telegram bot** — `/register` walks through the whole thing and finishes with `/accept`
 - **Admin side** — schedule events, scan to check in, design badges, print, mass email
 - **Site-wide bans** — block someone from registering for any event, with attempt logging
+- **Volunteers** — shifts per event with slot limits; people sign up on the event page, staff run the roster, mark attendance, and see hours per volunteer
 - **Analytics** — owner-only dashboard: signups over time, status/channel breakdowns
 - **Two staff roles** — Owner (full control) and Admin (day-of operations only)
 - **Encrypted at rest** — names, emails, and custom-question answers are encrypted in the database

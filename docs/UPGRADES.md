@@ -115,6 +115,7 @@ The schema is versioned in `server/prisma/migrations/`, one folder per change:
 | `0004_cancel_policy` | Per-event cancellation policy for paid tickets (auto-refund or request), and pending cancellation requests. Additive only; existing events start on "request". |
 | `0005_reminders_group_tickets` | Reminder timestamps and "buy for friends" (a ticket can point at the buyer's registration). Additive only. |
 | `0006_event_emails` | Automatic "know before you go" and thank-you messages per event. Additive only; both start off. |
+| `0007_volunteers` | Volunteer shifts and sign-ups. Additive only; sign-up stays hidden until turned on per event. Backups go to version 4. |
 
 v1 instances never had a migration history — they were kept in sync with
 `prisma db push`. The first time a v2 container starts against one,

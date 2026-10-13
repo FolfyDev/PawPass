@@ -58,6 +58,13 @@ enum MerchOrderStatus {
   REFUNDED
 }
 
+/// Whether a volunteer turned up for their shift, as marked by staff.
+enum VolunteerAttendance {
+  PENDING
+  PRESENT
+  NO_SHOW
+}
+
 enum PaymentStatus {
   PENDING
   PAID
@@ -101,6 +108,8 @@ model User {
   merchOrders      MerchOrder[]
   merchPickups     MerchOrder[]   @relation("MerchPickedUpBy")
   bansCreated      Ban[]          @relation("BansCreatedBy")
+  volunteerSignups VolunteerSignup[]
+  volunteerMarks   VolunteerSignup[] @relation("VolunteerAttendanceMarkedBy")
 }
 
 model Event {
@@ -142,6 +151,11 @@ model Event {
   donationAddonLabel   String     @default("Add a donation")
   /// Preset amounts in cents; attendees can also type their own.
   donationAddonPresets Int[]      @default([500, 1000, 2500])
+  /// Volunteer shift sign-up on the public event page. Shifts can be set up
+  /// while this is off; nobody sees them until it's turned on.
+  volunteersEnabled Boolean       @default(false)
+  /// Shown above the shift list, e.g. where to report and what to wear.
+  volunteerInfo    String         @default("")
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
@@ -154,6 +168,7 @@ model Event {
   merchItems       MerchItem[]
   voucherCodes     VoucherCode[]
   donations        Donation[]
+  volunteerShifts  VolunteerShift[]
 }
 
 model Registration {
@@ -476,6 +491,49 @@ model Donation {
   createdAt     DateTime      @default(now())
 
   @@index([eventId])
+}
+
+/// A block of volunteer time for one role at an event, e.g. "Door crew,
+/// Sat 10:00-12:00, 4 people". Anyone signed in can take a slot; they don't
+/// need a ticket, since plenty of volunteers only come to help.
+model VolunteerShift {
+  id          String            @id @default(cuid())
+  eventId     String
+  event       Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  role        String
+  description String            @default("")
+  location    String?
+  startsAt    DateTime
+  endsAt      DateTime
+  slots       Int
+  /// Claimed with a compare-and-swap against slots on sign-up (same pattern
+  /// as MerchItem.soldCount), so two people can't take the last slot at once.
+  filledCount Int               @default(0)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  signups     VolunteerSignup[]
+
+  @@index([eventId, startsAt])
+}
+
+model VolunteerSignup {
+  id          String              @id @default(cuid())
+  shiftId     String
+  shift       VolunteerShift      @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Free text from the volunteer, e.g. "can only stay until 11:30".
+  note        String?
+  attendance  VolunteerAttendance @default(PENDING)
+  markedAt    DateTime?
+  markedById  String?
+  markedBy    User?               @relation("VolunteerAttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  source      String              @default("web") // web | admin
+  createdAt   DateTime            @default(now())
+
+  @@unique([shiftId, userId])
+  @@index([userId])
 }
 
 /// A code that grants a free, guaranteed-confirmed registration tagged with a

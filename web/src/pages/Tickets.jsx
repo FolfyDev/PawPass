@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import { downloadEventIcs } from '../lib/ics.js';
-import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown } from '../components/Bits.jsx';
+import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown, Pill, fmtTimeRange } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
 import PaymentNotice from '../components/PaymentNotice.jsx';
 
@@ -61,8 +61,11 @@ export default function Tickets() {
   const [payNote, setPayNote] = useState('');
   const [payBusy, setPayBusy] = useState('');
   const [orders, setOrders] = useState([]);
+  const [shifts, setShifts] = useState([]);
+  const [shiftMsg, setShiftMsg] = useState('');
   const load = () => {
     api.get('/api/my/merch-orders').then(setOrders).catch(() => setOrders([]));
+    api.get('/api/my/volunteer-shifts').then(setShifts).catch(() => setShifts([]));
     return api.get('/api/my/tickets').then(setTickets);
   };
 
@@ -194,6 +197,14 @@ export default function Tickets() {
 
   if (!tickets) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
 
+  const upcomingShifts = shifts.filter((s) => new Date(s.shift.endsAt) > new Date());
+  const dropShift = async (s) => {
+    if (!confirm(`Drop your ${s.shift.role} shift at ${s.event.title}? Your spot opens up for someone else.`)) return;
+    setShiftMsg('');
+    try { await api.del(`/api/my/volunteer-shifts/${s.id}`); load(); }
+    catch (e) { setShiftMsg(e.message); }
+  };
+
   return (
     <>
       <header style={{ padding: '40px 0 24px' }}>
@@ -266,6 +277,32 @@ export default function Tickets() {
           </div>
         ))}
       </div>
+
+      {upcomingShifts.length > 0 && (
+        <section style={{ marginTop: 32 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Your volunteer shifts</p>
+          {shiftMsg && <p className="note bad" style={{ marginBottom: 12 }}>{shiftMsg}</p>}
+          <div className="card">
+            <ul className="tier-list">
+              {upcomingShifts.map((s) => (
+                <li key={s.id}>
+                  <div>
+                    <strong>{s.shift.role}</strong> <span className="muted">· {s.event.title}</span>
+                    <p className="small muted" style={{ margin: '2px 0 0' }}>
+                      {fmtTimeRange(s.shift.startsAt, s.shift.endsAt, s.event.timezone)}{s.shift.location ? ` · ${s.shift.location}` : ''}
+                    </p>
+                    {s.volunteerInfo && <p className="small muted" style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{s.volunteerInfo}</p>}
+                  </div>
+                  <div className="stack" style={{ justifyItems: 'end', gap: 6 }}>
+                    {s.attendance === 'PRESENT' ? <Pill tone="go">Checked in</Pill> : <Pill>Signed up</Pill>}
+                    {new Date(s.shift.startsAt) > new Date() && <button className="btn ghost sm" onClick={() => dropShift(s)}>Drop shift</button>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       {orders.length > 0 && (
         <section style={{ marginTop: 32 }}>

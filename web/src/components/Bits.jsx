@@ -38,6 +38,19 @@ export const fmtDate = (d, tz) =>
     hour: 'numeric', minute: '2-digit', timeZone: tz || undefined,
   });
 
+/// "Sat, Oct 12, 10:00 AM – 12:30 PM" for a shift, with the end date
+/// spelled out only when it runs past midnight.
+export const fmtTimeRange = (start, end, tz) => {
+  const day = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz || undefined });
+  const endText = day(start) === day(end)
+    ? new Date(end).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined })
+    : fmtDate(end, tz);
+  return `${fmtDate(start, tz)} – ${endText}`;
+};
+
+/// 2 -> "2h", 1.5 -> "1.5h".
+export const fmtHours = (h) => `${Math.round(h * 100) / 100}h`;
+
 export function Avatar({ src, name, size = 28 }) {
   const style = { width: size, height: size, borderRadius: '50%' };
   if (src) return <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" style={{ ...style, objectFit: 'cover' }} />;

@@ -30,6 +30,7 @@ const MARKERS = [
   ['0004_cancel_policy', 'Event', 'cancelPolicy'],
   ['0005_reminders_group_tickets', 'Registration', 'paidByRegistrationId'],
   ['0006_event_emails', 'Event', 'kbygEnabled'],
+  ['0007_volunteers', 'VolunteerShift'],
 ];
 
 const prisma = new PrismaClient();

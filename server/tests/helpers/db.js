@@ -35,6 +35,8 @@ const CLEAR_ORDER = [
   'donation',
   'stripeEvent',
   'payment',
+  'volunteerSignup',
+  'volunteerShift',
   'registration',
   'ticketTier',
   'merchItem',

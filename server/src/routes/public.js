@@ -20,6 +20,7 @@ import { notifyUser, notifyWaitlistPromotion } from '../bot/index.js';
 import { blindIndex } from '../lib/crypto.js';
 import { sendRegistrationConfirmation } from '../lib/mailer.js';
 import { verifyTurnstile } from '../lib/turnstile.js';
+import { signUpForShift, dropSignup, publicShift, VolunteerError } from '../lib/volunteers.js';
 
 export const publicRouter = Router();
 
@@ -96,6 +97,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     customFields: event.customFields, state, registration: mine && shapeReg(mine),
     // Tiers whose sale has ended drop off; ones not on sale yet show with a date.
     tiers: tiers.filter((t) => tierSaleState(t).reason !== 'ended').map((t) => publicTier(t, heldPerTier[t.id] || 0)),
+    volunteers: event.volunteersEnabled,
     donationAddon: event.donationAddonEnabled && stripeEnabled()
       ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
       : null,
@@ -123,6 +125,89 @@ publicRouter.post('/events/:slug/discount', discountLimiter, async (req, res) =>
     if (e instanceof PricingError) return res.status(400).json({ error: e.message });
     throw e;
   }
+});
+
+/* ---------------- volunteering ---------------- */
+
+/// For sign-ups that aren't a registration (volunteering):
+/// checks the signed-in account against the ban list, and logs a hit with
+/// the same action and shape as a blocked registration so it lands in the
+/// attempts list on the Bans page.
+async function blockedByBan(u, event, source) {
+  const ban = await findMatchingBan({ legalName: u.legalName, email: u.email, telegramId: u.telegramId, telegramUsername: u.telegramUsername });
+  if (!ban) return false;
+  await audit(null, 'ban.blocked_registration', ban.id, {
+    banReason: ban.reason || undefined, eventId: event.id, eventTitle: event.title,
+    legalName: u.legalName || undefined, fursonaName: u.fursonaName || undefined, email: u.email || undefined,
+    telegramId: u.telegramId || undefined, telegramUsername: u.telegramUsername || undefined,
+    source,
+  });
+  return true;
+}
+
+/// The shift board. Open to anyone so people can see what help is needed
+/// before signing in; only counts are shown, never who else signed up.
+publicRouter.get('/events/:slug/volunteer', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
+  if (!event.volunteersEnabled) return res.status(404).json({ error: 'This event is not taking volunteers.' });
+  const shifts = await prisma.volunteerShift.findMany({
+    where: { eventId: event.id, endsAt: { gt: new Date() } },
+    orderBy: [{ startsAt: 'asc' }, { role: 'asc' }],
+  });
+  const mine = req.user
+    ? await prisma.volunteerSignup.findMany({ where: { userId: req.user.id, shift: { eventId: event.id } } })
+    : [];
+  res.json({
+    info: event.volunteerInfo,
+    shifts: shifts.map((s) => publicShift(s, mine.find((m) => m.shiftId === s.id))),
+  });
+});
+
+publicRouter.post('/events/:slug/volunteer/:shiftId', requireUser, registerLimiter, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || !event.published || !event.volunteersEnabled) return res.status(404).json({ error: 'This event is not taking volunteers.' });
+  const shift = await prisma.volunteerShift.findFirst({ where: { id: req.params.shiftId, eventId: event.id } });
+  if (!shift) return res.status(404).json({ error: 'Shift not found.' });
+
+  const u = req.user;
+  if (await blockedByBan(u, event, 'volunteer'))
+    return res.status(403).json({ error: 'Volunteering is not available for this account. Contact the organizers if you think this is a mistake.' });
+
+  try {
+    const signup = await signUpForShift({ shiftId: shift.id, userId: u.id, note: req.body?.note });
+    await audit(u.id, 'volunteer.signup', signup.id, { shiftId: shift.id, eventId: event.id });
+    res.json(publicShift(await prisma.volunteerShift.findUnique({ where: { id: shift.id } }), signup));
+  } catch (e) {
+    if (e instanceof VolunteerError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Every shift the signed-in person is on, upcoming first.
+publicRouter.get('/my/volunteer-shifts', requireUser, async (req, res) => {
+  const signups = await prisma.volunteerSignup.findMany({
+    where: { userId: req.user.id },
+    include: { shift: { include: { event: true } } },
+    orderBy: { shift: { startsAt: 'asc' } },
+  });
+  res.json(signups.map((s) => ({
+    id: s.id, note: s.note, attendance: s.attendance,
+    shift: publicShift(s.shift),
+    event: summarize(s.shift.event),
+    volunteerInfo: s.shift.event.volunteerInfo,
+  })));
+});
+
+/// Dropping out frees the slot for someone else. Not once the shift has
+/// started — at that point it's a conversation with the organizers.
+publicRouter.delete('/my/volunteer-shifts/:id', requireUser, async (req, res) => {
+  const signup = await prisma.volunteerSignup.findUnique({ where: { id: req.params.id }, include: { shift: true } });
+  if (!signup || signup.userId !== req.user.id) return res.status(404).json({ error: 'Shift sign-up not found.' });
+  if (signup.shift.startsAt <= new Date()) return res.status(400).json({ error: 'This shift has already started. Talk to the organizers if you can\'t make it.' });
+  await dropSignup(signup);
+  await audit(req.user.id, 'volunteer.drop', signup.id, { shiftId: signup.shiftId });
+  res.json({ ok: true });
 });
 
 /// Who's going — signed-in only, since it surfaces Telegram usernames/photos.

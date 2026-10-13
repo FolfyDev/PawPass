@@ -18,12 +18,13 @@ import { syncTier, archiveTierProduct, stripeEnabled } from '../lib/stripe.js';
 import { upgradeBackup, BACKUP_VERSION } from '../lib/backup.js';
 import { norm, normHandle } from '../lib/bans.js';
 import { ticketCode } from '../lib/codes.js';
-import { zonedTimeToUtc } from '../lib/tz.js';
+import { zonedTimeToUtc, formatInTimeZone } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg, REG_INCLUDE, RECEIPT_INCLUDE } from './public.js';
 import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
 import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
-import { notifyWaitlistPromotion } from '../bot/index.js';
+import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
+import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -52,7 +53,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -64,13 +65,13 @@ function eventPayload(body, timeZone) {
     if (body[k] === undefined) continue;
     if (['startsAt','endsAt','opensAt','closesAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
-    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled') data[k] = Boolean(body[k]);
     else if (k === 'kbygDaysBefore') {
       const days = Number(body[k]);
       if (!Number.isInteger(days) || days < 1 || days > 30) throw new RegistrationError('Send "know before you go" 1 to 30 days before.');
       data[k] = days;
     }
-    else if (k === 'kbygMessage' || k === 'thanksMessage') data[k] = String(body[k] || '').slice(0, 5000);
+    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo') data[k] = String(body[k] || '').slice(0, 5000);
     else if (k === 'feedbackUrl') {
       const url = String(body[k] || '').trim();
       if (url && !/^https?:\/\/\S+$/i.test(url)) throw new RegistrationError('The feedback link must start with http:// or https://.');
@@ -1013,6 +1014,180 @@ adminRouter.delete('/vouchers/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------------- volunteers ---------------- */
+
+/// Staff adding someone to a shift: by ticket code, or by
+/// Telegram @handle for people who never bought a ticket.
+async function findPerson(raw) {
+  const who = String(raw || '').trim();
+  if (!who) return { status: 400, error: 'Enter a ticket code or a Telegram @username.' };
+  if (who.startsWith('@')) {
+    const user = await prisma.user.findFirst({ where: { telegramUsername: { equals: normHandle(who), mode: 'insensitive' } } });
+    return user ? { user } : { status: 404, error: 'Nobody with that Telegram username has signed in here yet.' };
+  }
+  const reg = await prisma.registration.findUnique({ where: { code: who.toUpperCase() }, include: { user: true } });
+  return reg ? { user: reg.user, registration: reg } : { status: 404, error: 'No ticket matches that code.' };
+}
+
+const SIGNUP_INCLUDE = { user: true, markedBy: { select: { displayName: true } } };
+
+const shiftTime = (shift, event) => `${formatInTimeZone(shift.startsAt, event.timezone)} to ${formatInTimeZone(shift.endsAt, event.timezone)}`;
+
+function shapeSignup(s) {
+  return {
+    id: s.id, note: s.note, attendance: s.attendance, source: s.source, createdAt: s.createdAt,
+    markedAt: s.markedAt, markedBy: s.markedBy?.displayName ?? null,
+    volunteer: shapeVolunteer(s.user),
+  };
+}
+
+/// Per-person totals across the event: hours scheduled, hours worked (shifts
+/// marked present), and no-shows — what a coordinator needs for thank-yous
+/// or perks like "4+ hours gets a free shirt".
+function volunteerTotals(shifts) {
+  const people = new Map();
+  for (const shift of shifts) {
+    const hours = shiftHours(shift);
+    for (const s of shift.signups) {
+      const p = people.get(s.user.id) || { ...shapeVolunteer(s.user), shifts: 0, hoursScheduled: 0, hoursWorked: 0, noShows: 0 };
+      p.shifts += 1;
+      p.hoursScheduled += hours;
+      if (s.attendance === 'PRESENT') p.hoursWorked += hours;
+      if (s.attendance === 'NO_SHOW') p.noShows += 1;
+      people.set(s.user.id, p);
+    }
+  }
+  return [...people.values()].sort((a, b) => b.hoursScheduled - a.hoursScheduled || a.name.localeCompare(b.name));
+}
+
+const eventShifts = (eventId) => prisma.volunteerShift.findMany({
+  where: { eventId },
+  include: { signups: { include: SIGNUP_INCLUDE, orderBy: { createdAt: 'asc' } } },
+  orderBy: [{ startsAt: 'asc' }, { role: 'asc' }],
+});
+
+adminRouter.get('/events/:id/volunteers', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const shifts = await eventShifts(event.id);
+  res.json({
+    enabled: event.volunteersEnabled,
+    info: event.volunteerInfo,
+    shifts: shifts.map(({ signups, ...s }) => ({
+      ...s, hours: shiftHours(s), remaining: Math.max(s.slots - s.filledCount, 0), signups: signups.map(shapeSignup),
+    })),
+    volunteers: volunteerTotals(shifts),
+  });
+});
+
+/// The roster as a sheet, one row per sign-up — for printing a clipboard
+/// copy or sending to a volunteer lead.
+adminRouter.get('/events/:id/volunteers.csv', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const shifts = await eventShifts(event.id);
+  const keys = ['role', 'startsAt', 'endsAt', 'location', 'hours', 'name', 'legalName', 'email', 'telegram', 'attendance', 'note'];
+  const rows = shifts.flatMap((shift) => shift.signups.map((s) => [
+    shift.role, formatInTimeZone(shift.startsAt, event.timezone), formatInTimeZone(shift.endsAt, event.timezone),
+    shift.location, shiftHours(shift).toFixed(2), s.user.fursonaName || s.user.displayName, s.user.legalName,
+    s.user.email, s.user.telegramUsername ? `@${s.user.telegramUsername}` : '', s.attendance, s.note,
+  ].map(csv).join(',')));
+  res.type('text/csv').set('Content-Disposition', 'attachment; filename="volunteers.csv"').send([keys.join(','), ...rows].join('\n'));
+});
+
+/// Setting up shifts is event configuration, so owner-only like the rest of
+/// it. Running the roster on the day (adding, removing, attendance) is open
+/// to admins.
+adminRouter.post('/events/:id/shifts', requireOwner, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  try {
+    const data = shiftPayload(req.body || {}, (v) => zonedTimeToUtc(v, event.timezone));
+    const shift = await prisma.volunteerShift.create({ data: { ...data, eventId: event.id } });
+    await audit(req.user.id, 'volunteer.shift.create', shift.id, { role: shift.role });
+    res.json(shift);
+  } catch (e) {
+    if (e instanceof VolunteerError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+adminRouter.patch('/shifts/:id', requireOwner, async (req, res) => {
+  const shift = await prisma.volunteerShift.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!shift) return res.status(404).json({ error: 'Shift not found.' });
+  try {
+    const data = shiftPayload(req.body || {}, (v) => zonedTimeToUtc(v, shift.event.timezone), shift);
+    // Lowering slots is checked against filledCount inside the update, so a
+    // sign-up landing between the read and the write can't end up over the limit.
+    const where = data.slots !== undefined ? { id: shift.id, filledCount: { lte: data.slots } } : { id: shift.id };
+    const { count } = await prisma.volunteerShift.updateMany({ where, data });
+    if (!count) throw new VolunteerError('More people signed up in the meantime. Reload and try again.');
+    await audit(req.user.id, 'volunteer.shift.update', shift.id, data);
+    res.json(await prisma.volunteerShift.findUnique({ where: { id: shift.id } }));
+  } catch (e) {
+    if (e instanceof VolunteerError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+/// Only empty shifts can be deleted, so nobody silently loses a shift they
+/// signed up for. Remove the volunteers first (each one gets told).
+adminRouter.delete('/shifts/:id', requireOwner, async (req, res) => {
+  const shift = await prisma.volunteerShift.findUnique({ where: { id: req.params.id } });
+  if (!shift) return res.status(404).json({ error: 'Shift not found.' });
+  const { count } = await prisma.volunteerShift.deleteMany({ where: { id: shift.id, filledCount: 0 } });
+  if (!count) return res.status(400).json({ error: 'People are signed up for this shift. Remove them first.' });
+  await audit(req.user.id, 'volunteer.shift.delete', shift.id, { role: shift.role });
+  res.json({ ok: true });
+});
+
+/// Puts someone on a shift by their ticket code or Telegram @handle — for
+/// the person who asked at the desk instead of on the site.
+adminRouter.post('/shifts/:id/signups', async (req, res) => {
+  const shift = await prisma.volunteerShift.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!shift) return res.status(404).json({ error: 'Shift not found.' });
+  const found = await findPerson(req.body?.who);
+  if (found.error) return res.status(found.status).json({ error: found.error });
+  const { user } = found;
+
+  try {
+    const signup = await signUpForShift({ shiftId: shift.id, userId: user.id, note: req.body?.note, source: 'admin', byStaff: true });
+    await audit(req.user.id, 'volunteer.add', signup.id, { shiftId: shift.id, userId: user.id });
+    notifyUser(user.telegramId, `You're on the ${shift.role} volunteer shift at ${shift.event.title}, ${shiftTime(shift, shift.event)}. Thank you!`);
+    const full = await prisma.volunteerSignup.findUnique({ where: { id: signup.id }, include: SIGNUP_INCLUDE });
+    res.json(shapeSignup(full));
+  } catch (e) {
+    if (e instanceof VolunteerError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+adminRouter.patch('/volunteer-signups/:id', async (req, res) => {
+  const attendance = req.body?.attendance;
+  if (!ATTENDANCE.includes(attendance)) return res.status(400).json({ error: 'Unknown attendance value.' });
+  const signup = await prisma.volunteerSignup.findUnique({ where: { id: req.params.id } });
+  if (!signup) return res.status(404).json({ error: 'Sign-up not found.' });
+  const updated = await prisma.volunteerSignup.update({
+    where: { id: signup.id },
+    data: attendance === 'PENDING'
+      ? { attendance, markedAt: null, markedById: null }
+      : { attendance, markedAt: new Date(), markedById: req.user.id },
+    include: SIGNUP_INCLUDE,
+  });
+  await audit(req.user.id, 'volunteer.attendance', signup.id, { attendance });
+  res.json(shapeSignup(updated));
+});
+
+adminRouter.delete('/volunteer-signups/:id', async (req, res) => {
+  const signup = await prisma.volunteerSignup.findUnique({ where: { id: req.params.id }, include: { user: true, shift: { include: { event: true } } } });
+  if (!signup) return res.status(404).json({ error: 'Sign-up not found.' });
+  await dropSignup(signup);
+  await audit(req.user.id, 'volunteer.remove', signup.id, { shiftId: signup.shiftId, userId: signup.userId });
+  const { shift } = signup;
+  notifyUser(signup.user.telegramId, `The organizers took you off the ${shift.role} volunteer shift at ${shift.event.title} (${shiftTime(shift, shift.event)}). Reach out to them if that's unexpected.`);
+  res.json({ ok: true });
+});
+
 /* ---------------- check-in ---------------- */
 
 /// The scanner posts whatever the camera read: a full ticket URL, a bare
@@ -1264,7 +1439,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'volunteerShift', 'volunteerSignup', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 
