@@ -13,6 +13,9 @@ import { EVENT_FIELD_PERMISSION, WITH_GROUPS, cleanPermissions, permissionCatalo
 import { describeAuditRows, AUDIT_AREAS } from '../lib/auditView.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { updateStatus, setChannel } from '../lib/updates.js';
+import { getInstanceConfig, setInstanceConfig, loadInstanceConfig } from '../lib/instance.js';
+import { connectionStatus, printerReachable } from '../lib/status.js';
+import { sendToPrinter } from '../badges/zebra.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier, HOLDS_SEAT } from '../lib/registrations.js';
 import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest, shapePayment, notifyPerson } from '../lib/payments.js';
 import { normalizeCode, MAX_DONATION_CENTS } from '../lib/pricing.js';
@@ -25,13 +28,15 @@ import { zonedTimeToUtc, formatInTimeZone } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg, REG_INCLUDE, RECEIPT_INCLUDE } from './public.js';
 import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
-import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
+import { sendCampaign, sendRegistrationConfirmation, sendTestEmail } from '../lib/mailer.js';
 import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
 import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
 import { recordScan, undoLastScan, todayCounts, dailyAttendance, eventDays, hashSecret, dayIn, ScanError, DIRECTIONS } from '../lib/checkins.js';
 import { getRetention, setRetention, eventsDue, purgeEvent, purgeDue, RETENTION_CHOICES } from '../lib/retention.js';
 import { paidCents } from '../lib/vendors.js';
 import { cleanDisabledFeatures, applyDisabledFeatures } from '../lib/features.js';
+import { minorFlag, GUARDIAN_MODES } from '../lib/age.js';
+import { setDoorLine } from '../lib/doorLine.js';
 import { reserveRoom, cancelReservation, changeStay, blockTotals, hotelPayload, blockPayload, setNights, nightsBetween, HotelError, LIVE } from '../lib/hotels.js';
 
 export const adminRouter = Router();
@@ -61,7 +66,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo','vendorsOpen','vendorsCloseAt','vendorInfo','disabledFeatures'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo','vendorsOpen','vendorsCloseAt','vendorInfo','disabledFeatures','ageCheckEnabled','minorAge','guardianMode'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -95,6 +100,16 @@ function eventPayload(body, timeZone) {
       data[k] = body[k];
     }
     else if (k === 'disabledFeatures') data[k] = cleanDisabledFeatures(body[k]);
+    else if (k === 'ageCheckEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'minorAge') {
+      const age = Number(body[k]);
+      if (!Number.isInteger(age) || age < 1 || age > 30) throw new RegistrationError('The age limit must be a whole number from 1 to 30.');
+      data[k] = age;
+    }
+    else if (k === 'guardianMode') {
+      if (!GUARDIAN_MODES.includes(body[k])) throw new RegistrationError('Choose whether to ask minors for a guardian name.');
+      data[k] = body[k];
+    }
     else if (k === 'donationAddonLabel') data[k] = String(body[k] || '').trim() || 'Add a donation';
     else if (k === 'donationAddonPresets') {
       const presets = (Array.isArray(body[k]) ? body[k] : []).map(Number);
@@ -404,6 +419,7 @@ adminRouter.post('/registrations', requirePerm('attendees.edit'), async (req, re
       event, user,
       legalName: req.body.legalName, fursonaName: req.body.fursonaName, email: req.body.email, answers: req.body.answers,
       ticketTierId: req.body.ticketTierId, voucherCode: req.body.voucherCode,
+      birthDate: req.body.birthDate, guardianName: req.body.guardianName,
       inPersonPayment: p?.method ? { method: p.method, amountCents: toCents(p.amount), note: p.note } : null,
       processedById: req.user.id,
       source: 'admin',
@@ -1483,7 +1499,7 @@ function scanLookup(value) {
 }
 
 const scanReply = (reg, event, extra = {}) => ({
-  registration: { ...shapeReg(reg), id: reg.id, event: summarize(event), telegram: reg.user?.telegramUsername, validDays: reg.ticketTier?.validDays || [] },
+  registration: { ...shapeReg(reg), id: reg.id, event: summarize(event), telegram: reg.user?.telegramUsername, validDays: reg.ticketTier?.validDays || [], minor: minorFlag(reg, event) },
   ...extra,
 });
 
@@ -1507,6 +1523,13 @@ adminRouter.post('/checkin', requirePerm('checkin'), async (req, res) => {
     if (!(e instanceof ScanError)) throw e;
     res.status(409).json({ error: e.message, code: e.code, ...scanReply(reg, reg.event, { today: await todayCounts(reg.event) }) });
   }
+});
+
+/// "About this many people in line", from the door, for the public wait
+/// estimate (lib/doorLine.js).
+adminRouter.put('/events/:id/door-line', requirePerm('checkin'), async (req, res) => {
+  try { res.json(await setDoorLine(req.params.id, req.body?.count)); }
+  catch (e) { if (e.code === 'P2025') return res.status(404).json({ error: 'Event not found.' }); res.status(400).json({ error: e.message }); }
 });
 
 /// Takes back the ticket's most recent scan (entry or exit).
@@ -1537,7 +1560,7 @@ adminRouter.get('/events/:id/checkin-manifest', requirePerm('checkin'), async (r
     tickets: regs.map((r) => ({
       code: r.code, secretHash: hashSecret(r.secret), name: r.fursonaName || r.legalName, legalName: r.legalName,
       status: r.status, tierName: r.tierName, badgeTier: r.badgeTier, validDays: r.ticketTier?.validDays || [],
-      checkedInAt: r.checkedInAt, scans: scansBy[r.id] || [],
+      checkedInAt: r.checkedInAt, scans: scansBy[r.id] || [], minor: minorFlag(r, event),
     })),
   });
 });
@@ -1887,6 +1910,41 @@ adminRouter.put('/settings', requireOwner, async (req, res) => {
   res.json(s);
 });
 
+/* ---------------- instance options & connection status (owner only) ---------------- */
+
+adminRouter.get('/instance-config', requireOwner, async (_req, res) => res.json(await getInstanceConfig()));
+adminRouter.put('/instance-config', requireOwner, async (req, res) => {
+  try {
+    const out = await setInstanceConfig(req.body || {});
+    await audit(req.user.id, 'settings.instance', null, { keys: Object.keys(req.body || {}) });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+adminRouter.get('/status', requireOwner, async (_req, res) => res.json(await connectionStatus()));
+
+adminRouter.post('/status/test-email', requireOwner, async (req, res) => {
+  const to = String(req.body?.to || req.user.email || '').trim();
+  if (!env.smtp.enabled) return res.status(400).json({ error: "Email isn't set up (no SMTP_HOST in .env)." });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: 'Enter the address to send the test to.' });
+  try {
+    await sendTestEmail(to);
+    res.json({ ok: true, to });
+  } catch (e) { res.status(502).json({ error: `The mail server refused it: ${e.message}` }); }
+});
+
+/// A plain label, not a badge: checks the printer without needing a template or attendee.
+const TEST_LABEL = '^XA^CF0,40^FO40,40^FDPawPass test print^FS^CF0,28^FO40,100^FDIf you can read this, the printer works.^FS^XZ';
+adminRouter.post('/status/test-print', requireOwner, async (req, res) => {
+  if (env.zebra.mode === 'browser') return res.status(400).json({ error: 'This setup prints badges from the browser (ZEBRA_PRINT_MODE=browser), so there is no network printer to test.' });
+  if (!env.zebra.host) return res.status(400).json({ error: 'Set the printer address first.' });
+  try {
+    await printerReachable();
+    await sendToPrinter(TEST_LABEL);
+    res.json({ ok: true });
+  } catch (e) { res.status(502).json({ error: `The printer at ${env.zebra.host}:${env.zebra.port} didn't take it: ${e.message}` }); }
+});
+
 /* ---------------- updates (owner only) ---------------- */
 
 /// ?refresh=1 asks GitHub again instead of using the last check (at most once a minute).
@@ -2081,6 +2139,8 @@ adminRouter.post('/restore', requireOwner, restoreUpload.single('file'), async (
   // different instance — don't let a failed audit write mask a successful
   // restore with a confusing 500.
   try { await audit(req.user.id, 'backup.restore', null, { counts }); } catch { /* actor not in restored data */ }
+  // The backup's instance options (printer, email sender...) replace the live ones.
+  await loadInstanceConfig();
 
   res.json({ ok: true, counts, filesRestored: fileEntries.length });
 });

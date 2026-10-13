@@ -3,6 +3,7 @@ import { env } from './lib/env.js';
 import { createBot } from './bot/index.js';
 import { startPaymentSweeper } from './lib/payments.js';
 import { startRetentionJob } from './lib/retention.js';
+import { setBotStatus } from './lib/botStatus.js';
 
 bootstrap().catch((e) => {
   console.error(e.message);
@@ -13,10 +14,14 @@ bootstrap().catch((e) => {
   startRetentionJob();
   const bot = createBot();
   if (bot) {
-
+    setBotStatus('starting');
     bot
-      .start({ onStart: (i) => console.log(`Telegram bot @${i.username} running`) })
-      .catch((err) => console.error('Telegram bot stopped:', err.description || err.message));
+      .start({ onStart: (i) => { setBotStatus('running', { username: i.username }); console.log(`Telegram bot @${i.username} running`); } })
+      .catch((err) => {
+        const why = err.description || err.message;
+        setBotStatus('stopped', { error: why });
+        console.error('Telegram bot stopped:', why);
+      });
   } else {
     console.log('Telegram bot disabled (no TELEGRAM_BOT_TOKEN)');
   }

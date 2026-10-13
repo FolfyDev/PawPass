@@ -86,7 +86,7 @@ export default function Overview() {
         ) : (
           <Stat label="Checked in" value={compact(r.arrived)} sub={e.phase === 'ended' ? `${pct(r.arrived, r.confirmed)}% of registered came` : 'Opens at the door'} />
         )}
-        <Stat label="Money in" value={fmtMoney(d.moneyCents, d.currency)} to={`${base}/reconciliation`} sub="Net of refunds, every source" />
+        <Stat label="Money in" value={new Intl.NumberFormat(undefined, { style: 'currency', currency: d.currency, maximumFractionDigits: 0 }).format(d.moneyCents / 100)} to={`${base}/reconciliation`} sub="Net of refunds, every source" />
         <Stat label="Open incidents" value={d.incidents.open} to="/admin/incidents"
           sub={d.incidents.high ? `${d.incidents.high} high severity` : d.incidents.scope === 'yours' ? 'That you filed' : 'Nothing urgent'} />
       </div>

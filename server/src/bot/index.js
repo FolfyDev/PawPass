@@ -9,6 +9,8 @@ import { getSettings } from '../lib/settings.js';
 import { createRegistration, RegistrationError, registrationWindowState, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier, fieldsForTier } from '../lib/registrations.js';
 import { startCheckout, startOrderCheckout, PaymentError, selfCancel } from '../lib/payments.js';
 import { createMerchOrder, MerchOrderError, itemPriceCents } from '../lib/merch.js';
+import { maintenanceMessage } from '../lib/maintenance.js';
+import { parseBirthDate, isMinor, AgeError } from '../lib/age.js';
 import { stripeEnabled } from '../lib/stripe.js';
 import { tierSaleState, checkDonation, checkDiscount, normalizeCode, PricingError, registrationCharge } from '../lib/pricing.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
@@ -74,6 +76,8 @@ const S = {
   FURSONA_NAME: 'fursona_name',
   EMAIL: 'email',
   CUSTOM: 'custom',   // draft.fieldIndex tracks position
+  BIRTHDATE: 'birthdate',
+  GUARDIAN: 'guardian',
   TIER: 'tier',
   DISCOUNT: 'discount',
   DONATION: 'donation',
@@ -227,6 +231,8 @@ export function createBot() {
   });
 
   bot.command('register', async (ctx) => {
+    const paused = await maintenanceMessage();
+    if (paused) return ctx.reply(paused);
     const { telegramId } = await load(ctx);
     const events = await prisma.event.findMany({
       where: { published: true, OR: [{ closesAt: null }, { closesAt: { gte: new Date() } }] },
@@ -271,13 +277,21 @@ export function createBot() {
   /// questions (fieldsForTier) only go to the people they're for.
   async function askCustom(ctx, telegramId, draft, event, index) {
     const fields = fieldsForTier(event, draft.ticketTierId);
-    if (index >= fields.length) return afterTier(ctx, telegramId, draft, event);
+    if (index >= fields.length) return askBirthDate(ctx, telegramId, draft, event);
     const field = fields[index];
     draft.fieldIndex = index;
     await save(telegramId, S.CUSTOM, draft);
     const opts = field.options?.length ? `\nOptions: ${field.options.join(', ')}` : '';
     const hint = field.type === 'qualifier' ? '\nReply with one or more, comma separated.' : '';
     return ctx.reply(`${field.label}${field.required ? '' : ' (optional, /skip)'}${opts}${hint}`);
+  }
+
+  /// The event's age check (lib/age.js): date of birth, then a guardian's
+  /// name for minors when the event asks for one.
+  async function askBirthDate(ctx, telegramId, draft, event) {
+    if (!event.ageCheckEnabled) return afterTier(ctx, telegramId, draft, event);
+    await save(telegramId, S.BIRTHDATE, draft);
+    return ctx.reply('Your date of birth, as YYYY-MM-DD (for example 2001-04-23)?');
   }
 
   /// The optional donation add-on, then the terms. Only offered when it can
@@ -363,6 +377,8 @@ export function createBot() {
         fursonaName: draft.fursonaName,
         email: draft.email,
         answers: draft.answers,
+        birthDate: draft.birthDate,
+        guardianName: draft.guardianName,
         ticketTierId: draft.ticketTierId,
         donationCents: draft.donationCents || 0,
         discountCode: draft.discountCode,
@@ -823,6 +839,24 @@ export function createBot() {
         if (field.required && !text) return ctx.reply(`${field.label} is required.`);
         if (text) draft.answers[field.key] = text;
         return askCustom(ctx, telegramId, draft, event, draft.fieldIndex + 1);
+      }
+      case S.BIRTHDATE: {
+        const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+        if (!event) { await reset(telegramId); return ctx.reply('That event is gone. Send /register to see the current list.'); }
+        try { draft.birthDate = parseBirthDate(text); } catch (e) { if (e instanceof AgeError) return ctx.reply(e.message); throw e; }
+        if (isMinor(draft.birthDate, event) && event.guardianMode !== 'off') {
+          await save(telegramId, S.GUARDIAN, draft);
+          return ctx.reply(`You'll be under ${event.minorAge} at the event. What's the name of the parent or guardian coming with you?${event.guardianMode === 'required' ? '' : ' (optional, /skip)'}`);
+        }
+        delete draft.guardianName;
+        return afterTier(ctx, telegramId, draft, event);
+      }
+      case S.GUARDIAN: {
+        const event = await prisma.event.findUnique({ where: { id: draft.eventId } });
+        if (!event) { await reset(telegramId); return ctx.reply('That event is gone. Send /register to see the current list.'); }
+        if (!text && event.guardianMode === 'required') return ctx.reply("A parent or guardian's name is required.");
+        draft.guardianName = text || null;
+        return afterTier(ctx, telegramId, draft, event);
       }
       case S.DISCOUNT: {
         const event = await prisma.event.findUnique({ where: { id: draft.eventId } });

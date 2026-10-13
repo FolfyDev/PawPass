@@ -46,6 +46,13 @@ Optional: `UPDATE_CHECK=false` stops the settings page asking GitHub for new
 releases, and `UPDATE_REPO=owner/repo` checks a fork instead (see
 [UPGRADES.md](UPGRADES.md#release-checks-and-cutting-a-release)).
 
+`SMTP_FROM_NAME` and `SMTP_REPLY_TO` set the email sender's name and reply-to
+address. Those, the time zone for new events, the legal name and contact,
+the badge printer, the checkout hold and the sign-in code lifetime can also be
+changed later under Admin → Settings → **Instance options**. A value saved
+there wins over `.env`; clearing it goes back to `.env`. Keys and passwords
+stay in `.env` only.
+
 ## 4. Put HTTPS in front of it
 
 Only the `web` container (port 8080) needs to be reachable from the internet;

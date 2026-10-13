@@ -48,7 +48,7 @@ export async function exportAccount(userId) {
     },
     registrations: regs.map((r) => ({
       event: r.event.title, eventStartsAt: r.event.startsAt, code: r.code, status: r.status, ticket: r.tierName,
-      legalName: r.legalName, fursonaName: r.fursonaName, email: r.email, answers: r.answers, rsvp: r.rsvp,
+      legalName: r.legalName, fursonaName: r.fursonaName, email: r.email, answers: r.answers, birthDate: r.birthDate, guardianName: r.guardianName, rsvp: r.rsvp,
       badgeTier: r.badgeTier, checkedInAt: r.checkedInAt, registeredAt: r.createdAt, termsAcceptedAt: r.tosAcceptedAt,
       payments: r.payments.map(pay),
       doorScans: r.checkIns.map((c) => ({ day: c.day, direction: c.direction, at: c.at })),
@@ -116,7 +116,7 @@ export async function deleteAccount(userId) {
     for (const reg of await tx.registration.findMany({ where: { userId }, select: { id: true } })) {
       await tx.registration.update({
         where: { id: reg.id },
-        data: { legalName: 'Deleted user', fursonaName: '', email: null, answers: {}, cancelRequestNote: null },
+        data: { legalName: 'Deleted user', fursonaName: '', email: null, answers: {}, cancelRequestNote: null, birthDate: null, guardianName: null },
       });
     }
     // Past shifts stay for the organizers' hour counts; the note is the only

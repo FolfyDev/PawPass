@@ -54,7 +54,7 @@ export async function purgeEvent(eventId, actorId = null) {
   const counts = await prisma.$transaction(async (tx) => {
     const regs = await tx.registration.updateMany({
       where: { eventId },
-      data: { legalName: REMOVED, fursonaName: '', email: null, answers: {}, cancelRequestNote: null },
+      data: { legalName: REMOVED, fursonaName: '', email: null, answers: {}, cancelRequestNote: null, birthDate: null, guardianName: null },
     });
     const rooms = await tx.roomReservation.updateMany({
       where: { block: { hotel: { eventId } } },

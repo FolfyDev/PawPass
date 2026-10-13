@@ -2,6 +2,7 @@ import { prisma } from './db.js';
 import { env } from './env.js';
 import { stripeEnabled } from './stripe.js';
 import { STRIPE_MIN_CHARGE_CENTS } from './pricing.js';
+import { maintenanceMessage } from './maintenance.js';
 
 export class MerchOrderError extends Error {}
 
@@ -17,6 +18,8 @@ export const itemPriceCents = (item) => (item.price != null ? Math.round(item.pr
 /// confirmed registration can pre-order — it's picked up at the event.
 export async function createMerchOrder({ event, user, items }) {
   if (!stripeEnabled()) throw new MerchOrderError('Online pre-orders are not available.');
+  const paused = await maintenanceMessage();
+  if (paused) throw new MerchOrderError(paused);
 
   const reg = await prisma.registration.findUnique({ where: { eventId_userId: { eventId: event.id, userId: user.id } } });
   if (!reg || reg.status !== 'CONFIRMED') throw new MerchOrderError('Pre-orders are for confirmed attendees. Register first.');

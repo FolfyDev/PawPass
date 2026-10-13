@@ -13,6 +13,8 @@ const FIELD_CONFIG = {
     { field: 'email', indexField: 'emailIndex' },
     { field: 'fursonaName' },
     { field: 'answers', json: true },
+    { field: 'birthDate' },
+    { field: 'guardianName' },
   ],
   roomReservation: [
     { field: 'guestName' },

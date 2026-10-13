@@ -42,6 +42,11 @@ export const env = {
     user: process.env.SMTP_USER || '',
     pass: process.env.SMTP_PASS || '',
     from: process.env.SMTP_FROM || 'noreply@example.com',
+    /// Shown as the sender's name, and where replies go (blank = SMTP_FROM).
+    /// Both, and the footer, can be changed on the settings page (lib/instance.js).
+    fromName: process.env.SMTP_FROM_NAME || '',
+    replyTo: process.env.SMTP_REPLY_TO || '',
+    footer: '',
     secure: bool(process.env.SMTP_SECURE),
     enabled: Boolean(process.env.SMTP_HOST),
   },

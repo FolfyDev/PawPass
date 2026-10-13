@@ -136,6 +136,28 @@ export default function EventEdit() {
               <span><strong>Request a cancellation</strong> (staff with the refunds permission approve it)</span>
             </label>
           </div>
+          {/* A div, not <Field>: it holds several inputs. */}
+          <div className="field">
+            <span>Age check</span>
+            <label className="row small">
+              <input type="checkbox" checked={!!e.ageCheckEnabled} onChange={(ev) => set('ageCheckEnabled', ev.target.checked)} />
+              Ask for a date of birth, and flag minors at check-in
+            </label>
+            {e.ageCheckEnabled && (
+              <div className="grid-2" style={{ marginTop: 8 }}>
+                <Field label="Minor if under" help="Age on the event's first day">
+                  <input type="number" min="1" max="30" value={e.minorAge ?? 18} style={{ width: 90 }} onChange={(ev) => set('minorAge', Number(ev.target.value))} />
+                </Field>
+                <Field label="Parent or guardian name" help="Asked of minors only">
+                  <select value={e.guardianMode || 'optional'} onChange={(ev) => set('guardianMode', ev.target.value)}>
+                    <option value="off">Don't ask</option>
+                    <option value="optional">Ask, optional</option>
+                    <option value="required">Ask, required</option>
+                  </select>
+                </Field>
+              </div>
+            )}
+          </div>
           <Field label="Accent colour"><input type="color" value={e.accentColor} onChange={(ev) => set('accentColor', ev.target.value)} style={{ width: 70, padding: 4 }} /></Field>
         </section>
 

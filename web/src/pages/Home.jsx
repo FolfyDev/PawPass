@@ -12,6 +12,10 @@ export default function Home() {
   const [events, setEvents] = useState(null);
 
   useEffect(() => { api.get('/api/events').then(setEvents).catch(() => setEvents([])); }, []);
+  // The server leaves past events out when the settings page says to.
+  const now = Date.now();
+  const upcoming = (events || []).filter((e) => new Date(e.endsAt) >= now);
+  const past = (events || []).filter((e) => new Date(e.endsAt) < now).reverse();
 
   return (
     <>
@@ -29,27 +33,42 @@ export default function Home() {
       </header>
 
       {events === null && <EventCardsSkeleton />}
-      {events?.length === 0 && <Empty title="Nothing open yet">Check back soon, or follow the Telegram bot for an announcement.</Empty>}
+      {events && upcoming.length === 0 && (
+        <Empty title="Nothing open yet">{settings?.noEventsMessage || 'Check back soon, or follow the Telegram bot for an announcement.'}</Empty>
+      )}
 
-      <div className="stack" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(300px,100%),1fr))', display: 'grid' }}>
-        {events?.map((e) => (
-          <Link key={e.id} to={`/e/${e.slug}`} className="stub" style={{ textDecoration: 'none', color: 'inherit' }}>
-            <div className="stub-accent" style={{ background: e.accentColor }} />
-            <div className="stub-head">
-              <p className="eyebrow">{fmtDate(e.startsAt, e.timezone)}</p>
-              <h2 style={{ margin: '6px 0 4px' }}>{e.title}</h2>
-              <p className="muted small" style={{ margin: 0 }}>{e.tagline || e.venue}</p>
-            </div>
-            <div className="stub-tear" />
-            <div className="stub-foot spread">
-              <span className="small muted">
-                {e.confirmed ?? 0} registered
-              </span>
-              <span className="btn sm">Register</span>
-            </div>
-          </Link>
-        ))}
-      </div>
+      <EventGrid events={upcoming} />
+      {past.length > 0 && (
+        <>
+          <h2 style={{ margin: '36px 0 14px' }}>Past events</h2>
+          <EventGrid events={past} ended />
+        </>
+      )}
     </>
+  );
+}
+
+function EventGrid({ events, ended = false }) {
+  if (!events.length) return null;
+  return (
+    <div className="stack" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(300px,100%),1fr))', display: 'grid' }}>
+      {events.map((e) => (
+        <Link key={e.id} to={`/e/${e.slug}`} className="stub" style={{ textDecoration: 'none', color: 'inherit', opacity: ended ? 0.75 : 1 }}>
+          <div className="stub-accent" style={{ background: e.accentColor }} />
+          <div className="stub-head">
+            <p className="eyebrow">{fmtDate(e.startsAt, e.timezone)}</p>
+            <h2 style={{ margin: '6px 0 4px' }}>{e.title}</h2>
+            <p className="muted small" style={{ margin: 0 }}>{e.tagline || e.venue}</p>
+          </div>
+          <div className="stub-tear" />
+          <div className="stub-foot spread">
+            <span className="small muted">
+              {e.confirmed ?? 0} {ended ? 'attended' : 'registered'}
+            </span>
+            {ended ? <span className="small muted">Ended</span> : <span className="btn sm">Register</span>}
+          </div>
+        </Link>
+      ))}
+    </div>
   );
 }

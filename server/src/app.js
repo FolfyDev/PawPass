@@ -20,6 +20,8 @@ import { STARTER_TEMPLATE } from './badges/template.js';
 import { escapeHtml } from './lib/html.js';
 import { stripeWebhook, createWebhookLimiters } from './lib/payments.js';
 import { verifyEncryptionKey } from './lib/keycheck.js';
+import { loadInstanceConfig } from './lib/instance.js';
+import { maintenanceGuard } from './lib/maintenance.js';
 
 function isLocalDev() {
   try {
@@ -120,6 +122,7 @@ app.get('/sitemap.xml', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api', maintenanceGuard);
 app.use('/api', schedulePublicRouter);
 app.use('/api', vendorPublicRouter);
 app.use('/api', publicRouter);
@@ -165,6 +168,7 @@ app.use((err, req, res, _next) => {
 
 export async function bootstrap() {
   await verifyEncryptionKey();
+  await loadInstanceConfig();
   if ((await prisma.badgeTemplate.count()) === 0) {
     await prisma.badgeTemplate.create({ data: { ...STARTER_TEMPLATE, isDefault: true } });
   }

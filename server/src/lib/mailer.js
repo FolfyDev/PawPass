@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { prisma } from './db.js';
 import { env } from './env.js';
 import { getSettings } from './settings.js';
+import { escapeHtml } from './html.js';
 
 let transport;
 function getTransport() {
@@ -16,6 +17,49 @@ function getTransport() {
   return transport;
 }
 
+/// Every email goes through here: the sender name and reply-to from the
+/// settings page (lib/instance.js), and the footer on everything except
+/// sign-in codes.
+function send(message, { footer = true } = {}) {
+  const extra = footer && env.smtp.footer;
+  return getTransport().sendMail({
+    ...message,
+    from: env.smtp.fromName ? { name: env.smtp.fromName, address: env.smtp.from } : env.smtp.from,
+    replyTo: env.smtp.replyTo || undefined,
+    text: extra ? `${message.text}\n\n--\n${extra}` : message.text,
+    html: message.html && extra
+      ? `${message.html}<hr><p style="color:#666;font-size:13px">${escapeHtml(extra).replace(/\n/g, '<br>')}</p>`
+      : message.html,
+  });
+}
+
+/// For the settings page's status card: can we log in to the SMTP server?
+export async function verifySmtp() {
+  try { await getTransport().verify(); } catch (e) { throw new Error(smtpHint(e)); }
+}
+
+/// The usual SMTP mistakes, in words an owner can act on.
+export function smtpHint(e) {
+  const m = String(e?.message || e);
+  if (/wrong version number/i.test(m))
+    return `Port ${env.smtp.port} doesn't start with TLS. For port 587 set SMTP_SECURE=false (it upgrades to TLS on its own); for port 465 set SMTP_SECURE=true.`;
+  if (/Invalid login|535|Username and Password not accepted/i.test(m))
+    return 'The mail server rejected the username or password. For Gmail, use an app password, not your normal one.';
+  if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return `Can't find a server called ${env.smtp.host}. Check SMTP_HOST.`;
+  if (/ECONNREFUSED|ETIMEDOUT|Greeting never received/i.test(m)) return `Nothing answered at ${env.smtp.host}:${env.smtp.port}. Check SMTP_HOST and SMTP_PORT.`;
+  return m.trim();
+}
+
+/// "Send test email" on the settings page, footer included so it can be checked.
+export async function sendTestEmail(to) {
+  await getTransport().verify().catch((e) => { throw new Error(smtpHint(e)); });
+  await send({
+    to,
+    subject: 'PawPass test email',
+    text: 'This is a test email from PawPass. If you got it, email sending works.',
+  });
+}
+
 const AUDIENCE = {
   all: { status: { in: ['CONFIRMED', 'WAITLIST'] } },
   checked_in: { status: 'CONFIRMED', checkedInAt: { not: null } },
@@ -24,25 +68,23 @@ const AUDIENCE = {
 };
 
 export async function sendOtpEmail(email, code) {
-  const tx = getTransport();
-  await tx.sendMail({
-    from: env.smtp.from,
+  await send({
     to: email,
     subject: `Your sign-in code: ${code}`,
     text: `Your sign-in code is ${code}. It works once and expires in ${env.loginCodeTtlMinutes} minutes.\n\nIf you didn't request this, you can ignore this email.`,
-  });
+  }, { footer: false });
 }
 
 /// A short plain-text notice (refunds, cancellation decisions). Callers
 /// decide whether a missing SMTP config is worth reporting.
 export async function sendNoticeEmail(to, subject, text) {
   if (!to) return;
-  await getTransport().sendMail({ from: env.smtp.from, to, subject, text });
+  await send({ to, subject, text });
 }
 
 export async function sendRegistrationConfirmation(reg, event, settings) {
   if (!reg.email) return;
-  const tx = getTransport();
+  getTransport();
   const name = reg.fursonaName || reg.legalName;
   const eventDate = event?.startsAt ? new Date(event.startsAt).toDateString() : '';
   const qrPayload = `${env.webUrl}/t/${reg.secret}`;
@@ -50,8 +92,7 @@ export async function sendRegistrationConfirmation(reg, event, settings) {
 
   const statusLine = reg.status === 'WAITLIST' ? 'You are on the waitlist for' : 'You are registered for';
 
-  await tx.sendMail({
-    from: env.smtp.from,
+  await send({
     to: reg.email,
     subject: `${statusLine} ${event?.title || settings.orgName}`,
     text:
@@ -95,13 +136,12 @@ export async function sendCampaign(id, { dryRun } = {}) {
 
   if (dryRun) return { dryRun: true, recipients: recipients.length };
 
-  const tx = getTransport();
+  getTransport();
   let sent = 0;
   for (const reg of recipients) {
     const vars = { reg, event: reg.event, settings };
     try {
-      await tx.sendMail({
-        from: env.smtp.from,
+      await send({
         to: reg.email,
         subject: personalize(campaign.subject, vars),
         text: personalize(campaign.body, vars),

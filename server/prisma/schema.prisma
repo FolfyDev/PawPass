@@ -265,6 +265,17 @@ model Event {
   vendorsOpen      Boolean        @default(false)
   vendorsCloseAt   DateTime?
   vendorInfo       String         @default("")
+  /// Age check (lib/age.js): asks a date of birth on registration and flags
+  /// anyone under minorAge on the event's first day at check-in.
+  /// guardianMode: "off" | "optional" | "required" — a parent or guardian
+  /// name, asked only of minors.
+  ageCheckEnabled  Boolean        @default(false)
+  minorAge         Int            @default(18)
+  guardianMode     String         @default("optional")
+  /// "People in line" as last reported from the door scanner, for the
+  /// public wait estimate (lib/doorLine.js).
+  doorLineCount    Int?
+  doorLineAt       DateTime?
   /// Optional sections switched off on the details page (lib/features.js):
   /// hidden from the admin menu and the public site, data kept.
   disabledFeatures String[]       @default([])
@@ -320,6 +331,10 @@ model Registration {
   /// Encrypted JSON (stringified before encryption, parsed back on read) —
   /// custom-question answers are free text and can contain anything.
   answers       String             @default("")
+  /// Date of birth (YYYY-MM-DD) and a minor's guardian, when the event's
+  /// age check is on. Encrypted like the other personal fields (lib/db.js).
+  birthDate     String?
+  guardianName  String?
   status        RegistrationStatus @default(CONFIRMED)
   /// null for voucher redemptions, which bypass tiers entirely.
   ticketTierId  String?

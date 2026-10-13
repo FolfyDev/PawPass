@@ -60,7 +60,7 @@ export default function EventPage() {
   const { user, settings, refresh } = useSession();
   const [event, setEvent] = useState(null);
   usePageMeta({ title: event?.title, description: event?.tagline || event?.description });
-  const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, ticketTierId: '', voucherCode: '', discountCode: '', donationCents: 0 });
+  const [form, setForm] = useState({ legalName: '', fursonaName: '', email: '', answers: {}, ticketTierId: '', voucherCode: '', discountCode: '', donationCents: 0, birthDate: '', guardianName: '' });
   // A discount code that's been checked against the chosen tier: { code, tierId, ticketCents, label }.
   const [discount, setDiscount] = useState(null);
   const [discountInput, setDiscountInput] = useState('');
@@ -189,6 +189,8 @@ export default function EventPage() {
   const registered = reg && reg.status !== 'CANCELLED';
   const selectedTier = tiers.find((t) => t.id === form.ticketTierId);
   const usingVoucher = Boolean(form.voucherCode.trim());
+  // Same rule as the server (lib/age.js): age on the event's first day.
+  const minor = Boolean(event.ageCheck && form.birthDate && ageOn(form.birthDate, event.ageCheck.firstDay) < event.ageCheck.minorAge);
   // Only the questions for the chosen ticket (a voucher has no ticket type).
   const fields = fieldsForTier(event, usingVoucher ? null : form.ticketTierId);
   // Only counts while it's still for the tier it was checked against.
@@ -256,6 +258,8 @@ export default function EventPage() {
       const v = form.answers[f.key];
       if (f.required && (Array.isArray(v) ? v.length === 0 : !v)) return setError(`${f.label} is required.`);
     }
+    if (event.ageCheck && !form.birthDate) return setError('Date of birth is required.');
+    if (minor && event.ageCheck.guardian === 'required' && !form.guardianName.trim()) return setError("Enter a parent or guardian's name.");
     setStep('terms');
   };
 
@@ -270,6 +274,8 @@ export default function EventPage() {
         discountCode: appliedDiscount && !usingVoucher ? form.discountCode : undefined,
         donationCents: donationCents || undefined,
         friends: friendRows.length ? friendRows : undefined,
+        birthDate: event.ageCheck ? form.birthDate : undefined,
+        guardianName: minor ? form.guardianName : undefined,
       });
       // Gate on the server's result, not the form — a voucher code can turn
       // a paid pick into a free confirmed spot.
@@ -321,6 +327,15 @@ export default function EventPage() {
         <p className="eyebrow">{fmtDate(event.startsAt, event.timezone)} · {event.venue}</p>
         <h1>{event.title}</h1>
         {event.tagline && <p className="muted">{event.tagline}</p>}
+        {event.doorWait && (
+          <p className="note" role="status" style={{ marginTop: 12 }}>
+            <strong>Line at the door: </strong>
+            {event.doorWait.line === 0 ? 'no wait right now'
+              : event.doorWait.minutes != null ? `about ${event.doorWait.minutes} min (${event.doorWait.line} people)`
+              : `about ${event.doorWait.line} people`}
+            <span className="small muted"> · updated {new Date(event.doorWait.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+          </p>
+        )}
       </header>
 
       <div className="grid-2" style={{ alignItems: 'start', gap: 28 }}>
@@ -681,6 +696,18 @@ export default function EventPage() {
                     <AnswerInput f={f} answers={form.answers} setAnswer={setAnswer} />
                   </Field>
                 ))}
+                {event.ageCheck && (
+                  <Field label="Date of birth" help={`Anyone under ${event.ageCheck.minorAge} on the first day is flagged at check-in`}>
+                    <input type="date" value={form.birthDate} max={new Date().toISOString().slice(0, 10)} required
+                      onChange={(e) => setForm({ ...form, birthDate: e.target.value })} />
+                  </Field>
+                )}
+                {minor && event.ageCheck.guardian !== 'off' && (
+                  <Field label={`Parent or guardian's name${event.ageCheck.guardian === 'required' ? '' : ' (optional)'}`}
+                    help={`You'll be under ${event.ageCheck.minorAge} at the event`}>
+                    <input value={form.guardianName} onChange={(e) => setForm({ ...form, guardianName: e.target.value })} />
+                  </Field>
+                )}
               </section>
 
               {donationAddon && selectedTier && (
@@ -809,4 +836,11 @@ export default function EventPage() {
       )}
     </>
   );
+}
+
+/// Whole years old on `day`; both YYYY-MM-DD.
+function ageOn(birthDate, day) {
+  const [by, bm, bd] = birthDate.split('-').map(Number);
+  const [y, m, d] = day.split('-').map(Number);
+  return y - by - (m < bm || (m === bm && d < bd) ? 1 : 0);
 }

@@ -10,6 +10,8 @@ import { createRegistration, RegistrationError, registrationWindowState, findOrC
 import { startCheckout, startOrderCheckout, syncSessionForUser, PaymentError, paymentSummary, selfCancel, notifyFriendTickets } from '../lib/payments.js';
 import { tierSaleState, checkDiscount, normalizeCode, registrationCharge, PricingError } from '../lib/pricing.js';
 import { featureOn } from '../lib/features.js';
+import { doorWait } from '../lib/doorLine.js';
+import { dayIn } from '../lib/checkins.js';
 import { createMerchOrder, MerchOrderError, shapeOrder, itemPriceCents } from '../lib/merch.js';
 import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
 import { stripeEnabled } from '../lib/stripe.js';
@@ -67,8 +69,9 @@ publicRouter.get('/settings', async (_req, res) => {
 });
 
 publicRouter.get('/events', async (_req, res) => {
+  const { showPastEvents } = await getSettings();
   const events = await prisma.event.findMany({
-    where: { published: true },
+    where: { published: true, ...(showPastEvents === false ? { endsAt: { gte: new Date() } } : {}) },
     orderBy: { startsAt: 'asc' },
     include: { _count: { select: { registrations: { where: { status: 'CONFIRMED' } } } } },
   });
@@ -105,6 +108,8 @@ publicRouter.get('/events/:slug', async (req, res) => {
     submissionsOpen: event.submissionsOpen,
     vendorsOpen: event.vendorsOpen,
     vouchers: featureOn(event, 'vouchers'),
+    ageCheck: event.ageCheckEnabled ? { minorAge: event.minorAge, guardian: event.guardianMode, firstDay: dayIn(event.startsAt, event.timezone) } : null,
+    doorWait: await doorWait(event),
     donationAddon: event.donationAddonEnabled && stripeEnabled()
       ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
       : null,
@@ -373,7 +378,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
 
-  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode, discountCode, donationCents, friends } = req.body || {};
+  const { legalName, fursonaName, email, answers, acceptedTos, ticketTierId, voucherCode, discountCode, donationCents, friends, birthDate, guardianName } = req.body || {};
   if (!acceptedTos) return res.status(400).json({ error: 'You need to accept the terms before registering.' });
   if (!legalName || String(legalName).trim().length < 2)
     return res.status(400).json({ error: 'Enter your preferred name.' });
@@ -401,7 +406,7 @@ publicRouter.post('/events/:slug/register', registerLimiter, async (req, res) =>
   try {
     const reg = await createRegistration({
       event, user,
-      legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, friends,
+      legalName, fursonaName, email, answers, ticketTierId, voucherCode, discountCode, donationCents, friends, birthDate, guardianName,
       source: 'web',
       tosVersion: hashTos(event.tosBody),
     });

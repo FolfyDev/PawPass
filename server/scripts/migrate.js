@@ -41,6 +41,7 @@ const MARKERS = [
   ['0014_vendors', 'VendorApplication'],
   ['0015_staff_permissions', 'StaffGroup'],
   ['0016_event_features', 'Event', 'disabledFeatures'],
+  ['0017_age_check_door_line', 'Event', 'ageCheckEnabled'],
 ];
 
 const prisma = new PrismaClient();

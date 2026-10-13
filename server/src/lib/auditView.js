@@ -124,7 +124,7 @@ const VERBS = {
   'registration.transfer': 'Transferred a ticket',
   'schedule.room.create': 'Added a schedule room', 'schedule.room.delete': 'Deleted a schedule room',
   'schedule.session.create': 'Added a session', 'schedule.session.update': 'Edited a session', 'schedule.session.delete': 'Deleted a session',
-  'settings.update': 'Changed instance settings', 'settings.retention': 'Changed data retention', 'settings.update_channel': 'Changed the update channel',
+  'settings.update': 'Changed instance settings', 'settings.retention': 'Changed data retention', 'settings.update_channel': 'Changed the update channel', 'settings.instance': 'Changed instance options',
   'staff_group.create': 'Created a staff group', 'staff_group.update': 'Edited a staff group', 'staff_group.delete': 'Deleted a staff group',
   'submission.create': 'Submitted a panel', 'submission.withdraw': 'Withdrew a panel submission',
   'tier.create': 'Created a ticket type', 'tier.update': 'Edited a ticket type', 'tier.delete': 'Deleted a ticket type', 'tier.sync': 'Synced ticket types with Stripe',

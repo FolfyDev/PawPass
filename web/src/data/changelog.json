@@ -1,8 +1,23 @@
 [
   {
-    "version": "2026.2.1.0",
+    "version": "2026.2.1.1",
     "date": "2026-10-13",
     "current": true,
+    "highlights": [
+      "Connections card in Settings shows whether Stripe, email, the Telegram bot, Turnstile and the badge printer are working, with the reason when they aren't",
+      "Maintenance mode pauses all public sign-ups, with a banner on every page",
+      "Email sender name, reply-to address and footer, plus a test email button",
+      "Default time zone, legal name and contact, badge printer, checkout hold and sign-in code lifetime can be changed in Settings instead of .env",
+      "Print a test label to check the badge printer",
+      "Home page can list past events, with a custom message when nothing is listed",
+      "Optional age check: date of birth on registration, guardian name for minors, and minors flagged at check-in",
+      "Wait estimate for the door line on the event page, from a line count the door staff update",
+      "Test data script makes much more data, with a choice of how many people"
+    ]
+  },
+  {
+    "version": "2026.2.1.0",
+    "date": "2026-10-13",
     "highlights": [
       "Stripe integration",
       "New attendee list view with search, filters, and export to CSV",

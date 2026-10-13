@@ -246,7 +246,7 @@ function ScannerView({ event, warnings, overridden }) {
     }
     const r = await store.scan(value, direction, force);
     setToday(store.counts());
-    const reg = r.ticket && { code: r.ticket.code, fursonaName: r.ticket.name, legalName: r.ticket.legalName, status: r.ticket.status, checkedInAt: r.ticket.checkedInAt, tierName: r.ticket.tierName };
+    const reg = r.ticket && { code: r.ticket.code, fursonaName: r.ticket.name, legalName: r.ticket.legalName, status: r.ticket.status, checkedInAt: r.ticket.checkedInAt, tierName: r.ticket.tierName, minor: r.ticket.minor };
     if (!r.ok) return reject(value, r.problem.message, reg, r.problem.code, true);
     playCheckinSuccess();
     setOutcome({
@@ -365,6 +365,7 @@ function ScannerView({ event, warnings, overridden }) {
       {warnings.map((w) => <p key={w.id} className="note" style={{ marginBottom: 12 }}>{w.detail}</p>)}
 
       <DoorStatus today={today} online={online} store={store} syncing={syncing} onRefresh={refreshCopy} onSync={sync} />
+      <LineCount eventId={eventId} online={online} />
 
       {syncNotes.length > 0 && (
         <div className="note" style={{ margin: '12px 0' }}>
@@ -422,6 +423,12 @@ function ScannerView({ event, warnings, overridden }) {
                     <p className="muted small" style={{ margin: '2px 0 0' }}>{reg.legalName}{reg.tierName ? ` · ${reg.tierName}` : ''}</p>
                     <p className="code" style={{ marginTop: 10 }}>{reg.code}</p>
                     <StatusPill status={reg.status} checkedInAt={reg.checkedInAt} />
+                    {reg.minor && (
+                      <p className="note bad" style={{ marginTop: 12 }}>
+                        <strong>Minor: {reg.minor.age} (under {reg.minor.under}).</strong> Check their ID.
+                        {reg.minor.guardianName ? ` Guardian: ${reg.minor.guardianName}.` : ' No guardian name given.'}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <p className="mono small muted" style={{ marginTop: 14, wordBreak: 'break-all' }}>{outcome.scanned}</p>
@@ -465,5 +472,29 @@ function ScannerView({ event, warnings, overridden }) {
         </div>
       </div>
     </>
+  );
+}
+
+/// "About this many people in line", for the wait shown on the public event
+/// page (server/src/lib/doorLine.js). The estimate drops off the page 20
+/// minutes after the last update, so a stale number is never shown.
+function LineCount({ eventId, online }) {
+  const [count, setCount] = useState('');
+  const [saved, setSaved] = useState(null);
+  const [err, setErr] = useState('');
+  const send = async (n) => {
+    setErr('');
+    try { setSaved(await api.put(`/api/admin/events/${eventId}/door-line`, { count: n })); setCount(''); }
+    catch (e) { setErr(e.message); }
+  };
+  return (
+    <form className="row small" style={{ margin: '12px 0 0', gap: 8 }} onSubmit={(e) => { e.preventDefault(); if (count !== '') send(Number(count)); }}>
+      <span className="muted">People in line:</span>
+      <input type="number" min="0" max="5000" value={count} onChange={(e) => setCount(e.target.value)} style={{ width: 90 }} aria-label="People in line" disabled={!online} />
+      <button className="btn sm" disabled={!online || count === ''}>Update</button>
+      <button type="button" className="btn sm ghost" disabled={!online} onClick={() => send(0)}>No line</button>
+      {saved && <span className="muted">Shown on the event page: {saved.doorLineCount} at {new Date(saved.doorLineAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>}
+      {err && <span style={{ color: 'var(--stop)' }}>{err}</span>}
+    </form>
   );
 }

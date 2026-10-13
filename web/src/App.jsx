@@ -100,6 +100,15 @@ export default function App() {
         </div>
       </nav>
 
+      {settings?.maintenanceMode && (
+        <div className="shell" role="status" style={{ paddingTop: 12 }}>
+          <p className="note" style={{ margin: 0 }}>
+            <strong>{settings.maintenanceMessage?.trim() || 'Registration is paused for maintenance. Please check back soon.'}</strong>
+            {isStaff && <span className="small muted"> Staff can still use the admin pages and add people there.</span>}
+          </p>
+        </div>
+      )}
+
       <main className="shell">
         <Suspense fallback={<PageSkeleton />}>
           <Routes>

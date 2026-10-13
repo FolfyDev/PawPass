@@ -1,0 +1,19 @@
+# Local development only: publishes Postgres on this machine so a database
+# tool (DataGrip, psql, TablePlus...) can connect. Not for production, where
+# the database should stay reachable from the server container only.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Then connect to 127.0.0.1, port DB_PORT (default 5432), with POSTGRES_USER,
+# POSTGRES_PASSWORD and POSTGRES_DB from .env. Bound to 127.0.0.1, so it is
+# not reachable from other machines on the network.
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    # The backend network is internal (no traffic in or out of Docker), which
+    # also blocks published ports. This extra network is only for the port.
+    networks: [backend, dbtools]
+
+networks:
+  dbtools:

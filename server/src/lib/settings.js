@@ -18,6 +18,13 @@ export const DEFAULT_SETTINGS = {
   ticketFooter: 'Show this code at the door.',
   welcomeMessage: 'Welcome! Pick an event below to register.',
   botWelcome: 'Hi! I can get you registered in about thirty seconds. Send /register to start.',
+  /// Home page: list events that have ended (under "Past events"), and what
+  /// to say when nothing is listed (blank = the built-in wording).
+  showPastEvents: true,
+  noEventsMessage: '',
+  /// Pauses every public sign-up (lib/maintenance.js); shown as a banner.
+  maintenanceMode: false,
+  maintenanceMessage: '',
 };
 
 const KNOWN = Object.keys(DEFAULT_SETTINGS);

@@ -4,6 +4,7 @@ import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
 import { PageSkeleton } from '../../components/Skeleton.jsx';
+import { MaintenanceCard, InstanceOptionsCard, StatusCard } from './InstanceSettings.jsx';
 
 const TEXT_FIELDS = [
   ['orgName', 'Organisation name'],
@@ -19,6 +20,144 @@ const TEXT_FIELDS = [
 ];
 
 const fmtDay = (d) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+export default function Settings() {
+  const { user, refresh } = useSession();
+  const isOwner = user.role === 'OWNER';
+  const [s, setS] = useState(null);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => { if (isOwner) api.get('/api/admin/settings').then(setS); }, [isOwner]);
+  if (!isOwner) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
+  if (!s) return <PageSkeleton />;
+
+  const save = async () => {
+    // Maintenance mode has its own card that saves on the spot; this copy may be stale.
+    const { maintenanceMode, maintenanceMessage, ...rest } = s;
+    await api.put('/api/admin/settings', rest);
+    await refresh();
+    setMsg('Settings saved.'); setTimeout(() => setMsg(''), 2000);
+  };
+
+  const uploadBanner = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { url } = await api.upload('/api/admin/upload', file);
+      await api.put('/api/admin/settings', { logoUrl: url });
+      await refresh();
+      setS((cur) => ({ ...cur, logoUrl: url }));
+      setMsg('Banner uploaded.'); setTimeout(() => setMsg(''), 2000);
+    } catch (err) { setMsg(err.message); }
+  };
+
+  const uploadBannerLight = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { url } = await api.upload('/api/admin/upload', file);
+      await api.put('/api/admin/settings', { logoUrlLight: url });
+      await refresh();
+      setS((cur) => ({ ...cur, logoUrlLight: url }));
+      setMsg('Light mode banner uploaded.'); setTimeout(() => setMsg(''), 2000);
+    } catch (err) { setMsg(err.message); }
+  };
+
+  const downloadSettings = () => {
+    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'pawpass-settings.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const uploadSettings = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const allowed = Object.keys(s);
+      const clean = Object.fromEntries(Object.entries(parsed).filter(([k]) => allowed.includes(k)));
+      setS((cur) => ({ ...cur, ...clean }));
+      setMsg('Loaded. Review, then Save settings.');
+    } catch (err) {
+      setMsg(err instanceof SyntaxError ? 'That file is not valid JSON.' : err.message);
+    }
+  };
+
+  return (
+    <>
+      <p className="eyebrow">Instance</p>
+      <h1>Settings</h1>
+      <p className="muted">Wording and branding. Server config lives in <code className="mono">.env</code>.</p>
+      {msg && <p className="note good">{msg}</p>}
+
+      <div className="card stack" style={{ marginBottom: 20 }}>
+        <Field label="Banner" help="PNG, about 1170×123">
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBanner} />
+          {s.logoUrl && <img src={s.logoUrl} alt="Banner preview" style={{ height: 32, marginTop: 10, display: 'block' }} />}
+        </Field>
+        <label className="row small">
+          <input type="checkbox" checked={!!s.useLightBanner} onChange={(e) => setS({ ...s, useLightBanner: e.target.checked })} />
+          Different banner for light mode
+        </label>
+        {s.useLightBanner && (
+          <Field label="Light mode banner" help="Used in light mode">
+            <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBannerLight} />
+            {s.logoUrlLight && <img src={s.logoUrlLight} alt="Light mode banner preview" style={{ height: 32, marginTop: 10, display: 'block', background: '#fff', padding: 4 }} />}
+          </Field>
+        )}
+        {TEXT_FIELDS.map(([k, label]) => (
+          <Field key={k} label={label}>
+            {k === 'welcomeMessage' || k === 'botWelcome'
+              ? <textarea value={s[k] || ''} onChange={(e) => setS({ ...s, [k]: e.target.value })} />
+              : <input value={s[k] || ''} onChange={(e) => setS({ ...s, [k]: e.target.value })} />}
+          </Field>
+        ))}
+        <div className="row">
+          <Field label="Accent colour">
+            <input type="color" value={s.accentColor} onChange={(e) => setS({ ...s, accentColor: e.target.value })} style={{ width: 70, padding: 4 }} />
+          </Field>
+          <label className="row small" style={{ marginTop: 22 }}>
+            <input type="checkbox" checked={s.askFursonaName !== false} onChange={(e) => setS({ ...s, askFursonaName: e.target.checked })} />
+            Ask for a fursona name
+          </label>
+        </div>
+        <h3 style={{ margin: '8px 0 0' }}>Home page</h3>
+        <label className="row small">
+          <input type="checkbox" checked={s.showPastEvents !== false} onChange={(e) => setS({ ...s, showPastEvents: e.target.checked })} />
+          List events that have ended, under "Past events"
+        </label>
+        <Field label="When no events are listed" help="Blank = a standard line">
+          <input value={s.noEventsMessage || ''} placeholder="Check back soon, or follow the Telegram bot for an announcement." onChange={(e) => setS({ ...s, noEventsMessage: e.target.value })} />
+        </Field>
+        <button className="btn primary" onClick={save}>Save settings</button>
+      </div>
+
+      <InstanceOptionsCard />
+      <StatusCard />
+      <MaintenanceCard />
+      <UpdatesCard />
+      <RetentionCard />
+
+      <div className="card stack">
+        <h2 style={{ margin: 10 }}>Import / export</h2>
+        <p className="small muted" style={{ margin: 0 }}>
+          Copy settings between instances as JSON. Starter file: <code className="mono">settings.example.json</code>.
+        </p>
+        <div className="row">
+          <button className="btn" onClick={downloadSettings}>Download current settings</button>
+          <label className="btn">
+            Upload settings JSON
+            <input type="file" accept="application/json" onChange={uploadSettings} style={{ display: 'none' }} />
+          </label>
+        </div>
+      </div>
+    </>
+  );
+}
+
 
 /// How long personal data is kept after each event ends (lib/retention.js).
 function RetentionCard() {
@@ -73,8 +212,6 @@ function RetentionCard() {
   );
 }
 
-/// Newer releases on GitHub (server/src/lib/updates.js). Upgrading is done on
-/// the host, so this shows the commands rather than running anything.
 function UpdatesCard() {
   const [u, setU] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -183,129 +320,5 @@ function UpdatesCard() {
       )}
       {msg && <p className="small" style={{ margin: 0 }}>{msg}</p>}
     </div>
-  );
-}
-
-export default function Settings() {
-  const { user, refresh } = useSession();
-  const isOwner = user.role === 'OWNER';
-  const [s, setS] = useState(null);
-  const [msg, setMsg] = useState('');
-
-  useEffect(() => { if (isOwner) api.get('/api/admin/settings').then(setS); }, [isOwner]);
-  if (!isOwner) return <p className="note bad" style={{ marginTop: 40 }}>You do not have permission to access this page.</p>;
-  if (!s) return <PageSkeleton />;
-
-  const save = async () => {
-    await api.put('/api/admin/settings', s);
-    await refresh();
-    setMsg('Settings saved.'); setTimeout(() => setMsg(''), 2000);
-  };
-
-  const uploadBanner = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const { url } = await api.upload('/api/admin/upload', file);
-      await api.put('/api/admin/settings', { logoUrl: url });
-      await refresh();
-      setS((cur) => ({ ...cur, logoUrl: url }));
-      setMsg('Banner uploaded.'); setTimeout(() => setMsg(''), 2000);
-    } catch (err) { setMsg(err.message); }
-  };
-
-  const uploadBannerLight = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const { url } = await api.upload('/api/admin/upload', file);
-      await api.put('/api/admin/settings', { logoUrlLight: url });
-      await refresh();
-      setS((cur) => ({ ...cur, logoUrlLight: url }));
-      setMsg('Light mode banner uploaded.'); setTimeout(() => setMsg(''), 2000);
-    } catch (err) { setMsg(err.message); }
-  };
-
-  const downloadSettings = () => {
-    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'pawpass-settings.json'; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const uploadSettings = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    try {
-      const parsed = JSON.parse(await file.text());
-      const allowed = Object.keys(s);
-      const clean = Object.fromEntries(Object.entries(parsed).filter(([k]) => allowed.includes(k)));
-      setS((cur) => ({ ...cur, ...clean }));
-      setMsg('Loaded. Review, then Save settings.');
-    } catch (err) {
-      setMsg(err instanceof SyntaxError ? 'That file is not valid JSON.' : err.message);
-    }
-  };
-
-  return (
-    <>
-      <p className="eyebrow">Instance</p>
-      <h1>Settings</h1>
-      <p className="muted">Wording and branding. Server config lives in <code className="mono">.env</code>.</p>
-      {msg && <p className="note good">{msg}</p>}
-
-      <UpdatesCard />
-      <RetentionCard />
-
-      <div className="card stack" style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: 0 }}>Import / export</h2>
-        <p className="small muted" style={{ margin: 0 }}>
-          Copy settings between instances as JSON. Starter file: <code className="mono">settings.example.json</code>.
-        </p>
-        <div className="row">
-          <button className="btn" onClick={downloadSettings}>Download current settings</button>
-          <label className="btn">
-            Upload settings JSON
-            <input type="file" accept="application/json" onChange={uploadSettings} style={{ display: 'none' }} />
-          </label>
-        </div>
-      </div>
-
-      <div className="card stack">
-        <Field label="Banner" help="PNG, about 1170×123">
-          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBanner} />
-          {s.logoUrl && <img src={s.logoUrl} alt="Banner preview" style={{ height: 32, marginTop: 10, display: 'block' }} />}
-        </Field>
-        <label className="row small">
-          <input type="checkbox" checked={!!s.useLightBanner} onChange={(e) => setS({ ...s, useLightBanner: e.target.checked })} />
-          Different banner for light mode
-        </label>
-        {s.useLightBanner && (
-          <Field label="Light mode banner" help="Used in light mode">
-            <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadBannerLight} />
-            {s.logoUrlLight && <img src={s.logoUrlLight} alt="Light mode banner preview" style={{ height: 32, marginTop: 10, display: 'block', background: '#fff', padding: 4 }} />}
-          </Field>
-        )}
-        {TEXT_FIELDS.map(([k, label]) => (
-          <Field key={k} label={label}>
-            {k === 'welcomeMessage' || k === 'botWelcome'
-              ? <textarea value={s[k] || ''} onChange={(e) => setS({ ...s, [k]: e.target.value })} />
-              : <input value={s[k] || ''} onChange={(e) => setS({ ...s, [k]: e.target.value })} />}
-          </Field>
-        ))}
-        <div className="row">
-          <Field label="Accent colour">
-            <input type="color" value={s.accentColor} onChange={(e) => setS({ ...s, accentColor: e.target.value })} style={{ width: 70, padding: 4 }} />
-          </Field>
-          <label className="row small" style={{ marginTop: 22 }}>
-            <input type="checkbox" checked={s.askFursonaName !== false} onChange={(e) => setS({ ...s, askFursonaName: e.target.checked })} />
-            Ask for a fursona name
-          </label>
-        </div>
-        <button className="btn primary" onClick={save}>Save settings</button>
-      </div>
-    </>
   );
 }

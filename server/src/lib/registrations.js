@@ -7,6 +7,8 @@ import { formatInTimeZone } from './tz.js';
 import { env } from './env.js';
 import { stripeEnabled } from './stripe.js';
 import { featureOn } from './features.js';
+import { maintenanceMessage } from './maintenance.js';
+import { checkAge, AgeError } from './age.js';
 import { STAFF_PAYMENT_METHODS, abandonPendingPayments, releaseDiscount } from './payments.js';
 import { tierSaleState, checkDiscount, checkDonation, registrationCharge, normalizeCode, PricingError, STRIPE_MIN_CHARGE_CENTS } from './pricing.js';
 
@@ -81,7 +83,12 @@ export function registrationWindowState(event, heldCount) {
 /// Attendee registrations can also carry a `discountCode` (reduces the
 /// ticket price, online or at the door) and `donationCents` (the optional
 /// add-on — only charged online, so ignored without Stripe).
-export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, ticketTierId, voucherCode, discountCode, donationCents, inPersonPayment, processedById, friends }) {
+export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, ticketTierId, voucherCode, discountCode, donationCents, inPersonPayment, processedById, friends, birthDate, guardianName }) {
+  // Maintenance mode pauses sign-ups everywhere except staff adding people.
+  if (source !== 'admin') {
+    const paused = await maintenanceMessage();
+    if (paused) throw new RegistrationError(paused);
+  }
   const ban = await findMatchingBan({ legalName, email, telegramId: user.telegramId, telegramUsername: user.telegramUsername });
   if (ban) {
     await audit(null, 'ban.blocked_registration', ban.id, {
@@ -143,6 +150,9 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
   }
 
   const cleanAnswers = validateAnswers(event, answers, tier?.id);
+  let age;
+  try { age = checkAge(event, { birthDate, guardianName }, { requireDob: source !== 'admin' }); }
+  catch (e) { if (e instanceof AgeError) throw new RegistrationError(e.message); throw e; }
 
   // Discount codes and the donation add-on are attendee-side only; staff
   // just enter what they actually took at the kiosk.
@@ -227,6 +237,8 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
       fursonaName: (fursonaName || '').trim(),
       email: email?.trim() || null,
       answers: cleanAnswers,
+      birthDate: age.birthDate,
+      guardianName: age.guardianName,
       status,
       ticketTierId: tier?.id ?? null,
       tierName: tier?.name ?? null,
