@@ -413,10 +413,11 @@ export default function EventPage() {
         </section>
       </div>
 
-      {(event.schedule || event.submissionsOpen) && (
+      {(event.schedule || event.submissionsOpen || event.vendorsOpen) && (
         <section className="row" style={{ marginTop: 20 }}>
           {event.schedule && <Link className="btn" to={`/e/${slug}/schedule`}>See the schedule</Link>}
           {event.submissionsOpen && <Link className="btn ghost" to={`/e/${slug}/submit`}>Submit a panel</Link>}
+          {event.vendorsOpen && <Link className="btn ghost" to={`/e/${slug}/vendors`}>Apply for a vendor table</Link>}
         </section>
       )}
 

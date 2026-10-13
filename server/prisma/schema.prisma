@@ -65,6 +65,24 @@ enum VolunteerAttendance {
   NO_SHOW
 }
 
+enum VendorArea {
+  DEALERS_DEN
+  ARTIST_ALLEY
+}
+
+enum VendorStatus {
+  SUBMITTED
+  WAITLISTED
+  /// Offered a table; the fee is owed (free tables skip straight to CONFIRMED).
+  ACCEPTED
+  /// Paid (or free) — they have the table.
+  CONFIRMED
+  DECLINED
+  WITHDRAWN
+  /// Taken back after acceptance, by staff or a full refund.
+  CANCELLED
+}
+
 enum SubmissionStatus {
   SUBMITTED
   ACCEPTED
@@ -175,6 +193,8 @@ model User {
   sessionStars     SessionStar[]
   panelSubmissions PanelSubmission[]
   submissionsDecided PanelSubmission[] @relation("SubmissionsDecided")
+  vendorApplications VendorApplication[]
+  vendorsDecided   VendorApplication[] @relation("VendorsDecided")
 }
 
 model Event {
@@ -236,6 +256,11 @@ model Event {
   submissionsOpen    Boolean      @default(false)
   submissionsCloseAt DateTime?
   submissionInfo   String         @default("")
+  /// Dealers' den / artist alley applications, open to signed-in people
+  /// while true and before vendorsCloseAt. vendorInfo is the guidelines.
+  vendorsOpen      Boolean        @default(false)
+  vendorsCloseAt   DateTime?
+  vendorInfo       String         @default("")
   /// When personal data (names, emails, answers...) was cleared from this
   /// event under the instance's data retention setting (lib/retention.js).
   dataPurgedAt     DateTime?
@@ -258,6 +283,8 @@ model Event {
   rooms            EventRoom[]
   sessions         ScheduleSession[]
   submissions      PanelSubmission[]
+  vendorTableTypes VendorTableType[]
+  vendorApplications VendorApplication[]
 }
 
 model Registration {
@@ -395,11 +422,14 @@ model TicketTier {
 /// data is ever stored; Stripe rows only hold Stripe's own IDs.
 model Payment {
   id                    String        @id @default(cuid())
-  /// Exactly one of registrationId / merchOrderId is set.
+  /// Exactly one of registrationId / merchOrderId / vendorApplicationId is
+  /// set — enforced by the Payment_one_target CHECK constraint (migrations 0003, 0014).
   registrationId        String?
   registration          Registration? @relation(fields: [registrationId], references: [id], onDelete: Cascade)
   merchOrderId          String?
   merchOrder            MerchOrder?   @relation(fields: [merchOrderId], references: [id], onDelete: Cascade)
+  vendorApplicationId   String?
+  vendorApplication     VendorApplication? @relation(fields: [vendorApplicationId], references: [id], onDelete: Cascade)
   method                PaymentMethod
   status                PaymentStatus @default(PENDING)
   /// Integer cents.
@@ -428,6 +458,7 @@ model Payment {
 
   @@index([registrationId])
   @@index([merchOrderId])
+  @@index([vendorApplicationId])
   @@index([status, expiresAt])
 }
 
@@ -630,6 +661,67 @@ model VolunteerSignup {
   createdAt   DateTime            @default(now())
 
   @@unique([shiftId, userId])
+  @@index([userId])
+}
+
+/// A kind of vendor table, e.g. "Dealers' den, full table, $150, 30 of
+/// them". Applicants ask for one; accepting someone takes one of `quantity`.
+model VendorTableType {
+  id          String              @id @default(cuid())
+  eventId     String
+  event       Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  area        VendorArea          @default(DEALERS_DEN)
+  name        String
+  description String              @default("")
+  /// Integer cents, 0 = free. Snapshotted onto an application when accepted.
+  priceCents  Int                 @default(0)
+  currency    String              @default("usd")
+  quantity    Int
+  sortOrder   Int                 @default(0)
+  active      Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+
+  applications VendorApplication[]
+
+  @@index([eventId])
+}
+
+/// A dealer or artist applying for a table. One live application per area
+/// per person per event.
+model VendorApplication {
+  id            String           @id @default(cuid())
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area          VendorArea
+  /// What they asked for, then what they were given on acceptance.
+  tableTypeId   String?
+  tableType     VendorTableType? @relation(fields: [tableTypeId], references: [id], onDelete: SetNull)
+  businessName  String
+  /// What they make or sell.
+  description   String           @default("")
+  portfolioUrls String[]         @default([])
+  /// Helpers working the table with them, as names.
+  assistants    String           @default("")
+  /// For organizers: power, accessibility, neighbors to sit near.
+  notes         String           @default("")
+  status        VendorStatus     @default(SUBMITTED)
+  /// Fee owed, fixed when accepted.
+  feeCents      Int?
+  currency      String           @default("usd")
+  tableNumber   String?
+  /// Staff-only.
+  reviewNote    String           @default("")
+  decidedAt     DateTime?
+  decidedById   String?
+  decidedBy     User?            @relation("VendorsDecided", fields: [decidedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  payments      Payment[]
+
+  @@index([eventId, status])
   @@index([userId])
 }
 

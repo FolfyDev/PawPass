@@ -15,6 +15,7 @@ const TABS = [
   ['hotels', 'Hotels'],
   ['schedule', 'Schedule'],
   ['submissions', 'Panels'],
+  ['vendors', 'Vendors'],
 ];
 
 export default function EventTabs({ id }) {

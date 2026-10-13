@@ -37,6 +37,7 @@ const MARKERS = [
   ['0011_two_factor', 'User', 'totpSecret'],
   ['0012_data_retention', 'Event', 'dataPurgedAt'],
   ['0013_schedule', 'ScheduleSession'],
+  ['0014_vendors', 'VendorApplication'],
 ];
 
 const prisma = new PrismaClient();

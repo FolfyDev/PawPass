@@ -102,6 +102,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     hotels: event.hotelsEnabled,
     schedule: event.scheduleEnabled,
     submissionsOpen: event.submissionsOpen,
+    vendorsOpen: event.vendorsOpen,
     donationAddon: event.donationAddonEnabled && stripeEnabled()
       ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
       : null,

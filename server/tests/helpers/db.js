@@ -38,6 +38,8 @@ const CLEAR_ORDER = [
   'donation',
   'stripeEvent',
   'payment',
+  'vendorApplication',
+  'vendorTableType',
   'checkIn',
   'sessionStar',
   'panelSubmission',

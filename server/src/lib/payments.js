@@ -34,7 +34,11 @@ export const STAFF_PAYMENT_METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
 const sessionIntentId = (session) =>
   typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id ?? null;
 
-const targetOf = (payment) => (payment.registrationId ? { registrationId: payment.registrationId } : { merchOrderId: payment.merchOrderId });
+/// What a payment is for: a registration, a merch pre-order, or a vendor
+/// table. Exactly one is set.
+const targetOf = (payment) => (payment.registrationId ? { registrationId: payment.registrationId }
+  : payment.merchOrderId ? { merchOrderId: payment.merchOrderId }
+  : { vendorApplicationId: payment.vendorApplicationId });
 
 /* ------------------------------------------------------------ checkout ---- */
 
@@ -65,7 +69,7 @@ async function openSession(stripe, { pending, target, amountCents, donationCents
       mode: 'payment',
       line_items: lineItems,
       customer_email: email || undefined,
-      client_reference_id: target.registrationId || target.merchOrderId,
+      client_reference_id: target.registrationId || target.merchOrderId || target.vendorApplicationId,
       metadata: { ...metadata, pawpassPaymentId: payment.id },
       payment_intent_data: { metadata: { ...metadata, pawpassPaymentId: payment.id } },
       expires_at: Math.floor(expiresAt.getTime() / 1000),
@@ -179,6 +183,37 @@ export async function startOrderCheckout(orderId) {
   });
 }
 
+/// Same as startCheckout, for the table fee on an ACCEPTED vendor
+/// application. Nothing is held while it's open: the table was set aside
+/// when they were accepted, so an expired checkout just means paying again.
+export async function startVendorCheckout(applicationId) {
+  const stripe = getStripe();
+  if (!stripe) throw new PaymentError('Online payment is not set up. The organizers will tell you how to pay.');
+  const app = await prisma.vendorApplication.findUnique({
+    where: { id: applicationId },
+    include: { event: true, user: true, tableType: true, payments: { where: { method: 'STRIPE', status: 'PENDING' }, orderBy: { createdAt: 'desc' } } },
+  });
+  if (!app) throw new PaymentError('Application not found.');
+  if (app.status !== 'ACCEPTED' || !app.feeCents) throw new PaymentError('This application has nothing to pay.');
+
+  const reuse = await reuseOpenSession(stripe, app.payments);
+  if (reuse) return reuse;
+  return openSession(stripe, {
+    pending: app.payments,
+    target: { vendorApplicationId: app.id },
+    amountCents: app.feeCents,
+    currency: app.currency,
+    lineItems: [{
+      price_data: { currency: app.currency, unit_amount: app.feeCents, product_data: { name: `${app.tableType?.name || 'Vendor table'}: ${app.event.title}` } },
+      quantity: 1,
+    }],
+    email: app.user.email,
+    metadata: { pawpassVendorApplicationId: app.id, pawpassEventId: app.eventId },
+    successPath: '/tickets',
+    cancelPath: `/e/${app.event.slug}/vendors?payment=cancelled`,
+  });
+}
+
 /* ---------------------------------------------------- applying results ---- */
 
 /// Applies whatever state a Checkout session is in. Idempotent; safe to call
@@ -225,7 +260,9 @@ async function markPaid(payment, session) {
       },
     });
     if (!claimed.count) return null;
-    return payment.registrationId ? confirmRegistration(tx, payment.registrationId) : confirmOrder(tx, payment.merchOrderId);
+    if (payment.registrationId) return confirmRegistration(tx, payment.registrationId);
+    if (payment.merchOrderId) return confirmOrder(tx, payment.merchOrderId);
+    return confirmVendor(tx, payment.vendorApplicationId);
   });
   if (!result) return null;
 
@@ -242,8 +279,29 @@ async function markPaid(payment, session) {
       await notifyFriendTickets(result.reg.id);
     }
     if (result.order) await notifyOrderPaid(result.order);
+    if (result.vendor) await notifyVendorConfirmed(result.vendor);
   }
   return result;
+}
+
+/// ACCEPTED -> CONFIRMED once the fee is in. A payment landing on a
+/// cancelled application is flagged for a refund instead, same as a lapsed
+/// ticket hold.
+async function confirmVendor(tx, applicationId) {
+  const app = await tx.vendorApplication.findUnique({ where: { id: applicationId }, include: { event: true, user: true, tableType: true } });
+  if (app.status === 'CONFIRMED') return { vendor: app, confirmed: false };
+  if (app.status !== 'ACCEPTED') return { vendor: app, confirmed: false, orphaned: true };
+  const updated = await tx.vendorApplication.update({ where: { id: app.id }, data: { status: 'CONFIRMED' }, include: { event: true, user: true, tableType: true } });
+  return { vendor: updated, confirmed: true };
+}
+
+export async function notifyVendorConfirmed(app) {
+  const where = app.tableNumber ? ` Your table is ${app.tableNumber}.` : ' Your table number will follow closer to the event.';
+  await notifyPerson({
+    user: app.user, email: app.user.email,
+    subject: `Your table at ${app.event.title} is confirmed`,
+    text: `${app.businessName}: your ${app.tableType?.name || 'table'} at ${app.event.title} is confirmed.${where}`,
+  });
 }
 
 async function confirmRegistration(tx, registrationId) {
@@ -307,7 +365,8 @@ async function markEnded(payment, status) {
   const ended = await prisma.payment.updateMany({ where: { id: payment.id, status: 'PENDING' }, data: { status } });
   if (!ended.count) return null;
   if (payment.registrationId) await releaseIfUnheld(payment.registrationId);
-  else await releaseOrderIfUnheld(payment.merchOrderId);
+  else if (payment.merchOrderId) await releaseOrderIfUnheld(payment.merchOrderId);
+  // A vendor table isn't held by the checkout, so there's nothing to release.
   return { ended: status };
 }
 
@@ -382,6 +441,12 @@ export async function abandonPendingPayments(registrationId) {
   await prisma.registration.updateMany({ where: { paidByRegistrationId: registrationId, status: 'PENDING_PAYMENT' }, data: { status: 'CANCELLED' } });
 }
 
+/// Staff cancelled a vendor application: close any checkout it still has
+/// open, so the fee can't be paid for a table that's gone.
+export async function abandonVendorPayments(applicationId) {
+  await expireOtherSessions({ vendorApplicationId: applicationId }, null);
+}
+
 /* ------------------------------------------------------------- refunds ---- */
 
 /// Mirrors a refund issued in Stripe (dashboard, or our own refund button —
@@ -426,6 +491,9 @@ async function applyRefundTotal(payment, refundedCents, totalCents) {
       });
       for (let i = 0; i <= friends.count; i++) await notifyWaitlistPromotion(await promoteFromWaitlist(reg.eventId));
     }
+  } else if (payment.vendorApplicationId) {
+    // A full refund gives the table back.
+    await prisma.vendorApplication.updateMany({ where: { id: payment.vendorApplicationId, status: { in: ['ACCEPTED', 'CONFIRMED'] } }, data: { status: 'CANCELLED' } });
   } else {
     await prisma.$transaction(async (tx) => {
       const order = await tx.merchOrder.findUnique({ where: { id: payment.merchOrderId } });
@@ -486,6 +554,13 @@ async function notifyRefund(payment, amountCents, full) {
     subject = `Refund for ${reg.event.title}`;
     text = `You've been refunded ${money(amountCents)} for your ${reg.tierName || ''} ticket to ${reg.event.title} (code ${reg.code}).${back}` +
       (full && reg.status === 'CANCELLED' ? '\n\nYour registration has been cancelled.' : '');
+  } else if (payment.vendorApplicationId) {
+    const app = await prisma.vendorApplication.findUnique({ where: { id: payment.vendorApplicationId }, include: { user: true, event: true } });
+    user = app.user;
+    email = app.user.email;
+    subject = `Refund for your ${app.event.title} table`;
+    text = `You've been refunded ${money(amountCents)} for ${app.businessName}'s table at ${app.event.title}.${back}` +
+      (full ? '\n\nThe table has been released.' : '');
   } else {
     const order = await prisma.merchOrder.findUnique({ where: { id: payment.merchOrderId }, include: { user: true, event: true } });
     user = order.user;
@@ -780,14 +855,18 @@ export async function syncSessionForUser(sessionId, userId) {
   if (!stripe || typeof sessionId !== 'string' || !sessionId.startsWith('cs_')) return null;
   const payment = await prisma.payment.findUnique({
     where: { stripeSessionId: sessionId },
-    include: { registration: true, merchOrder: true },
+    include: { registration: true, merchOrder: true, vendorApplication: true },
   });
-  const owner = payment?.registration?.userId ?? payment?.merchOrder?.userId;
+  const owner = payment?.registration?.userId ?? payment?.merchOrder?.userId ?? payment?.vendorApplication?.userId;
   if (!payment || owner !== userId) return null;
   await applyCheckoutSession(await stripe.checkout.sessions.retrieve(sessionId));
   if (payment.registrationId) {
     const reg = await prisma.registration.findUnique({ where: { id: payment.registrationId } });
     return { kind: 'registration', code: reg.code, status: reg.status };
+  }
+  if (payment.vendorApplicationId) {
+    const app = await prisma.vendorApplication.findUnique({ where: { id: payment.vendorApplicationId } });
+    return { kind: 'vendor', applicationId: app.id, status: app.status };
   }
   const order = await prisma.merchOrder.findUnique({ where: { id: payment.merchOrderId } });
   return { kind: 'merch', orderId: order.id, status: order.status };

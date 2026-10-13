@@ -11,7 +11,7 @@ import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier, HOLDS_SEAT } from '../lib/registrations.js';
-import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest } from '../lib/payments.js';
+import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest, shapePayment } from '../lib/payments.js';
 import { normalizeCode, MAX_DONATION_CENTS } from '../lib/pricing.js';
 import { shapeOrder } from '../lib/merch.js';
 import { syncTier, archiveTierProduct, stripeEnabled } from '../lib/stripe.js';
@@ -27,6 +27,7 @@ import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
 import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
 import { recordScan, undoLastScan, todayCounts, dailyAttendance, eventDays, hashSecret, dayIn, ScanError, DIRECTIONS } from '../lib/checkins.js';
 import { getRetention, setRetention, eventsDue, purgeEvent, purgeDue, RETENTION_CHOICES } from '../lib/retention.js';
+import { paidCents } from '../lib/vendors.js';
 import { reserveRoom, cancelReservation, changeStay, blockTotals, hotelPayload, blockPayload, setNights, nightsBetween, HotelError, LIVE } from '../lib/hotels.js';
 
 export const adminRouter = Router();
@@ -56,7 +57,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo','vendorsOpen','vendorsCloseAt','vendorInfo'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -66,20 +67,20 @@ function eventPayload(body, timeZone) {
   const data = {};
   for (const k of EVENT_FIELDS) {
     if (body[k] === undefined) continue;
-    if (['startsAt','endsAt','opensAt','closesAt','submissionsCloseAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
+    if (['startsAt','endsAt','opensAt','closesAt','submissionsCloseAt','vendorsCloseAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
     else if (k === 'occupancyLimit') {
       const n = body[k] === '' || body[k] === null ? null : Number(body[k]);
       if (n !== null && (!Number.isInteger(n) || n < 1)) throw new RegistrationError('The occupancy limit must be a whole number, or blank for none.');
       data[k] = n;
     }
-    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled' || k === 'hotelsEnabled' || k === 'scheduleEnabled' || k === 'submissionsOpen') data[k] = Boolean(body[k]);
+    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled' || k === 'hotelsEnabled' || k === 'scheduleEnabled' || k === 'submissionsOpen' || k === 'vendorsOpen') data[k] = Boolean(body[k]);
     else if (k === 'kbygDaysBefore') {
       const days = Number(body[k]);
       if (!Number.isInteger(days) || days < 1 || days > 30) throw new RegistrationError('Send "know before you go" 1 to 30 days before.');
       data[k] = days;
     }
-    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo' || k === 'hotelInfo' || k === 'submissionInfo') data[k] = String(body[k] || '').slice(0, 5000);
+    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo' || k === 'hotelInfo' || k === 'submissionInfo' || k === 'vendorInfo') data[k] = String(body[k] || '').slice(0, 5000);
     else if (k === 'feedbackUrl') {
       const url = String(body[k] || '').trim();
       if (url && !/^https?:\/\/\S+$/i.test(url)) throw new RegistrationError('The feedback link must start with http:// or https://.');
@@ -451,9 +452,21 @@ adminRouter.post('/registrations/:code/payments', async (req, res) => {
 /// Undoes a mistaken in-person entry. Stripe payments are refunded from the
 /// Stripe dashboard instead, and the refund webhook updates them here.
 adminRouter.delete('/payments/:id', async (req, res) => {
-  const payment = await prisma.payment.findUnique({ where: { id: req.params.id }, include: { registration: true } });
+  const payment = await prisma.payment.findUnique({ where: { id: req.params.id }, include: { registration: true, vendorApplication: { include: { payments: true } } } });
   if (!payment) return res.status(404).json({ error: 'Payment not found.' });
   if (payment.method === 'STRIPE') return res.status(400).json({ error: 'Use Refund for Stripe payments instead.' });
+  if (payment.vendorApplicationId) {
+    // A mistaken entry at the desk. If what's left no longer covers the fee,
+    // the table goes back to waiting on payment.
+    const app = payment.vendorApplication;
+    await prisma.payment.delete({ where: { id: payment.id } });
+    const left = paidCents(app.payments.filter((p) => p.id !== payment.id));
+    if (app.status === 'CONFIRMED' && app.feeCents && left < app.feeCents) {
+      await prisma.vendorApplication.updateMany({ where: { id: app.id, status: 'CONFIRMED' }, data: { status: 'ACCEPTED' } });
+    }
+    await audit(req.user.id, 'payment.undo', payment.id, { vendorApplicationId: app.id, amountCents: payment.amountCents });
+    return res.json({ ok: true });
+  }
   await prisma.payment.delete({ where: { id: payment.id } });
   await audit(req.user.id, 'payment.undo', payment.id, { code: payment.registration.code, amountCents: payment.amountCents });
   res.json(shapeReg(await prisma.registration.findUnique({ where: { id: payment.registrationId }, include: REG_INCLUDE })));
@@ -469,6 +482,10 @@ adminRouter.post('/payments/:id/refund', requireOwner, async (req, res) => {
     const payment = await refundPayment({ paymentId: req.params.id, amountCents, actorId: req.user.id });
     if (payment.registrationId) {
       return res.json({ registration: shapeReg(await prisma.registration.findUnique({ where: { id: payment.registrationId }, include: REG_INCLUDE })) });
+    }
+    if (payment.vendorApplicationId) {
+      const app = await prisma.vendorApplication.findUnique({ where: { id: payment.vendorApplicationId }, select: { id: true, status: true } });
+      return res.json({ vendorApplication: app, payment: shapePayment(payment) });
     }
     res.json({ order: shapeOrder(await prisma.merchOrder.findUnique({ where: { id: payment.merchOrderId }, include: { items: true, payments: true, user: true } })) });
   } catch (e) {
@@ -804,7 +821,7 @@ function splitPayment(p) {
 
 const SETTLED = ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'];
 const eventPayments = (eventId, include) => prisma.payment.findMany({
-  where: { status: { in: SETTLED }, OR: [{ registration: { eventId } }, { merchOrder: { eventId } }] },
+  where: { status: { in: SETTLED }, OR: [{ registration: { eventId } }, { merchOrder: { eventId } }, { vendorApplication: { eventId } }] },
   include,
 });
 
@@ -831,6 +848,7 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
   const tickets = byMethod();
   const donations = byMethod();
   const merch = byMethod();
+  const vendors = byMethod();
 
   const stripe = { count: 0, grossCents: 0, refundedCents: 0, feeCents: 0, netCents: 0, missingFees: 0 };
   for (const p of payments) {
@@ -838,6 +856,9 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
     if (p.merchOrderId) {
       merch[p.method].count++;
       merch[p.method].total += net / 100;
+    } else if (p.vendorApplicationId) {
+      vendors[p.method].count++;
+      vendors[p.method].total += net / 100;
     } else {
       tickets[p.method].count++;
       tickets[p.method].total += ticket / 100;
@@ -871,13 +892,14 @@ adminRouter.get('/events/:id/reconciliation', async (req, res) => {
   const ticketsTotal = sumTotals(tickets);
   const donationsTotal = sumTotals(donations);
   const merchTotal = sumTotals(merch);
+  const vendorsTotal = sumTotals(vendors);
   res.json({
     methods: ALL_PAYMENT_METHODS,
-    tickets, donations, merch, stripe,
+    tickets, donations, merch, vendors, stripe,
     unpaidTickets: unpaid.length,
     unpaidTotal: unpaid.reduce((sum, r) => sum + r.balanceDueCents, 0) / 100,
-    ticketsTotal, donationsTotal, merchTotal,
-    grandTotal: ticketsTotal + donationsTotal + merchTotal,
+    ticketsTotal, donationsTotal, merchTotal, vendorsTotal,
+    grandTotal: ticketsTotal + donationsTotal + merchTotal + vendorsTotal,
   });
 });
 
@@ -908,7 +930,7 @@ adminRouter.get('/events/:id/merch.csv', async (req, res) => {
 adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
   const eventId = req.params.id;
   const [payments, sales, donationEntries] = await Promise.all([
-    eventPayments(eventId, { registration: true, merchOrder: { include: { items: true, user: true } }, processedBy: true }),
+    eventPayments(eventId, { registration: true, merchOrder: { include: { items: true, user: true } }, vendorApplication: { include: { tableType: true } }, processedBy: true }),
     prisma.sale.findMany({ where: { item: { eventId } }, include: { item: true, processedBy: true } }),
     prisma.donation.findMany({ where: { eventId }, include: { processedBy: true } }),
   ]);
@@ -925,6 +947,11 @@ adminRouter.get('/events/:id/reconciliation.csv', async (req, res) => {
     if (p.merchOrderId) {
       const o = p.merchOrder;
       rows.push({ ...base, type: 'Merch pre-order', description: `${o.items.map((i) => `${i.quantity} x ${i.name}`).join(', ')}: ${o.user.displayName}`, amount: net / 100 });
+      continue;
+    }
+    if (p.vendorApplicationId) {
+      const a = p.vendorApplication;
+      rows.push({ ...base, type: 'Vendor table', description: `${a.tableType?.name || 'Table'}: ${a.businessName}${a.tableNumber ? ` (${a.tableNumber})` : ''}`, amount: net / 100 });
       continue;
     }
     const who = `${p.registration.legalName} (${p.registration.code})`;
@@ -1826,7 +1853,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'eventRoom', 'scheduleSession', 'sessionStar', 'panelSubmission', 'incident', 'incidentPerson', 'incidentNote', 'ban', 'auditLog'];
+const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'vendorTableType', 'vendorApplication', 'payment', 'sale', 'donation', 'emailCampaign', 'eventRoom', 'scheduleSession', 'sessionStar', 'panelSubmission', 'incident', 'incidentPerson', 'incidentNote', 'ban', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 

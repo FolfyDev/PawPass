@@ -7,6 +7,7 @@ import { downloadEventIcs } from '../lib/ics.js';
 import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown, Pill, fmtTimeRange, fmtStay } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
 import PaymentNotice from '../components/PaymentNotice.jsx';
+import { VendorStatus } from '../components/VendorBits.jsx';
 
 const TICKET_GRID = { display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fill,minmax(min(320px,100%),1fr))' };
 
@@ -64,11 +65,13 @@ export default function Tickets() {
   const [shifts, setShifts] = useState([]);
   const [shiftMsg, setShiftMsg] = useState('');
   const [rooms, setRooms] = useState([]);
+  const [tables, setTables] = useState([]);
   const [roomMsg, setRoomMsg] = useState('');
   const load = () => {
     api.get('/api/my/merch-orders').then(setOrders).catch(() => setOrders([]));
     api.get('/api/my/volunteer-shifts').then(setShifts).catch(() => setShifts([]));
     api.get('/api/my/room-reservations').then(setRooms).catch(() => setRooms([]));
+    api.get('/api/my/vendor-applications').then(setTables).catch(() => setTables([]));
     return api.get('/api/my/tickets').then(setTickets);
   };
 
@@ -80,7 +83,9 @@ export default function Tickets() {
       setPayNote('Payment received. Confirming your ticket…');
       api.post('/api/my/payments/sync', { sessionId })
         .then((r) => setPayNote(
-          r.kind === 'merch'
+          r.kind === 'vendor'
+            ? (r.status === 'CONFIRMED' ? 'Payment received. Your vendor table is confirmed.' : 'Payment received. Your table will update in a moment.')
+            : r.kind === 'merch'
             ? (r.status === 'PAID' ? 'Payment received. Your pre-order is confirmed. Pick it up at the merch table.' : 'Payment received. Your pre-order will update in a moment.')
             : (r.status === 'CONFIRMED' ? 'Payment received. You are registered!' : 'Payment received. Your ticket will update in a moment.')))
         .catch(() => setPayNote('Payment received. Your ticket will update in a moment.'))
@@ -286,6 +291,31 @@ export default function Tickets() {
           </div>
         ))}
       </div>
+
+      {tables.length > 0 && (
+        <section style={{ marginTop: 32 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Your vendor tables</p>
+          <div className="card">
+            <ul className="tier-list">
+              {tables.map((a) => (
+                <li key={a.id}>
+                  <div>
+                    <strong>{a.businessName}</strong> <span className="muted">· {a.areaLabel} · {a.event.title}</span>
+                    <p className="small muted" style={{ margin: '2px 0 0' }}>
+                      {a.tableType?.name || 'Table requested'}{a.tableNumber ? ` · table ${a.tableNumber}` : ''}
+                      {a.status === 'ACCEPTED' && a.feeCents > a.paidCents ? ` · ${fmtMoney(a.feeCents - a.paidCents, a.currency)} due` : ''}
+                    </p>
+                  </div>
+                  <div className="stack" style={{ justifyItems: 'end', gap: 6 }}>
+                    <VendorStatus status={a.status} />
+                    <a className="small" href={`/e/${a.event.slug}/vendors`}>{a.status === 'ACCEPTED' ? 'Pay or view' : 'View'}</a>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       {rooms.length > 0 && (
         <section style={{ marginTop: 32 }}>

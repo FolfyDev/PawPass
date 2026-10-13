@@ -133,6 +133,24 @@ Owners turn each on per event (`scheduleEnabled`, `submissionsOpen`, `submission
 | PATCH | `/api/admin/submissions/:id` | `{ reviewNote }` (staff only) |
 | POST | `/api/admin/submissions/:id/decision` | `{ decision: ACCEPTED \| DECLINED, message }` — accepting creates an unscheduled draft session; the submitter is told |
 
+## Dealers' den & artist alley
+
+Owners set table types and fees and open applications (`vendorsOpen`, `vendorsCloseAt`, `vendorInfo` on PATCH `/api/admin/events/:id`). Admins review, assign table numbers, and record payments.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/events/:slug/vendors` | Whether it's `accepting`, guidelines, active table types, `payOnline`, and the viewer's applications |
+| POST | `/api/events/:slug/vendors` | Signed in. `{ area: DEALERS_DEN \| ARTIST_ALLEY, tableTypeId, businessName, description, portfolioUrls, assistants, notes }` — one live application per area |
+| GET | `/api/my/vendor-applications` | |
+| PATCH | `/api/my/vendor-applications/:id` · POST `.../withdraw` | While waiting on a decision |
+| POST | `/api/my/vendor-applications/:id/pay` | `{ url }` of a Stripe Checkout for the table fee |
+| GET | `/api/admin/events/:id/vendors` · `/api/admin/events/:id/vendors.csv` | Table types with how many are given out, and every application |
+| POST | `/api/admin/events/:id/vendor-tables` · PATCH/DELETE `/api/admin/vendor-tables/:id` | **Owner only.** `{ area, name, price, quantity, description, active }` — price in dollars |
+| POST | `/api/admin/vendor-applications/:id/decision` | `{ decision: ACCEPTED \| WAITLISTED \| DECLINED, tableTypeId, message }` — accepting takes a table (never past `quantity`) and fixes the fee; free tables are confirmed at once |
+| PATCH | `/api/admin/vendor-applications/:id` | `{ tableNumber, reviewNote }` |
+| POST | `/api/admin/vendor-applications/:id/payments` | `{ method, amount, note }` — confirms the table once the fee is covered |
+| POST | `/api/admin/vendor-applications/:id/cancel` | `{ message }` — releases the table and closes any open checkout; refund paid fees separately |
+
 ## Incidents — requires ADMIN or OWNER
 
 Owners see every report; an admin only sees reports they filed (any other ID is a 404).

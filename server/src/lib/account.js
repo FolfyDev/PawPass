@@ -31,6 +31,7 @@ export async function exportAccount(userId) {
     include: { block: { include: { hotel: { include: { event: true } } } } },
     orderBy: { createdAt: 'asc' },
   });
+  const vendorApps = await prisma.vendorApplication.findMany({ where: { userId }, include: { event: true, tableType: true, payments: true }, orderBy: { createdAt: 'asc' } });
   const [submissions, stars] = await Promise.all([
     prisma.panelSubmission.findMany({ where: { userId }, include: { event: true }, orderBy: { createdAt: 'asc' } }),
     prisma.sessionStar.findMany({ where: { userId }, include: { session: { include: { event: true } } }, orderBy: { createdAt: 'asc' } }),
@@ -64,6 +65,11 @@ export async function exportAccount(userId) {
     panelSubmissions: submissions.map((s) => ({
       event: s.event.title, title: s.title, description: s.description, hosts: s.hosts, lengthMinutes: s.lengthMinutes,
       availability: s.availability, notes: s.notes, status: s.status, submittedAt: s.createdAt,
+    })),
+    vendorApplications: vendorApps.map((a) => ({
+      event: a.event.title, area: a.area, businessName: a.businessName, description: a.description, portfolioUrls: a.portfolioUrls,
+      assistants: a.assistants, notes: a.notes, status: a.status, table: a.tableType?.name, tableNumber: a.tableNumber,
+      fee: a.feeCents != null ? a.feeCents / 100 : null, appliedAt: a.createdAt, payments: a.payments.map(pay),
     })),
     starredSessions: stars.map((s) => ({ event: s.session.event.title, session: s.session.title, startsAt: s.session.startsAt })),
     hotelRooms: rooms.map((r) => ({
@@ -102,6 +108,8 @@ export async function deleteAccount(userId) {
   const shifts = await prisma.volunteerSignup.count({ where: { userId, shift: { endsAt: { gt: now } } } });
   const rooms = await prisma.roomReservation.count({ where: { userId, status: { in: LIVE }, block: { hotel: { event: { endsAt: { gt: now } } } } } });
   if (rooms) throw new AccountError('Cancel your hotel room first, or ask the organizers to.');
+  const tables = await prisma.vendorApplication.count({ where: { userId, status: { in: ['ACCEPTED', 'CONFIRMED'] }, event: { endsAt: { gt: now } } } });
+  if (tables) throw new AccountError('You have a vendor table for an upcoming event. Ask the organizers to cancel it first.');
   if (shifts) throw new AccountError(`Drop your volunteer shift${shifts === 1 ? '' : 's'} first, so the organizers know to find someone else.`);
 
   await prisma.$transaction(async (tx) => {

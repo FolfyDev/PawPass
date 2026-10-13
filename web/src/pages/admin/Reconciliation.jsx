@@ -6,7 +6,7 @@ import EventTabs from '../../components/EventTabs.jsx';
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 const minus = (n) => (n ? `−${money(n)}` : money(0));
 const METHOD_LABEL = { CASH: 'Cash', CARD: 'Card', PAYPAL: 'PayPal', STRIPE: 'Stripe (online)', OTHER: 'Other' };
-const CATEGORIES = [['tickets', 'Tickets'], ['donations', 'Donations'], ['merch', 'Merch']];
+const CATEGORIES = [['tickets', 'Tickets'], ['donations', 'Donations'], ['merch', 'Merch'], ['vendors', 'Vendor tables']];
 
 function Stat({ label, value, big }) {
   return (
@@ -83,6 +83,7 @@ export default function Reconciliation() {
         <Stat label="Tickets" value={money(data.ticketsTotal)} />
         <Stat label="Donations" value={money(data.donationsTotal)} />
         <Stat label="Merch" value={money(data.merchTotal)} />
+        {data.vendorsTotal > 0 && <Stat label="Vendor tables" value={money(data.vendorsTotal)} />}
       </div>
 
       {data.stripe?.count > 0 && (

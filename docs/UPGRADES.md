@@ -116,6 +116,7 @@ The schema is versioned in `server/prisma/migrations/`, one folder per change:
 | `0005_reminders_group_tickets` | Reminder timestamps and "buy for friends" (a ticket can point at the buyer's registration). Additive only. |
 | `0006_event_emails` | Automatic "know before you go" and thank-you messages per event. Additive only; both start off. |
 | `0007_volunteers` | Volunteer shifts and sign-ups. Additive only; sign-up stays hidden until turned on per event. Backups go to version 4. |
+| `0014_vendors` | Dealers' den / artist alley table types and applications, and payments that pay for one. Widens the `Payment_one_target` check constraint to three targets. Backups go to version 9. |
 | `0013_schedule` | Event schedule (rooms, sessions, attendee stars) and panel submissions. Additive only; both hidden until turned on per event. Backups go to version 8. |
 | `0012_data_retention` | Marks events whose personal data was cleared. Retention is off until an owner picks a period in Settings. |
 | `0011_two_factor` | Optional authenticator-app two-factor for staff password sign-in. Additive only; off for everyone until they set it up. |
