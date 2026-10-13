@@ -21,6 +21,7 @@ No payments, no ticket pricing, no Stripe keys — every ticket is free.
 - **Two staff roles** — Owner (full control) and Admin (day-of operations only)
 - **Two-factor sign-in** — optional authenticator-app codes for staff password sign-in, with one-time recovery codes
 - **Encrypted at rest** — names, emails, and custom-question answers are encrypted in the database
+- **Data retention** — optionally clear names, emails and answers a set number of months after each event ends, keeping payments and counts
 - **Docker + Postgres** — `docker compose up` and you have a working instance
 
 ---

@@ -26,6 +26,7 @@ import { sendCampaign, sendRegistrationConfirmation, sendNoticeEmail } from '../
 import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
 import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
 import { recordScan, undoLastScan, todayCounts, dailyAttendance, eventDays, hashSecret, dayIn, ScanError, DIRECTIONS } from '../lib/checkins.js';
+import { getRetention, setRetention, eventsDue, purgeEvent, purgeDue, RETENTION_CHOICES } from '../lib/retention.js';
 import { reserveRoom, cancelReservation, changeStay, blockTotals, hotelPayload, blockPayload, setNights, nightsBetween, HotelError, LIVE } from '../lib/hotels.js';
 
 export const adminRouter = Router();
@@ -1740,6 +1741,38 @@ adminRouter.put('/settings', requireOwner, async (req, res) => {
 adminRouter.get('/audit', requireOwner, async (_req, res) => {
   const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { actor: true } });
   res.json(rows.map((r) => ({ ...r, actor: r.actor ? publicUser(r.actor) : null })));
+});
+
+/* ---------------- data retention (owner only) ---------------- */
+
+adminRouter.get('/retention', requireOwner, async (_req, res) => {
+  const { months } = await getRetention();
+  res.json({ months, choices: RETENTION_CHOICES, due: await eventsDue(months) });
+});
+
+/// `{ months }` — one of the choices, or null to turn it off. Returns what
+/// it would clear now, so the owner sees the effect before it runs.
+adminRouter.put('/retention', requireOwner, async (req, res) => {
+  try {
+    const { months } = await setRetention(req.body?.months ?? null);
+    await audit(req.user.id, 'settings.retention', null, { months });
+    res.json({ months, choices: RETENTION_CHOICES, due: await eventsDue(months) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/// Clears everything that's due now instead of waiting for the next check.
+adminRouter.post('/retention/run', requireOwner, async (req, res) => {
+  const done = await purgeDue(new Date(), req.user.id);
+  res.json({ cleared: done });
+});
+
+/// One finished event, right away, whatever the setting says.
+adminRouter.post('/events/:id/purge', requireOwner, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  if (event.endsAt > new Date()) return res.status(400).json({ error: 'This event hasn\'t ended yet.' });
+  if (req.body?.confirm !== event.title) return res.status(400).json({ error: 'Type the event\'s title to confirm.' });
+  res.json({ ...(await purgeEvent(event.id, req.user.id)), dataPurgedAt: new Date() });
 });
 
 /* ---------------- analytics (owner only) ---------------- */

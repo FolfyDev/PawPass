@@ -219,6 +219,9 @@ model Event {
   /// Most people allowed inside at once (fire code). Only tracked
   /// meaningfully when the door also scans people out. Null = no limit shown.
   occupancyLimit   Int?
+  /// When personal data (names, emails, answers...) was cleared from this
+  /// event under the instance's data retention setting (lib/retention.js).
+  dataPurgedAt     DateTime?
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())

@@ -109,6 +109,9 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET/POST | `/api/admin/campaigns` | |
 | POST | `/api/admin/campaigns/:id/send` | `{ dryRun }` to count first |
 | GET/PUT | `/api/admin/settings` | |
+| GET/PUT | `/api/admin/retention` | **Owner only.** `{ months }`: 3, 6, 12, 24, or null (off). Returns the events that are `due` under it |
+| POST | `/api/admin/retention/run` | **Owner only.** Clears everything due now |
+| POST | `/api/admin/events/:id/purge` | **Owner only.** `{ confirm: <event title> }` — clears one finished event's personal data now |
 | GET | `/api/admin/audit` | |
 
 ## Incidents — requires ADMIN or OWNER

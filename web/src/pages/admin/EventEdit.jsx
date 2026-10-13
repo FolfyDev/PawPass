@@ -46,6 +46,18 @@ export default function EventEdit() {
 
   const setField = (i, patch) => set('customFields', fields.map((f, n) => (n === i ? { ...f, ...patch } : f)));
 
+  // Retention by hand for one finished event: same clean-up as the
+  // automatic setting, confirmed by typing the title.
+  const clearData = async () => {
+    const typed = prompt(`This clears names, emails, and question answers from every registration for ${e.title}, plus hotel guests and volunteer notes. Payments and counts stay. It can't be undone.\n\nType the event's title to confirm.`);
+    if (typed == null) return;
+    try {
+      const r = await api.post(`/api/admin/events/${id}/purge`, { confirm: typed });
+      setE({ ...e, dataPurgedAt: r.dataPurgedAt });
+      setMsg(`Cleared ${r.registrations} registration${r.registrations === 1 ? '' : 's'}.`); setMsgOk(true);
+    } catch (err) { setMsg(err.message); setMsgOk(false); }
+  };
+
   return (
     <>
       <div className="spread" style={{ marginBottom: 18 }}>
@@ -62,6 +74,11 @@ export default function EventEdit() {
       </div>
       <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
+      {e.dataPurgedAt && (
+        <p className="note" style={{ marginBottom: 16 }}>
+          Personal data was cleared from this event on {new Date(e.dataPurgedAt).toLocaleDateString()}. Names, emails and answers show as "Removed".
+        </p>
+      )}
 
       <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
       <div className="stack">
@@ -209,7 +226,12 @@ export default function EventEdit() {
         </section>
 
         <div className="spread">
-          <button className="btn danger" onClick={remove}>Delete event</button>
+          <div className="row">
+            <button className="btn danger" onClick={remove}>Delete event</button>
+            {!e.dataPurgedAt && new Date(e.endsAt) < new Date() && (
+              <button className="btn ghost" title="Clears names, emails and answers but keeps the event, payments and counts" onClick={clearData}>Clear personal data now</button>
+            )}
+          </div>
           <button className="btn primary" onClick={save}>Save changes</button>
         </div>
       </div>
