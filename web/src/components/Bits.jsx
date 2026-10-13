@@ -48,6 +48,23 @@ export const fmtTimeRange = (start, end, tz) => {
   return `${fmtDate(start, tz)} – ${endText}`;
 };
 
+/// Hotel nights are plain "YYYY-MM-DD" dates (no time, no timezone), so they
+/// are formatted as UTC noon — never shifted a day by the viewer's zone.
+export const fmtNight = (s, opts = { weekday: 'short', month: 'short', day: 'numeric' }) =>
+  new Date(`${s}T12:00:00Z`).toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
+
+export const addDays = (s, n) => {
+  const d = new Date(`${s}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+/// "Fri, May 3 – Sun, May 5 · 2 nights"
+export const fmtStay = (checkIn, checkOut) => {
+  const nights = Math.round((new Date(checkOut) - new Date(checkIn)) / 86_400_000);
+  return `${fmtNight(checkIn)} – ${fmtNight(checkOut)} · ${nights} night${nights === 1 ? '' : 's'}`;
+};
+
 /// 2 -> "2h", 1.5 -> "1.5h".
 export const fmtHours = (h) => `${Math.round(h * 100) / 100}h`;
 

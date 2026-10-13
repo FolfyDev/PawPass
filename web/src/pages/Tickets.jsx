@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import { downloadEventIcs } from '../lib/ics.js';
-import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown, Pill, fmtTimeRange } from '../components/Bits.jsx';
+import { Empty, StatusPill, RsvpButtons, fmtDate, fmtMoney, Field, HoldCountdown, Pill, fmtTimeRange, fmtStay } from '../components/Bits.jsx';
 import Modal from '../components/Modal.jsx';
 import PaymentNotice from '../components/PaymentNotice.jsx';
 
@@ -63,9 +63,12 @@ export default function Tickets() {
   const [orders, setOrders] = useState([]);
   const [shifts, setShifts] = useState([]);
   const [shiftMsg, setShiftMsg] = useState('');
+  const [rooms, setRooms] = useState([]);
+  const [roomMsg, setRoomMsg] = useState('');
   const load = () => {
     api.get('/api/my/merch-orders').then(setOrders).catch(() => setOrders([]));
     api.get('/api/my/volunteer-shifts').then(setShifts).catch(() => setShifts([]));
+    api.get('/api/my/room-reservations').then(setRooms).catch(() => setRooms([]));
     return api.get('/api/my/tickets').then(setTickets);
   };
 
@@ -197,6 +200,12 @@ export default function Tickets() {
 
   if (!tickets) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
 
+  const cancelRoom = async (r) => {
+    if (!confirm(`Cancel your room at ${r.hotel.name}?`)) return;
+    setRoomMsg('');
+    try { await api.post(`/api/my/room-reservations/${r.id}/cancel`); load(); }
+    catch (e) { setRoomMsg(e.message); }
+  };
   const upcomingShifts = shifts.filter((s) => new Date(s.shift.endsAt) > new Date());
   const dropShift = async (s) => {
     if (!confirm(`Drop your ${s.shift.role} shift at ${s.event.title}? Your spot opens up for someone else.`)) return;
@@ -277,6 +286,38 @@ export default function Tickets() {
           </div>
         ))}
       </div>
+
+      {rooms.length > 0 && (
+        <section style={{ marginTop: 32 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Your hotel rooms</p>
+          {roomMsg && <p className="note bad" style={{ marginBottom: 12 }}>{roomMsg}</p>}
+          <div className="card">
+            <ul className="tier-list">
+              {rooms.map((r) => (
+                <li key={r.id}>
+                  <div>
+                    <strong>{r.hotel.name}</strong> <span className="muted">· {r.event.title}</span>
+                    <p className="small muted" style={{ margin: '2px 0 0' }}>
+                      {r.block.name} · {fmtStay(r.checkIn, r.checkOut)} · {r.guests} guest{r.guests === 1 ? '' : 's'}
+                    </p>
+                    <p className="small muted" style={{ margin: '2px 0 0' }}>
+                      Booked as {r.guestName}{r.roommates ? `, with ${r.roommates}` : ''}
+                      {r.hotel.address && <> · {r.hotel.address}</>}
+                    </p>
+                    {r.confirmationNumber && <p className="small" style={{ margin: '4px 0 0' }}>Confirmation <span className="mono">{r.confirmationNumber}</span></p>}
+                  </div>
+                  <div className="stack" style={{ justifyItems: 'end', gap: 6 }}>
+                    {r.status === 'CONFIRMED' ? <Pill tone="go">Confirmed</Pill> : <Pill tone="wait">Waiting on the hotel</Pill>}
+                    {r.canCancel
+                      ? <button className="btn ghost sm" onClick={() => cancelRoom(r)}>Cancel room</button>
+                      : <span className="small muted">Contact the organizers to change it</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       {upcomingShifts.length > 0 && (
         <section style={{ marginTop: 32 }}>

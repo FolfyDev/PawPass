@@ -12,6 +12,10 @@ const FIELD_CONFIG = {
     { field: 'fursonaName' },
     { field: 'answers', json: true },
   ],
+  roomReservation: [
+    { field: 'guestName' },
+    { field: 'roommates' },
+  ],
 };
 
 const RELATION_TO_MODEL = {
@@ -28,6 +32,10 @@ const RELATION_TO_MODEL = {
   merchOrder: 'merchOrder',
   // Volunteer roster: shift -> signups -> user.
   signups: 'volunteerSignup',
+  // Hotels: hotel -> blocks -> reservations -> user.
+  blocks: 'roomBlock',
+  block: 'roomBlock',
+  reservations: 'roomReservation',
 };
 
 function encryptData(model, data) {

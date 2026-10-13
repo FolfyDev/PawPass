@@ -25,6 +25,7 @@ const AdminTiers = lazy(() => import('./pages/admin/Tiers.jsx'));
 const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
 const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
 const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
+const AdminHotels = lazy(() => import('./pages/admin/Hotels.jsx'));
 const AdminVolunteers = lazy(() => import('./pages/admin/Volunteers.jsx'));
 const AdminCheckInSelect = lazy(() => import('./pages/admin/CheckInSelect.jsx'));
 const AdminScanner = lazy(() => import('./pages/admin/Scanner.jsx'));
@@ -97,6 +98,7 @@ export default function App() {
               <Route path="events/:id/reconciliation" element={<AdminReconciliation />} />
               <Route path="events/:id/vouchers" element={<AdminVouchers />} />
               <Route path="events/:id/volunteers" element={<AdminVolunteers />} />
+              <Route path="events/:id/hotels" element={<AdminHotels />} />
               <Route path="scan" element={<AdminCheckInSelect />} />
               <Route path="scan/:eventId" element={<AdminScanner />} />
               <Route path="badges" element={<AdminBadges />} />

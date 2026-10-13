@@ -21,6 +21,7 @@ import { blindIndex } from '../lib/crypto.js';
 import { sendRegistrationConfirmation } from '../lib/mailer.js';
 import { verifyTurnstile } from '../lib/turnstile.js';
 import { signUpForShift, dropSignup, publicShift, VolunteerError } from '../lib/volunteers.js';
+import { reserveRoom, cancelReservation, eligibleForBlocks, cutoffPassed, todayIn, HotelError, LIVE } from '../lib/hotels.js';
 
 export const publicRouter = Router();
 
@@ -98,6 +99,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     // Tiers whose sale has ended drop off; ones not on sale yet show with a date.
     tiers: tiers.filter((t) => tierSaleState(t).reason !== 'ended').map((t) => publicTier(t, heldPerTier[t.id] || 0)),
     volunteers: event.volunteersEnabled,
+    hotels: event.hotelsEnabled,
     donationAddon: event.donationAddonEnabled && stripeEnabled()
       ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
       : null,
@@ -129,7 +131,7 @@ publicRouter.post('/events/:slug/discount', discountLimiter, async (req, res) =>
 
 /* ---------------- volunteering ---------------- */
 
-/// For sign-ups that aren't a registration (volunteering):
+/// For sign-ups that aren't a registration (volunteering, hotel rooms):
 /// checks the signed-in account against the ban list, and logs a hit with
 /// the same action and shape as a blocked registration so it lands in the
 /// attempts list on the Bans page.
@@ -207,6 +209,111 @@ publicRouter.delete('/my/volunteer-shifts/:id', requireUser, async (req, res) =>
   if (signup.shift.startsAt <= new Date()) return res.status(400).json({ error: 'This shift has already started. Talk to the organizers if you can\'t make it.' });
   await dropSignup(signup);
   await audit(req.user.id, 'volunteer.drop', signup.id, { shiftId: signup.shiftId });
+  res.json({ ok: true });
+});
+
+/* ---------------- hotels ---------------- */
+
+/// A block as the event page shows it. Booking link and group code only go
+/// to people allowed to use the block (see eligibleForBlocks); everyone
+/// else sees the rate and that it exists. Never shows who booked.
+function publicBlock(b, allowed) {
+  const managed = b.mode === 'ORGANIZER_MANAGED';
+  return {
+    id: b.id, name: b.name, description: b.description, rateCents: b.rateCents, currency: b.currency,
+    mode: b.mode, cutoffAt: b.cutoffAt, maxGuests: b.maxGuests, attendeesOnly: b.attendeesOnly,
+    closed: cutoffPassed(b), locked: !allowed,
+    bookingUrl: allowed ? b.bookingUrl : null,
+    groupCode: allowed ? b.groupCode : null,
+    nights: b.nights.map((n) => (managed ? { night: n.night, remaining: Math.max(n.contracted - n.held, 0) } : { night: n.night })),
+  };
+}
+
+const RESERVATION_INCLUDE = { block: { include: { hotel: { include: { event: true } } } } };
+
+function shapeMyReservation(r) {
+  const { block } = r;
+  return {
+    id: r.id, status: r.status, checkIn: r.checkIn, checkOut: r.checkOut, guests: r.guests,
+    guestName: r.guestName, roommates: r.roommates, note: r.note, confirmationNumber: r.confirmationNumber,
+    block: { id: block.id, name: block.name, rateCents: block.rateCents, currency: block.currency, cutoffAt: block.cutoffAt },
+    hotel: { name: block.hotel.name, address: block.hotel.address, url: block.hotel.url, phone: block.hotel.phone },
+    event: summarize(block.hotel.event),
+    // Once the hotel's cutoff passes, or the stay has begun, cancelling may
+    // cost the organizers money — that's a conversation, not a button.
+    canCancel: LIVE.includes(r.status) && !cutoffPassed(block) && r.checkIn > todayIn(block.hotel.event.timezone),
+  };
+}
+
+publicRouter.get('/events/:slug/hotels', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
+  if (!event.hotelsEnabled) return res.status(404).json({ error: 'This event has no hotel information.' });
+  const [hotels, eligible, mine] = await Promise.all([
+    prisma.hotel.findMany({
+      where: { eventId: event.id },
+      include: { blocks: { where: { active: true }, include: { nights: { orderBy: { night: 'asc' } } }, orderBy: { createdAt: 'asc' } } },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    }),
+    eligibleForBlocks(event.id, req.user),
+    req.user
+      ? prisma.roomReservation.findMany({ where: { userId: req.user.id, status: { in: LIVE }, block: { hotel: { eventId: event.id } } }, include: RESERVATION_INCLUDE })
+      : [],
+  ]);
+  res.json({
+    info: event.hotelInfo,
+    hotels: hotels.map((h) => ({
+      id: h.id, name: h.name, address: h.address, url: h.url, phone: h.phone, description: h.description,
+      blocks: h.blocks.map((b) => publicBlock(b, !b.attendeesOnly || eligible)),
+    })),
+    reservations: mine.map(shapeMyReservation),
+    // Prefills the room request's name field.
+    guestName: req.user
+      ? (await prisma.registration.findUnique({ where: { eventId_userId: { eventId: event.id, userId: req.user.id } } }))?.legalName || req.user.legalName || ''
+      : '',
+  });
+});
+
+publicRouter.post('/events/:slug/room-blocks/:blockId/reservations', requireUser, registerLimiter, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
+  if (!event || !event.published || !event.hotelsEnabled) return res.status(404).json({ error: 'This event has no hotel information.' });
+  const block = await prisma.roomBlock.findFirst({ where: { id: req.params.blockId, active: true, hotel: { eventId: event.id } } });
+  if (!block) return res.status(404).json({ error: 'Room block not found.' });
+  if (block.attendeesOnly && !(await eligibleForBlocks(event.id, req.user)))
+    return res.status(403).json({ error: 'Rooms in this block are for people with a confirmed ticket. Register first.' });
+  if (await blockedByBan(req.user, event, 'hotel'))
+    return res.status(403).json({ error: 'Hotel requests are not available for this account. Contact the organizers if you think this is a mistake.' });
+
+  const b = req.body || {};
+  try {
+    const r = await reserveRoom({
+      blockId: block.id, userId: req.user.id, checkIn: b.checkIn, checkOut: b.checkOut,
+      guests: b.guests, guestName: b.guestName, roommates: b.roommates, note: b.note,
+    });
+    await audit(req.user.id, 'hotel.request', r.id, { blockId: block.id, checkIn: r.checkIn, checkOut: r.checkOut });
+    res.json(shapeMyReservation(await prisma.roomReservation.findUnique({ where: { id: r.id }, include: RESERVATION_INCLUDE })));
+  } catch (e) {
+    if (e instanceof HotelError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+publicRouter.get('/my/room-reservations', requireUser, async (req, res) => {
+  const rows = await prisma.roomReservation.findMany({
+    where: { userId: req.user.id, status: { in: LIVE } },
+    include: RESERVATION_INCLUDE,
+    orderBy: { checkIn: 'asc' },
+  });
+  res.json(rows.map(shapeMyReservation));
+});
+
+publicRouter.post('/my/room-reservations/:id/cancel', requireUser, async (req, res) => {
+  const r = await prisma.roomReservation.findUnique({ where: { id: req.params.id }, include: RESERVATION_INCLUDE });
+  if (!r || r.userId !== req.user.id) return res.status(404).json({ error: 'Room request not found.' });
+  if (!shapeMyReservation(r).canCancel)
+    return res.status(400).json({ error: 'This room can no longer be cancelled here. Contact the organizers.' });
+  await cancelReservation(r);
+  await audit(req.user.id, 'hotel.cancel', r.id, { blockId: r.blockId });
   res.json({ ok: true });
 });
 

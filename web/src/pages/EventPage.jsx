@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown, fieldsForTier, fmtTimeRange } from '../components/Bits.jsx';
+import { Field, fmtDate, fmtMoney, StatusPill, Avatar, RsvpButtons, Pill, HoldCountdown, fieldsForTier, fmtTimeRange, fmtNight, fmtStay, addDays } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import Turnstile from '../components/Turnstile.jsx';
@@ -79,11 +79,62 @@ export default function EventPage() {
   // The shift being signed up for, in the confirm popup: { shift, note }.
   const [joining, setJoining] = useState(null);
   const [volunteerMsg, setVolunteerMsg] = useState('');
+  const [hotels, setHotels] = useState(null);
+  // The room request popup: { hotel, block, draft }.
+  const [booking, setBooking] = useState(null);
+  const [hotelMsg, setHotelMsg] = useState('');
+
+  const load = () => api.get(`/api/events/${slug}`).then((e) => {
+    setEvent(e);
+    setForm((f) => ({
+      ...f,
+      legalName: e.registration?.legalName || user?.legalName || '',
+      fursonaName: e.registration?.fursonaName || user?.fursonaName || '',
+      email: e.registration?.email || user?.email || '',
+      // Preselect when there's nothing to choose between.
+      ticketTierId: f.ticketTierId || (e.tiers?.filter(buyable).length === 1 ? e.tiers.find(buyable).id : ''),
+    }));
+  }).catch((err) => setError(err.message));
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [slug, user]);
+  useEffect(() => {
+    if (!user) { setGoing(null); return; }
+    api.get(`/api/events/${slug}/rsvps`).then(setGoing).catch(() => setGoing([]));
+  }, [slug, user]);
+  useEffect(() => {
+    if (!user) { setMerch(null); return; }
+    api.get(`/api/events/${slug}/merch`).then(setMerch).catch(() => setMerch([]));
+  }, [slug, user]);
   const loadVolunteer = () => api.get(`/api/events/${slug}/volunteer`).then(setVolunteer).catch(() => setVolunteer(null));
   useEffect(() => {
     if (event?.volunteers) loadVolunteer(); else setVolunteer(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, user, event?.volunteers]);
+
+  const loadHotels = () => api.get(`/api/events/${slug}/hotels`).then(setHotels).catch(() => setHotels(null));
+  useEffect(() => {
+    if (event?.hotels) loadHotels(); else setHotels(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, user, event?.hotels, event?.registration?.status]);
+
+  const requestRoom = async () => {
+    setHotelMsg('');
+    setBusy(true);
+    try {
+      const r = await api.post(`/api/events/${slug}/room-blocks/${booking.block.id}/reservations`, booking.draft);
+      setBooking(null);
+      setHotelMsg(`Room requested at ${r.hotel.name}. You'll hear from us once the hotel confirms it.`);
+      loadHotels();
+    } catch (e) { setHotelMsg(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const cancelRoom = async (r) => {
+    if (!confirm(`Cancel your room at ${r.hotel.name}?`)) return;
+    setHotelMsg('');
+    try { await api.post(`/api/my/room-reservations/${r.id}/cancel`); loadHotels(); }
+    catch (e) { setHotelMsg(e.message); }
+  };
 
   const joinShift = async () => {
     setVolunteerMsg('');
@@ -403,6 +454,121 @@ export default function EventPage() {
           )}
         </section>
       )}
+
+      {hotels && hotels.hotels.length > 0 && (
+        <section style={{ marginTop: 28 }}>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>Where to stay</p>
+          <div className="stack" style={{ gap: 14 }}>
+            {hotels.info && <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{hotels.info}</p>}
+            {hotelMsg && <p className="note" style={{ margin: 0 }}>{hotelMsg}</p>}
+            {hotels.reservations.map((r) => (
+              <div key={r.id} className="card spread">
+                <div>
+                  <strong>Your room at {r.hotel.name}</strong>
+                  <p className="small muted" style={{ margin: '2px 0 0' }}>{r.block.name} · {fmtStay(r.checkIn, r.checkOut)}{r.confirmationNumber ? ` · Confirmation ${r.confirmationNumber}` : ''}</p>
+                </div>
+                <div className="row">
+                  {r.status === 'CONFIRMED' ? <Pill tone="go">Confirmed</Pill> : <Pill tone="wait">Waiting on the hotel</Pill>}
+                  {r.canCancel && <button className="btn ghost sm" onClick={() => cancelRoom(r)}>Cancel</button>}
+                </div>
+              </div>
+            ))}
+            {hotels.hotels.map((h) => (
+              <div key={h.id} className="card stack">
+                <div>
+                  <h2 style={{ margin: 0 }}>{h.name}</h2>
+                  <p className="small muted" style={{ margin: '2px 0 0' }}>
+                    {[h.address, h.phone].filter(Boolean).join(' · ')}
+                    {h.url && <> · <a href={h.url} target="_blank" rel="noreferrer">Website</a></>}
+                  </p>
+                  {h.description && <p className="small" style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{h.description}</p>}
+                </div>
+                <ul className="tier-list">
+                  {h.blocks.map((b) => {
+                    const managed = b.mode === 'ORGANIZER_MANAGED';
+                    const open = b.nights.some((n) => n.remaining > 0);
+                    const hasRoom = hotels.reservations.length > 0;
+                    return (
+                      <li key={b.id}>
+                        <div>
+                          <strong>{b.name}</strong> {b.rateCents > 0 && <span className="muted">· {fmtMoney(b.rateCents, b.currency)}/night</span>}
+                          {b.nights.length > 0 && (
+                            <p className="small muted" style={{ margin: '2px 0 0' }}>
+                              {fmtNight(b.nights[0].night)} – {fmtNight(addDays(b.nights[b.nights.length - 1].night, 1))}
+                              {b.cutoffAt && ` · Book by ${new Date(b.cutoffAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: event.timezone })}`}
+                            </p>
+                          )}
+                          {b.description && <p className="small muted" style={{ margin: '2px 0 0', whiteSpace: 'pre-wrap' }}>{b.description}</p>}
+                          {!b.locked && b.groupCode && <p className="small" style={{ margin: '4px 0 0' }}>Group code <span className="mono">{b.groupCode}</span></p>}
+                        </div>
+                        <div className="stack" style={{ justifyItems: 'end', gap: 6 }}>
+                          {b.closed ? <Pill tone="stop">Closed</Pill>
+                            : b.locked ? <span className="small muted" style={{ textAlign: 'right' }}>{user ? 'For ticket holders' : <><Link to="/login">Sign in</Link> with your ticket</>}</span>
+                            : managed ? (
+                              !open ? <Pill tone="stop">Full</Pill>
+                                : !user ? <Link className="btn sm" to="/login">Sign in to request</Link>
+                                : !hasRoom && <button className="btn sm" onClick={() => setBooking({ hotel: h, block: b, draft: { checkIn: '', checkOut: '', guests: 1, guestName: hotels.guestName, roommates: '', note: '' } })}>Request a room</button>
+                            ) : b.bookingUrl && <a className="btn sm" style={{ whiteSpace: 'nowrap' }} href={b.bookingUrl} target="_blank" rel="noreferrer">Book with the hotel</a>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {booking && (() => {
+        const { block, draft } = booking;
+        const set = (patch) => setBooking({ ...booking, draft: { ...draft, ...patch } });
+        const openNights = block.nights.filter((n) => n.remaining > 0).map((n) => n.night);
+        // Check-out choices: any night after check-in, up to the first full night.
+        const checkOuts = [];
+        if (draft.checkIn) {
+          for (let d = draft.checkIn; openNights.includes(d); d = addDays(d, 1)) checkOuts.push(addDays(d, 1));
+        }
+        return (
+          <Modal title={`Request a room · ${booking.hotel.name}`} onClose={() => setBooking(null)} footer={<>
+            <button className="btn ghost" disabled={busy} onClick={() => setBooking(null)}>Cancel</button>
+            <button className="btn signal" disabled={busy || !draft.checkIn || !draft.checkOut || !draft.guestName.trim()} data-busy={busy ? 'true' : undefined} onClick={requestRoom}>
+              {busy ? 'Requesting…' : 'Request room'}
+            </button>
+          </>}>
+            <p className="muted" style={{ marginTop: 0 }}>{block.name}{block.rateCents > 0 && ` · ${fmtMoney(block.rateCents, block.currency)}/night, paid to the hotel`}</p>
+            <div className="grid-2">
+              <Field label="Check-in">
+                <select value={draft.checkIn} onChange={(e) => set({ checkIn: e.target.value, checkOut: '' })}>
+                  <option value="">Choose</option>
+                  {openNights.map((d) => <option key={d} value={d}>{fmtNight(d)}</option>)}
+                </select>
+              </Field>
+              <Field label="Check-out">
+                <select value={draft.checkOut} disabled={!draft.checkIn} onChange={(e) => set({ checkOut: e.target.value })}>
+                  <option value="">Choose</option>
+                  {checkOuts.map((d) => <option key={d} value={d}>{fmtNight(d)}</option>)}
+                </select>
+              </Field>
+              <Field label="Name for the booking" help="As on your ID">
+                <input value={draft.guestName} onChange={(e) => set({ guestName: e.target.value })} />
+              </Field>
+              <Field label="Guests" help={`Up to ${block.maxGuests}`}>
+                <input type="number" min="1" max={block.maxGuests} value={draft.guests} onChange={(e) => set({ guests: e.target.value })} />
+              </Field>
+            </div>
+            <Field label="Roommates" help="Optional">
+              <input value={draft.roommates} onChange={(e) => set({ roommates: e.target.value })} />
+            </Field>
+            <Field label="Anything else?" help="Optional, e.g. accessible room">
+              <textarea style={{ minHeight: 60 }} maxLength={500} value={draft.note} onChange={(e) => set({ note: e.target.value })} />
+            </Field>
+            <p className="small muted" style={{ marginBottom: 0 }}>
+              This holds a room in our block. The organizers book it with the hotel and you'll get the confirmation number here and by message.
+            </p>
+          </Modal>
+        );
+      })()}
 
       {volunteer && (volunteer.shifts.length > 0 || volunteerMsg) && (
         <section style={{ marginTop: 28 }}>

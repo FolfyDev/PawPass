@@ -3,6 +3,7 @@ import path from 'path';
 import { prisma } from './db.js';
 import { blindIndex } from './crypto.js';
 import { audit } from './auth.js';
+import { LIVE } from './hotels.js';
 
 export class AccountError extends Error {}
 
@@ -23,6 +24,11 @@ export async function exportAccount(userId) {
   const shifts = await prisma.volunteerSignup.findMany({
     where: { userId },
     include: { shift: { include: { event: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  const rooms = await prisma.roomReservation.findMany({
+    where: { userId },
+    include: { block: { include: { hotel: { include: { event: true } } } } },
     orderBy: { createdAt: 'asc' },
   });
   const pay = (p) => ({
@@ -49,6 +55,11 @@ export async function exportAccount(userId) {
     volunteerShifts: shifts.map((s) => ({
       event: s.shift.event.title, role: s.shift.role, startsAt: s.shift.startsAt, endsAt: s.shift.endsAt,
       location: s.shift.location, note: s.note, attendance: s.attendance, signedUpAt: s.createdAt,
+    })),
+    hotelRooms: rooms.map((r) => ({
+      event: r.block.hotel.event.title, hotel: r.block.hotel.name, roomType: r.block.name,
+      checkIn: r.checkIn, checkOut: r.checkOut, guests: r.guests, guestName: r.guestName, roommates: r.roommates,
+      note: r.note, status: r.status, confirmationNumber: r.confirmationNumber, requestedAt: r.createdAt,
     })),
   };
 }
@@ -79,6 +90,8 @@ export async function deleteAccount(userId) {
   });
   if (orders) throw new AccountError('You have a pre-order waiting. Pick it up or ask the organizers to refund it first.');
   const shifts = await prisma.volunteerSignup.count({ where: { userId, shift: { endsAt: { gt: now } } } });
+  const rooms = await prisma.roomReservation.count({ where: { userId, status: { in: LIVE }, block: { hotel: { event: { endsAt: { gt: now } } } } } });
+  if (rooms) throw new AccountError('Cancel your hotel room first, or ask the organizers to.');
   if (shifts) throw new AccountError(`Drop your volunteer shift${shifts === 1 ? '' : 's'} first, so the organizers know to find someone else.`);
 
   await prisma.$transaction(async (tx) => {
@@ -91,6 +104,10 @@ export async function deleteAccount(userId) {
     // Past shifts stay for the organizers' hour counts; the note is the only
     // free text on them.
     await tx.volunteerSignup.updateMany({ where: { userId }, data: { note: null } });
+    // Past rooms stay for the organizers' pickup history, without the guest.
+    for (const room of await tx.roomReservation.findMany({ where: { userId }, select: { id: true } })) {
+      await tx.roomReservation.update({ where: { id: room.id }, data: { guestName: 'Deleted user', roommates: '', note: null } });
+    }
     if (user.telegramId) {
       await tx.loginCode.deleteMany({ where: { telegramId: user.telegramId } });
       await tx.botSession.deleteMany({ where: { telegramId: user.telegramId } });

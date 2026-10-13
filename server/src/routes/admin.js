@@ -22,9 +22,10 @@ import { zonedTimeToUtc, formatInTimeZone } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg, REG_INCLUDE, RECEIPT_INCLUDE } from './public.js';
 import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
-import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
+import { sendCampaign, sendRegistrationConfirmation, sendNoticeEmail } from '../lib/mailer.js';
 import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
 import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
+import { reserveRoom, cancelReservation, changeStay, blockTotals, hotelPayload, blockPayload, setNights, nightsBetween, HotelError, LIVE } from '../lib/hotels.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -53,7 +54,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -65,13 +66,13 @@ function eventPayload(body, timeZone) {
     if (body[k] === undefined) continue;
     if (['startsAt','endsAt','opensAt','closesAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
-    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled' || k === 'hotelsEnabled') data[k] = Boolean(body[k]);
     else if (k === 'kbygDaysBefore') {
       const days = Number(body[k]);
       if (!Number.isInteger(days) || days < 1 || days > 30) throw new RegistrationError('Send "know before you go" 1 to 30 days before.');
       data[k] = days;
     }
-    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo') data[k] = String(body[k] || '').slice(0, 5000);
+    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo' || k === 'hotelInfo') data[k] = String(body[k] || '').slice(0, 5000);
     else if (k === 'feedbackUrl') {
       const url = String(body[k] || '').trim();
       if (url && !/^https?:\/\/\S+$/i.test(url)) throw new RegistrationError('The feedback link must start with http:// or https://.');
@@ -1016,7 +1017,7 @@ adminRouter.delete('/vouchers/:id', async (req, res) => {
 
 /* ---------------- volunteers ---------------- */
 
-/// Staff adding someone to a shift: by ticket code, or by
+/// Staff adding someone to a shift or a room: by ticket code, or by
 /// Telegram @handle for people who never bought a ticket.
 async function findPerson(raw) {
   const who = String(raw || '').trim();
@@ -1185,6 +1186,235 @@ adminRouter.delete('/volunteer-signups/:id', async (req, res) => {
   await audit(req.user.id, 'volunteer.remove', signup.id, { shiftId: signup.shiftId, userId: signup.userId });
   const { shift } = signup;
   notifyUser(signup.user.telegramId, `The organizers took you off the ${shift.role} volunteer shift at ${shift.event.title} (${shiftTime(shift, shift.event)}). Reach out to them if that's unexpected.`);
+  res.json({ ok: true });
+});
+
+/* ---------------- hotels ---------------- */
+
+/// Room news matters enough to send on every channel the person has.
+/// Best-effort: a missing SMTP config or a blocked bot never fails the request.
+async function notifyPerson(user, subject, text) {
+  await notifyUser(user.telegramId, text);
+  if (user.email && env.smtp.enabled) {
+    await sendNoticeEmail(user.email, subject, `${text}\n\n${env.webUrl}/tickets`).catch((e) => console.error('hotel notice email failed', user.id, e.message));
+  }
+}
+
+const hotelError = (res, e) => {
+  if (e instanceof HotelError) return res.status(400).json({ error: e.message });
+  throw e;
+};
+
+function shapeReservation(r) {
+  return {
+    id: r.id, status: r.status, guestName: r.guestName, roommates: r.roommates, guests: r.guests,
+    checkIn: r.checkIn, checkOut: r.checkOut, nights: nightsBetween(r.checkIn, r.checkOut).length,
+    confirmationNumber: r.confirmationNumber, note: r.note, staffNote: r.staffNote, source: r.source,
+    createdAt: r.createdAt, cancelledAt: r.cancelledAt,
+    person: shapeVolunteer(r.user),
+  };
+}
+
+const ADMIN_RESERVATION_INCLUDE = { user: true, block: { include: { hotel: { include: { event: true } } } } };
+
+adminRouter.get('/events/:id/hotels', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const hotels = await prisma.hotel.findMany({
+    where: { eventId: event.id },
+    include: {
+      blocks: {
+        include: {
+          nights: { orderBy: { night: 'asc' } },
+          reservations: { include: { user: true }, orderBy: [{ checkIn: 'asc' }, { createdAt: 'asc' }] },
+        },
+        orderBy: { createdAt: 'asc' },
+      },
+    },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
+  res.json({
+    enabled: event.hotelsEnabled,
+    info: event.hotelInfo,
+    hotels: hotels.map((h) => ({
+      ...h,
+      blocks: h.blocks.map(({ reservations, nights, ...b }) => ({
+        ...b, ...blockTotals({ ...b, nights }), reservations: reservations.map(shapeReservation),
+      })),
+    })),
+  });
+});
+
+/// What the hotel needs to load the block: one row per live room.
+adminRouter.get('/room-blocks/:id/rooming-list.csv', async (req, res) => {
+  const block = await prisma.roomBlock.findUnique({
+    where: { id: req.params.id },
+    include: { hotel: true, reservations: { where: { status: { in: LIVE } }, include: { user: true }, orderBy: [{ checkIn: 'asc' }, { createdAt: 'asc' }] } },
+  });
+  if (!block) return res.status(404).json({ error: 'Room block not found.' });
+  const keys = ['guestName', 'checkIn', 'checkOut', 'nights', 'guests', 'roommates', 'roomType', 'status', 'confirmationNumber', 'email', 'note'];
+  const rows = block.reservations.map((r) => [
+    r.guestName, r.checkIn, r.checkOut, nightsBetween(r.checkIn, r.checkOut).length, r.guests, r.roommates,
+    block.name, r.status, r.confirmationNumber, r.user.email, r.note,
+  ].map(csv).join(','));
+  const file = `rooming-list-${block.hotel.name}-${block.name}`.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
+  res.type('text/csv').set('Content-Disposition', `attachment; filename="${file}.csv"`).send([keys.join(','), ...rows].join('\n'));
+});
+
+/// Hotels and blocks are contract terms, so setting them up is owner-only.
+/// Working the requests (confirming, changing dates, cancelling, adding
+/// someone) is open to admins.
+adminRouter.post('/events/:id/hotels', requireOwner, async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  try {
+    const hotel = await prisma.hotel.create({ data: { ...hotelPayload(req.body || {}), eventId: event.id } });
+    await audit(req.user.id, 'hotel.create', hotel.id, { name: hotel.name });
+    res.json(hotel);
+  } catch (e) { hotelError(res, e); }
+});
+
+adminRouter.patch('/hotels/:id', requireOwner, async (req, res) => {
+  const hotel = await prisma.hotel.findUnique({ where: { id: req.params.id } });
+  if (!hotel) return res.status(404).json({ error: 'Hotel not found.' });
+  try {
+    const data = hotelPayload(req.body || {}, hotel);
+    const updated = await prisma.hotel.update({ where: { id: hotel.id }, data });
+    await audit(req.user.id, 'hotel.update', hotel.id, data);
+    res.json(updated);
+  } catch (e) { hotelError(res, e); }
+});
+
+adminRouter.delete('/hotels/:id', requireOwner, async (req, res) => {
+  const hotel = await prisma.hotel.findUnique({ where: { id: req.params.id } });
+  if (!hotel) return res.status(404).json({ error: 'Hotel not found.' });
+  const live = await prisma.roomReservation.count({ where: { status: { in: LIVE }, block: { hotelId: hotel.id } } });
+  if (live) return res.status(400).json({ error: `${live} room request${live === 1 ? ' is' : 's are'} still live at this hotel. Cancel them first.` });
+  await prisma.hotel.delete({ where: { id: hotel.id } });
+  await audit(req.user.id, 'hotel.delete', hotel.id, { name: hotel.name });
+  res.json({ ok: true });
+});
+
+adminRouter.post('/hotels/:id/blocks', requireOwner, async (req, res) => {
+  const hotel = await prisma.hotel.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!hotel) return res.status(404).json({ error: 'Hotel not found.' });
+  try {
+    const data = blockPayload(req.body || {}, (v) => zonedTimeToUtc(v, hotel.event.timezone));
+    const block = await prisma.roomBlock.create({ data: { ...data, hotelId: hotel.id } });
+    if (req.body?.nights) await setNights(block.id, req.body.nights);
+    await audit(req.user.id, 'hotel.block.create', block.id, { hotelId: hotel.id, name: block.name });
+    res.json(block);
+  } catch (e) { hotelError(res, e); }
+});
+
+adminRouter.patch('/room-blocks/:id', requireOwner, async (req, res) => {
+  const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id }, include: { nights: true, hotel: { include: { event: true } } } });
+  if (!block) return res.status(404).json({ error: 'Room block not found.' });
+  try {
+    const data = blockPayload(req.body || {}, (v) => zonedTimeToUtc(v, block.hotel.event.timezone), block);
+    const updated = await prisma.roomBlock.update({ where: { id: block.id }, data });
+    await audit(req.user.id, 'hotel.block.update', block.id, data);
+    res.json(updated);
+  } catch (e) { hotelError(res, e); }
+});
+
+/// Replaces the per-night inventory: `{ nights: [{ night, contracted, reportedPickup }] }`.
+adminRouter.put('/room-blocks/:id/nights', requireOwner, async (req, res) => {
+  const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id } });
+  if (!block) return res.status(404).json({ error: 'Room block not found.' });
+  try {
+    await setNights(block.id, req.body?.nights);
+    await audit(req.user.id, 'hotel.block.nights', block.id, { nights: req.body.nights.length });
+    res.json(await prisma.roomBlockNight.findMany({ where: { blockId: block.id }, orderBy: { night: 'asc' } }));
+  } catch (e) { hotelError(res, e); }
+});
+
+adminRouter.delete('/room-blocks/:id', requireOwner, async (req, res) => {
+  const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id } });
+  if (!block) return res.status(404).json({ error: 'Room block not found.' });
+  const live = await prisma.roomReservation.count({ where: { blockId: block.id, status: { in: LIVE } } });
+  if (live) return res.status(400).json({ error: `${live} room request${live === 1 ? ' is' : 's are'} still live in this block. Cancel them first.` });
+  await prisma.roomBlock.delete({ where: { id: block.id } });
+  await audit(req.user.id, 'hotel.block.delete', block.id, { name: block.name });
+  res.json({ ok: true });
+});
+
+/// Books a room for someone by ticket code or @handle. Skips the one-room
+/// limit and the cutoff (staff only do that with the hotel's agreement),
+/// never the block's inventory.
+adminRouter.post('/room-blocks/:id/reservations', async (req, res) => {
+  const block = await prisma.roomBlock.findUnique({ where: { id: req.params.id }, include: { hotel: { include: { event: true } } } });
+  if (!block) return res.status(404).json({ error: 'Room block not found.' });
+  const found = await findPerson(req.body?.who);
+  if (found.error) return res.status(found.status).json({ error: found.error });
+  const b = req.body;
+  try {
+    const r = await reserveRoom({
+      blockId: block.id, userId: found.user.id, checkIn: b.checkIn, checkOut: b.checkOut, guests: b.guests,
+      guestName: b.guestName || found.registration?.legalName || found.user.legalName,
+      roommates: b.roommates, staffNote: b.staffNote, source: 'admin', byStaff: true,
+    });
+    await audit(req.user.id, 'hotel.add', r.id, { blockId: block.id, userId: found.user.id });
+    await notifyPerson(found.user, `Room requested at ${block.hotel.name}`,
+      `The organizers of ${block.hotel.event.title} requested a ${block.name} room for you at ${block.hotel.name}, ${r.checkIn} to ${r.checkOut}. You'll hear again once the hotel confirms it.`);
+    res.json(shapeReservation(await prisma.roomReservation.findUnique({ where: { id: r.id }, include: { user: true } })));
+  } catch (e) { hotelError(res, e); }
+});
+
+/// Working a request: hotel confirmation number (which confirms it), dates,
+/// guest details, staff notes.
+adminRouter.patch('/room-reservations/:id', async (req, res) => {
+  const r = await prisma.roomReservation.findUnique({ where: { id: req.params.id }, include: ADMIN_RESERVATION_INCLUDE });
+  if (!r) return res.status(404).json({ error: 'Room request not found.' });
+  if (!LIVE.includes(r.status)) return res.status(400).json({ error: 'This room request was cancelled.' });
+  const b = req.body || {};
+  const data = {};
+  try {
+    if (b.guestName !== undefined) {
+      data.guestName = String(b.guestName || '').trim().slice(0, 120);
+      if (!data.guestName) throw new HotelError('The room needs a guest name.');
+    }
+    if (b.roommates !== undefined) data.roommates = String(b.roommates || '').trim().slice(0, 500);
+    if (b.staffNote !== undefined) data.staffNote = String(b.staffNote || '').trim().slice(0, 500) || null;
+    if (b.guests !== undefined) {
+      const n = Number(b.guests);
+      if (!Number.isInteger(n) || n < 1 || n > r.block.maxGuests) throw new HotelError(`A room here takes 1 to ${r.block.maxGuests} guests.`);
+      data.guests = n;
+    }
+    if (b.confirmationNumber !== undefined) {
+      data.confirmationNumber = String(b.confirmationNumber || '').trim().slice(0, 80) || null;
+      // Entering the hotel's number is what confirming means; clearing it un-confirms.
+      if (b.status === undefined) data.status = data.confirmationNumber ? 'CONFIRMED' : 'REQUESTED';
+    }
+    if (b.status !== undefined) {
+      if (!LIVE.includes(b.status)) throw new HotelError('Use cancel to cancel a room request.');
+      data.status = b.status;
+    }
+    if ((b.checkIn !== undefined || b.checkOut !== undefined) && (b.checkIn !== r.checkIn || b.checkOut !== r.checkOut)) {
+      await changeStay(r, b.checkIn ?? r.checkIn, b.checkOut ?? r.checkOut);
+    }
+  } catch (e) { return hotelError(res, e); }
+
+  const updated = await prisma.roomReservation.update({ where: { id: r.id }, data, include: { user: true } });
+  await audit(req.user.id, 'hotel.update', r.id, { ...data, guestName: undefined, roommates: undefined, checkIn: b.checkIn, checkOut: b.checkOut });
+  if (updated.status === 'CONFIRMED' && (r.status !== 'CONFIRMED' || (data.confirmationNumber && data.confirmationNumber !== r.confirmationNumber))) {
+    const { hotel } = r.block;
+    await notifyPerson(updated.user, `Your room at ${hotel.name} is confirmed`,
+      `Your ${r.block.name} room at ${hotel.name} for ${hotel.event.title} is confirmed: ${updated.checkIn} to ${updated.checkOut}` +
+      `${updated.confirmationNumber ? `, confirmation number ${updated.confirmationNumber}` : ''}.`);
+  }
+  res.json(shapeReservation(updated));
+});
+
+adminRouter.post('/room-reservations/:id/cancel', async (req, res) => {
+  const r = await prisma.roomReservation.findUnique({ where: { id: req.params.id }, include: ADMIN_RESERVATION_INCLUDE });
+  if (!r) return res.status(404).json({ error: 'Room request not found.' });
+  if (!LIVE.includes(r.status)) return res.status(400).json({ error: 'This room request is already cancelled.' });
+  await cancelReservation(r);
+  await audit(req.user.id, 'hotel.cancel', r.id, { blockId: r.blockId, byStaff: true });
+  const { hotel } = r.block;
+  await notifyPerson(r.user, `Your room at ${hotel.name} was cancelled`,
+    `The organizers of ${hotel.event.title} cancelled your ${r.block.name} room at ${hotel.name} (${r.checkIn} to ${r.checkOut}). Reach out to them if that's unexpected.`);
   res.json({ ok: true });
 });
 
@@ -1439,7 +1669,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'volunteerShift', 'volunteerSignup', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 

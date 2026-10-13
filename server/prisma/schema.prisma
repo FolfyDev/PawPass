@@ -65,6 +65,23 @@ enum VolunteerAttendance {
   NO_SHOW
 }
 
+/// How rooms in a hotel block get booked.
+enum RoomBlockMode {
+  /// Attendees book straight with the hotel through its link or group code.
+  /// Staff copy the hotel's pickup report in, night by night.
+  HOTEL_BOOKED
+  /// Attendees request a room here. Staff send the hotel a rooming list and
+  /// enter the confirmation numbers it sends back.
+  ORGANIZER_MANAGED
+}
+
+enum RoomReservationStatus {
+  /// Holds a room in the block; not yet confirmed by the hotel.
+  REQUESTED
+  CONFIRMED
+  CANCELLED
+}
+
 enum PaymentStatus {
   PENDING
   PAID
@@ -110,6 +127,7 @@ model User {
   bansCreated      Ban[]          @relation("BansCreatedBy")
   volunteerSignups VolunteerSignup[]
   volunteerMarks   VolunteerSignup[] @relation("VolunteerAttendanceMarkedBy")
+  roomReservations RoomReservation[]
 }
 
 model Event {
@@ -156,6 +174,11 @@ model Event {
   volunteersEnabled Boolean       @default(false)
   /// Shown above the shift list, e.g. where to report and what to wear.
   volunteerInfo    String         @default("")
+  /// "Where to stay" on the public event page. Hotels can be set up while
+  /// this is off; nobody sees them until it's turned on.
+  hotelsEnabled    Boolean        @default(false)
+  /// Shown above the hotel list, e.g. "Book by Sept 1 to get the rate".
+  hotelInfo        String         @default("")
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
@@ -169,6 +192,7 @@ model Event {
   voucherCodes     VoucherCode[]
   donations        Donation[]
   volunteerShifts  VolunteerShift[]
+  hotels           Hotel[]
 }
 
 model Registration {
@@ -533,6 +557,109 @@ model VolunteerSignup {
   createdAt   DateTime            @default(now())
 
   @@unique([shiftId, userId])
+  @@index([userId])
+}
+
+/// A partner hotel for an event. The rooms themselves live in its blocks.
+model Hotel {
+  id          String      @id @default(cuid())
+  eventId     String
+  event       Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name        String
+  address     String?
+  url         String?
+  phone       String?
+  description String      @default("")
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  blocks      RoomBlock[]
+
+  @@index([eventId])
+}
+
+/// Rooms of one type held at a hotel at a negotiated rate, e.g. "King,
+/// $149/night, 40 rooms Thu-Sun, cutoff Aug 15". Inventory is per night
+/// (RoomBlockNight), since hotel contracts are.
+model RoomBlock {
+  id               String            @id @default(cuid())
+  hotelId          String
+  hotel            Hotel             @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  name             String
+  description      String            @default("")
+  /// Per night, before tax. Paid to the hotel, never through PawPass.
+  rateCents        Int               @default(0)
+  currency         String            @default("usd")
+  mode             RoomBlockMode     @default(HOTEL_BOOKED)
+  bookingUrl       String?
+  groupCode        String?
+  /// After this the hotel releases unbooked rooms; requests and
+  /// self-service cancellations close.
+  cutoffAt         DateTime?
+  maxGuests        Int               @default(4)
+  /// Share of contracted room nights the contract requires to be picked up
+  /// (e.g. 80) before attrition penalties apply. Null = no target tracked.
+  attritionPercent Int?
+  /// Only people with a confirmed ticket see the booking link and group
+  /// code, or can request a room.
+  attendeesOnly    Boolean           @default(true)
+  active           Boolean           @default(true)
+  /// Staff-only, e.g. contract contact and terms.
+  staffNotes       String            @default("")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  nights           RoomBlockNight[]
+  reservations     RoomReservation[]
+
+  @@index([hotelId])
+}
+
+model RoomBlockNight {
+  id             String    @id @default(cuid())
+  blockId        String
+  block          RoomBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  /// The night's date as YYYY-MM-DD in the event's timezone ("the night of
+  /// the 12th" checks in on the 12th, out on the 13th). Plain text so no
+  /// timezone conversion can ever shift it a day.
+  night          String
+  contracted     Int
+  /// Rooms taken by live ORGANIZER_MANAGED reservations, claimed with a
+  /// compare-and-swap against contracted (same pattern as
+  /// VolunteerShift.filledCount).
+  held           Int       @default(0)
+  /// HOTEL_BOOKED: the hotel's own pickup count for the night, entered by staff.
+  reportedPickup Int?
+
+  @@unique([blockId, night])
+}
+
+/// One room request in an ORGANIZER_MANAGED block.
+model RoomReservation {
+  id                 String                @id @default(cuid())
+  blockId            String
+  block              RoomBlock             @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Encrypted at rest. The name the room is booked under, as on their ID.
+  guestName          String
+  /// Encrypted at rest. Free text: who else is in the room.
+  roommates          String                @default("")
+  guests             Int                   @default(1)
+  /// YYYY-MM-DD, same as RoomBlockNight.night. checkOut is exclusive.
+  checkIn            String
+  checkOut           String
+  status             RoomReservationStatus @default(REQUESTED)
+  confirmationNumber String?
+  note               String?
+  staffNote          String?
+  source             String                @default("web") // web | admin
+  cancelledAt        DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([blockId, status])
   @@index([userId])
 }
 

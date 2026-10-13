@@ -14,6 +14,8 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/events/:slug/merch/orders` | Signed in, confirmed attendee. `{ items: [{ itemId, quantity }] }` → `checkoutUrl` |
 | GET | `/api/events/:slug/volunteer` | Volunteer `info` and upcoming `shifts` with open slots (counts only). 404 unless the event has volunteering on |
 | POST | `/api/events/:slug/volunteer/:shiftId` | Signed in. `{ note }`. Refuses full, started, and overlapping shifts |
+| GET | `/api/events/:slug/hotels` | Hotels and their active blocks, your live room requests, and a `guestName` to prefill. Booking link and group code are `null` (and `locked: true`) on ticket-holders-only blocks unless you have a confirmed ticket. 404 unless the event has hotels on |
+| POST | `/api/events/:slug/room-blocks/:blockId/reservations` | Signed in. `{ checkIn, checkOut, guests, guestName, roommates, note }` — dates are `YYYY-MM-DD`, check-out exclusive. Organizer-managed blocks only; one live room per person per event; closes at the cutoff |
 | POST | `/api/stripe/webhook` | Stripe only — signature-verified against `STRIPE_WEBHOOK_SECRET` |
 | GET | `/t/:secret` | The URL inside every QR — human-readable landing page |
 
@@ -47,6 +49,8 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/my/account/delete`: `{ confirm: 'DELETE' }`. Anonymises the account; refused while upcoming tickets or volunteer shifts are live |
 | GET | `/api/my/volunteer-shifts` |
 | DELETE | `/api/my/volunteer-shifts/:id` — drop a shift; refused once it has started |
+| GET | `/api/my/room-reservations` |
+| POST | `/api/my/room-reservations/:id/cancel` — refused after the block's cutoff or once the stay has begun (`canCancel`) |
 
 ## Admin — requires ADMIN or OWNER
 
@@ -79,6 +83,16 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/admin/shifts/:id/signups` | `{ who }` — a ticket code or `@telegram` username. Messages them on Telegram |
 | PATCH | `/api/admin/volunteer-signups/:id` | `{ attendance }`: `PENDING`, `PRESENT`, `NO_SHOW` |
 | DELETE | `/api/admin/volunteer-signups/:id` | Frees the slot and messages them on Telegram |
+| GET | `/api/admin/events/:id/hotels` | Hotels → blocks with per-night inventory, pickup totals (`contracted`, `pickedUp`, `pickupPercent`, `required`, `shortfall`), and room requests |
+| POST | `/api/admin/events/:id/hotels` | **Owner only.** `{ name, address, url, phone, description }` |
+| PATCH/DELETE | `/api/admin/hotels/:id` | **Owner only.** Delete refuses a hotel with live room requests |
+| POST | `/api/admin/hotels/:id/blocks` | **Owner only.** `{ name, rate, mode: HOTEL_BOOKED \| ORGANIZER_MANAGED, bookingUrl, groupCode, cutoffAt, maxGuests, attritionPercent, attendeesOnly, active, staffNotes, nights? }` — rate in dollars |
+| PATCH/DELETE | `/api/admin/room-blocks/:id` | **Owner only.** Delete refuses a block with live room requests |
+| PUT | `/api/admin/room-blocks/:id/nights` | **Owner only.** `{ nights: [{ night, contracted, reportedPickup }] }` replaces the inventory; can't go below rooms already requested |
+| GET | `/api/admin/room-blocks/:id/rooming-list.csv` | Live rooms, for sending to the hotel |
+| POST | `/api/admin/room-blocks/:id/reservations` | `{ who, checkIn, checkOut, guests, guestName, roommates, staffNote }` — `who` is a ticket code or `@telegram`. Skips the one-room limit and the cutoff, not inventory |
+| PATCH | `/api/admin/room-reservations/:id` | `{ confirmationNumber, checkIn, checkOut, guests, guestName, roommates, staffNote, status }` — a confirmation number confirms it and notifies them |
+| POST | `/api/admin/room-reservations/:id/cancel` | Releases the nights and notifies them |
 | POST | `/api/admin/checkin` | `{ value }` — a ticket URL, a secret, or a typed code |
 | POST | `/api/admin/checkin/:code/undo` | |
 | GET | `/api/admin/users` | No `q` returns staff only |
