@@ -16,6 +16,8 @@ import NotFound from './pages/NotFound.jsx';
 // is only ever reached by staff, so it has no business shipping in the
 // bundle every attendee downloads just to register.
 const Changelog = lazy(() => import('./pages/Changelog.jsx'));
+const Schedule = lazy(() => import('./pages/Schedule.jsx'));
+const SubmitPanel = lazy(() => import('./pages/SubmitPanel.jsx'));
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout.jsx'));
 const AdminEvents = lazy(() => import('./pages/admin/Events.jsx'));
 const AdminEventEdit = lazy(() => import('./pages/admin/EventEdit.jsx'));
@@ -26,6 +28,8 @@ const AdminMerch = lazy(() => import('./pages/admin/Merch.jsx'));
 const AdminReconciliation = lazy(() => import('./pages/admin/Reconciliation.jsx'));
 const AdminVouchers = lazy(() => import('./pages/admin/Vouchers.jsx'));
 const AdminHotels = lazy(() => import('./pages/admin/Hotels.jsx'));
+const AdminSchedule = lazy(() => import('./pages/admin/AdminSchedule.jsx'));
+const AdminSubmissions = lazy(() => import('./pages/admin/AdminSubmissions.jsx'));
 const AdminVolunteers = lazy(() => import('./pages/admin/Volunteers.jsx'));
 const AdminCheckInSelect = lazy(() => import('./pages/admin/CheckInSelect.jsx'));
 const AdminScanner = lazy(() => import('./pages/admin/Scanner.jsx'));
@@ -80,6 +84,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/e/:slug" element={<EventPage />} />
+            <Route path="/e/:slug/schedule" element={<Schedule />} />
+            <Route path="/e/:slug/submit" element={<SubmitPanel />} />
             <Route path="/tickets" element={user ? <Tickets /> : <Navigate to="/login" />} />
             <Route path="/account" element={user ? <Account /> : <Navigate to="/login" />} />
             <Route path="/login" element={<Login />} />
@@ -101,6 +107,8 @@ export default function App() {
               <Route path="events/:id/vouchers" element={<AdminVouchers />} />
               <Route path="events/:id/volunteers" element={<AdminVolunteers />} />
               <Route path="events/:id/hotels" element={<AdminHotels />} />
+              <Route path="events/:id/schedule" element={<AdminSchedule />} />
+              <Route path="events/:id/submissions" element={<AdminSubmissions />} />
               <Route path="scan" element={<AdminCheckInSelect />} />
               <Route path="scan/:eventId" element={<AdminScanner />} />
               <Route path="badges" element={<AdminBadges />} />

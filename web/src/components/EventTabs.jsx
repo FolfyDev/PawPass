@@ -13,6 +13,8 @@ const TABS = [
   ['vouchers', 'Vouchers'],
   ['volunteers', 'Volunteers'],
   ['hotels', 'Hotels'],
+  ['schedule', 'Schedule'],
+  ['submissions', 'Panels'],
 ];
 
 export default function EventTabs({ id }) {

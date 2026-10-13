@@ -12,6 +12,7 @@ import { authRouter, loginLimiter } from './routes/auth.js';
 import { publicRouter } from './routes/public.js';
 import { adminRouter } from './routes/admin.js';
 import { incidentRouter } from './routes/incidents.js';
+import { schedulePublicRouter, scheduleAdminRouter } from './routes/schedule.js';
 import { badgeRouter } from './routes/badges.js';
 import { STARTER_TEMPLATE } from './badges/template.js';
 import { escapeHtml } from './lib/html.js';
@@ -117,8 +118,10 @@ app.get('/sitemap.xml', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api', schedulePublicRouter);
 app.use('/api', publicRouter);
 app.use('/api/admin/incidents', incidentRouter);
+app.use('/api/admin', scheduleAdminRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/badges', badgeRouter);
 

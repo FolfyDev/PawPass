@@ -5,32 +5,32 @@ const escapeText = (s) => String(s ?? '')
 
 const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 
-/// Builds a single-event .ics file client-side and triggers a download —
-/// no server round-trip, since everything needed is already on the page.
-export function downloadEventIcs({ uid, title, venue, startsAt, endsAt, description }) {
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//PawPass//EN',
-    'BEGIN:VEVENT',
-    `UID:${uid}@pawpass`,
-    `DTSTAMP:${stamp(new Date())}`,
-    `DTSTART:${stamp(startsAt)}`,
-    `DTEND:${stamp(endsAt)}`,
-    `SUMMARY:${escapeText(title)}`,
-    ...(venue ? [`LOCATION:${escapeText(venue)}`] : []),
-    ...(description ? [`DESCRIPTION:${escapeText(description)}`] : []),
-    'END:VEVENT',
-    'END:VCALENDAR',
-  ];
+const vevent = ({ uid, title, venue, startsAt, endsAt, description }) => [
+  'BEGIN:VEVENT',
+  `UID:${uid}@pawpass`,
+  `DTSTAMP:${stamp(new Date())}`,
+  `DTSTART:${stamp(startsAt)}`,
+  `DTEND:${stamp(endsAt)}`,
+  `SUMMARY:${escapeText(title)}`,
+  ...(venue ? [`LOCATION:${escapeText(venue)}`] : []),
+  ...(description ? [`DESCRIPTION:${escapeText(description)}`] : []),
+  'END:VEVENT',
+];
 
+/// Builds an .ics file client-side and triggers a download — no server
+/// round-trip, since everything needed is already on the page. Several
+/// items (a personal schedule) go in one calendar file.
+export function downloadIcs(items, filename) {
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PawPass//EN', ...items.flatMap(vevent), 'END:VCALENDAR'];
   const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${(title || 'event').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.ics`;
+  a.download = `${(filename || 'event').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.ics`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+export const downloadEventIcs = (item) => downloadIcs([item], item.title);

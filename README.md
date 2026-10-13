@@ -12,6 +12,7 @@ No payments, no ticket pricing, no Stripe keys — every ticket is free.
 - **Attendee side** — browse events, register, accept the terms, keep the ticket in your wallet app
 - **Telegram bot** — `/register` walks through the whole thing and finishes with `/accept`
 - **Admin side** — schedule events, scan to check in, design badges, print, mass email
+- **Schedule & panel submissions** — rooms and sessions with double-booking checks, a public schedule attendees can star and export to their calendar, and a submission form with a review queue that feeds accepted panels onto the schedule
 - **Incident reports** — a confidential, encrypted log of code-of-conduct and safety reports with follow-ups, and a one-click ban from a report
 - **Site-wide bans** — block someone from registering for any event, with attempt logging
 - **Door check-in** — multi-day entry with day passes, entry/exit scanning with a live headcount against the venue's limit, and an offline mode that keeps the scanner working through Wi-Fi drops and syncs afterwards

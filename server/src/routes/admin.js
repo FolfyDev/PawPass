@@ -56,7 +56,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -66,20 +66,20 @@ function eventPayload(body, timeZone) {
   const data = {};
   for (const k of EVENT_FIELDS) {
     if (body[k] === undefined) continue;
-    if (['startsAt','endsAt','opensAt','closesAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
+    if (['startsAt','endsAt','opensAt','closesAt','submissionsCloseAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
     else if (k === 'occupancyLimit') {
       const n = body[k] === '' || body[k] === null ? null : Number(body[k]);
       if (n !== null && (!Number.isInteger(n) || n < 1)) throw new RegistrationError('The occupancy limit must be a whole number, or blank for none.');
       data[k] = n;
     }
-    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled' || k === 'hotelsEnabled') data[k] = Boolean(body[k]);
+    else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled' || k === 'hotelsEnabled' || k === 'scheduleEnabled' || k === 'submissionsOpen') data[k] = Boolean(body[k]);
     else if (k === 'kbygDaysBefore') {
       const days = Number(body[k]);
       if (!Number.isInteger(days) || days < 1 || days > 30) throw new RegistrationError('Send "know before you go" 1 to 30 days before.');
       data[k] = days;
     }
-    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo' || k === 'hotelInfo') data[k] = String(body[k] || '').slice(0, 5000);
+    else if (k === 'kbygMessage' || k === 'thanksMessage' || k === 'volunteerInfo' || k === 'hotelInfo' || k === 'submissionInfo') data[k] = String(body[k] || '').slice(0, 5000);
     else if (k === 'feedbackUrl') {
       const url = String(body[k] || '').trim();
       if (url && !/^https?:\/\/\S+$/i.test(url)) throw new RegistrationError('The feedback link must start with http:// or https://.');
@@ -1826,7 +1826,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'incident', 'incidentPerson', 'incidentNote', 'ban', 'auditLog'];
+const BACKUP_MODELS = ['user', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'eventRoom', 'scheduleSession', 'sessionStar', 'panelSubmission', 'incident', 'incidentPerson', 'incidentNote', 'ban', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 

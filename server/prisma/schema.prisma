@@ -65,6 +65,13 @@ enum VolunteerAttendance {
   NO_SHOW
 }
 
+enum SubmissionStatus {
+  SUBMITTED
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
 enum IncidentSeverity {
   LOW
   MEDIUM
@@ -165,6 +172,9 @@ model User {
   scansMade        CheckIn[]      @relation("ScansMade")
   incidentsFiled   Incident[]     @relation("IncidentsFiled")
   incidentNotes    IncidentNote[]
+  sessionStars     SessionStar[]
+  panelSubmissions PanelSubmission[]
+  submissionsDecided PanelSubmission[] @relation("SubmissionsDecided")
 }
 
 model Event {
@@ -219,6 +229,13 @@ model Event {
   /// Most people allowed inside at once (fire code). Only tracked
   /// meaningfully when the door also scans people out. Null = no limit shown.
   occupancyLimit   Int?
+  /// The public schedule (sessions) on the event page.
+  scheduleEnabled  Boolean        @default(false)
+  /// Panel submissions: open to signed-in people while true and before
+  /// submissionsCloseAt. submissionInfo is the guidelines shown on the form.
+  submissionsOpen    Boolean      @default(false)
+  submissionsCloseAt DateTime?
+  submissionInfo   String         @default("")
   /// When personal data (names, emails, answers...) was cleared from this
   /// event under the instance's data retention setting (lib/retention.js).
   dataPurgedAt     DateTime?
@@ -238,6 +255,9 @@ model Event {
   hotels           Hotel[]
   checkIns         CheckIn[]
   incidents        Incident[]
+  rooms            EventRoom[]
+  sessions         ScheduleSession[]
+  submissions      PanelSubmission[]
 }
 
 model Registration {
@@ -610,6 +630,91 @@ model VolunteerSignup {
   createdAt   DateTime            @default(now())
 
   @@unique([shiftId, userId])
+  @@index([userId])
+}
+
+/// A room or space at the venue that sessions are scheduled into.
+model EventRoom {
+  id        String            @id @default(cuid())
+  eventId   String
+  event     Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name      String
+  capacity  Int?
+  sortOrder Int               @default(0)
+  createdAt DateTime          @default(now())
+
+  sessions  ScheduleSession[]
+
+  @@index([eventId])
+}
+
+/// One item on the schedule: a panel, a dance, an opening ceremony. Only
+/// published sessions with a time show publicly; an accepted submission
+/// starts here as an unpublished, unscheduled draft.
+model ScheduleSession {
+  id           String           @id @default(cuid())
+  eventId      String
+  event        Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  roomId       String?
+  room         EventRoom?       @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  title        String
+  description  String           @default("")
+  /// Who's running it, as it should appear publicly.
+  hosts        String           @default("")
+  track        String?
+  startsAt     DateTime?
+  endsAt       DateTime?
+  published    Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  stars        SessionStar[]
+  submission   PanelSubmission?
+
+  @@index([eventId, startsAt])
+  @@index([roomId])
+}
+
+/// An attendee's "I want to go to this".
+model SessionStar {
+  sessionId String
+  session   ScheduleSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+
+  @@id([sessionId, userId])
+  @@index([userId])
+}
+
+/// A proposed panel, from the public submission form.
+model PanelSubmission {
+  id            String           @id @default(cuid())
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  /// The public blurb, if accepted.
+  description   String           @default("")
+  hosts         String           @default("")
+  lengthMinutes Int              @default(60)
+  /// Free text, e.g. "Saturday afternoon, not before noon".
+  availability  String           @default("")
+  /// For the reviewers only: equipment, accessibility, content notes.
+  notes         String           @default("")
+  status        SubmissionStatus @default(SUBMITTED)
+  /// Staff-only, never shown to the submitter.
+  reviewNote    String           @default("")
+  decidedAt     DateTime?
+  decidedById   String?
+  decidedBy     User?            @relation("SubmissionsDecided", fields: [decidedById], references: [id], onDelete: SetNull)
+  sessionId     String?          @unique
+  session       ScheduleSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([eventId, status])
   @@index([userId])
 }
 

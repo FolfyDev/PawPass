@@ -413,6 +413,13 @@ export default function EventPage() {
         </section>
       </div>
 
+      {(event.schedule || event.submissionsOpen) && (
+        <section className="row" style={{ marginTop: 20 }}>
+          {event.schedule && <Link className="btn" to={`/e/${slug}/schedule`}>See the schedule</Link>}
+          {event.submissionsOpen && <Link className="btn ghost" to={`/e/${slug}/submit`}>Submit a panel</Link>}
+        </section>
+      )}
+
       {user && going && going.length > 0 && (
         <section style={{ marginTop: 28 }}>
           <p className="eyebrow" style={{ marginBottom: 10 }}>Who's going</p>

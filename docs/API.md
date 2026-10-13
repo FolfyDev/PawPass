@@ -114,6 +114,25 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/admin/events/:id/purge` | **Owner only.** `{ confirm: <event title> }` — clears one finished event's personal data now |
 | GET | `/api/admin/audit` | |
 
+## Schedule & panel submissions
+
+Owners turn each on per event (`scheduleEnabled`, `submissionsOpen`, `submissionsCloseAt`, `submissionInfo` on PATCH `/api/admin/events/:id`). Admins build the schedule and review submissions.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/events/:slug/schedule` | Published sessions with a time, rooms, days, and the viewer's `starred` session IDs |
+| PUT/DELETE | `/api/my/stars/:sessionId` | Signed in |
+| GET | `/api/events/:slug/submissions` | Whether it's `accepting`, the guidelines, and the viewer's own submissions |
+| POST | `/api/events/:slug/submissions` | Signed in. `{ title, description, hosts, lengthMinutes, availability, notes }` |
+| PATCH | `/api/my/submissions/:id` · POST `/api/my/submissions/:id/withdraw` | While it's still waiting on a decision |
+| GET | `/api/admin/events/:id/schedule` | Everything, drafts and unscheduled included, with star counts |
+| GET | `/api/admin/events/:id/schedule.csv` | |
+| POST | `/api/admin/events/:id/rooms` · PATCH/DELETE `/api/admin/rooms/:id` | Deleting a room leaves its sessions without one |
+| POST | `/api/admin/events/:id/sessions` · PATCH/DELETE `/api/admin/sessions/:id` | `{ title, hosts, track, roomId, startsAt, endsAt, description, published }` — times in the event's timezone; both or neither; a room can't be double-booked |
+| GET | `/api/admin/events/:id/submissions` | `?status=` |
+| PATCH | `/api/admin/submissions/:id` | `{ reviewNote }` (staff only) |
+| POST | `/api/admin/submissions/:id/decision` | `{ decision: ACCEPTED \| DECLINED, message }` — accepting creates an unscheduled draft session; the submitter is told |
+
 ## Incidents — requires ADMIN or OWNER
 
 Owners see every report; an admin only sees reports they filed (any other ID is a 404).

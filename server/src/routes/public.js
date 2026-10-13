@@ -100,6 +100,8 @@ publicRouter.get('/events/:slug', async (req, res) => {
     tiers: tiers.filter((t) => tierSaleState(t).reason !== 'ended').map((t) => publicTier(t, heldPerTier[t.id] || 0)),
     volunteers: event.volunteersEnabled,
     hotels: event.hotelsEnabled,
+    schedule: event.scheduleEnabled,
+    submissionsOpen: event.submissionsOpen,
     donationAddon: event.donationAddonEnabled && stripeEnabled()
       ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
       : null,
@@ -135,7 +137,7 @@ publicRouter.post('/events/:slug/discount', discountLimiter, async (req, res) =>
 /// checks the signed-in account against the ban list, and logs a hit with
 /// the same action and shape as a blocked registration so it lands in the
 /// attempts list on the Bans page.
-async function blockedByBan(u, event, source) {
+export async function blockedByBan(u, event, source) {
   const ban = await findMatchingBan({ legalName: u.legalName, email: u.email, telegramId: u.telegramId, telegramUsername: u.telegramUsername });
   if (!ban) return false;
   await audit(null, 'ban.blocked_registration', ban.id, {

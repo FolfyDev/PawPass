@@ -31,6 +31,10 @@ export async function exportAccount(userId) {
     include: { block: { include: { hotel: { include: { event: true } } } } },
     orderBy: { createdAt: 'asc' },
   });
+  const [submissions, stars] = await Promise.all([
+    prisma.panelSubmission.findMany({ where: { userId }, include: { event: true }, orderBy: { createdAt: 'asc' } }),
+    prisma.sessionStar.findMany({ where: { userId }, include: { session: { include: { event: true } } }, orderBy: { createdAt: 'asc' } }),
+  ]);
   const pay = (p) => ({
     method: p.method, status: p.status, amount: p.amountCents / 100, refunded: p.amountRefundedCents / 100,
     currency: p.currency, paidAt: p.paidAt, stripeReference: p.stripePaymentIntentId,
@@ -57,6 +61,11 @@ export async function exportAccount(userId) {
       event: s.shift.event.title, role: s.shift.role, startsAt: s.shift.startsAt, endsAt: s.shift.endsAt,
       location: s.shift.location, note: s.note, attendance: s.attendance, signedUpAt: s.createdAt,
     })),
+    panelSubmissions: submissions.map((s) => ({
+      event: s.event.title, title: s.title, description: s.description, hosts: s.hosts, lengthMinutes: s.lengthMinutes,
+      availability: s.availability, notes: s.notes, status: s.status, submittedAt: s.createdAt,
+    })),
+    starredSessions: stars.map((s) => ({ event: s.session.event.title, session: s.session.title, startsAt: s.session.startsAt })),
     hotelRooms: rooms.map((r) => ({
       event: r.block.hotel.event.title, hotel: r.block.hotel.name, roomType: r.block.name,
       checkIn: r.checkIn, checkOut: r.checkOut, guests: r.guests, guestName: r.guestName, roommates: r.roommates,
