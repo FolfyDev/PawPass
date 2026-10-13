@@ -11,7 +11,7 @@ import { env } from '../lib/env.js';
 import { requireAdmin, requireOwner, audit, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
 import { getSettings, setSettings } from '../lib/settings.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier, HOLDS_SEAT } from '../lib/registrations.js';
-import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest, shapePayment } from '../lib/payments.js';
+import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest, shapePayment, notifyPerson } from '../lib/payments.js';
 import { normalizeCode, MAX_DONATION_CENTS } from '../lib/pricing.js';
 import { shapeOrder } from '../lib/merch.js';
 import { syncTier, archiveTierProduct, stripeEnabled } from '../lib/stripe.js';
@@ -22,7 +22,7 @@ import { zonedTimeToUtc, formatInTimeZone } from '../lib/tz.js';
 import { publicUser } from './auth.js';
 import { summarize, shapeReg, REG_INCLUDE, RECEIPT_INCLUDE } from './public.js';
 import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
-import { sendCampaign, sendRegistrationConfirmation, sendNoticeEmail } from '../lib/mailer.js';
+import { sendCampaign, sendRegistrationConfirmation } from '../lib/mailer.js';
 import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
 import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
 import { recordScan, undoLastScan, todayCounts, dailyAttendance, eventDays, hashSecret, dayIn, ScanError, DIRECTIONS } from '../lib/checkins.js';
@@ -1232,14 +1232,10 @@ adminRouter.delete('/volunteer-signups/:id', async (req, res) => {
 
 /* ---------------- hotels ---------------- */
 
-/// Room news matters enough to send on every channel the person has.
-/// Best-effort: a missing SMTP config or a blocked bot never fails the request.
-async function notifyPerson(user, subject, text) {
-  await notifyUser(user.telegramId, text);
-  if (user.email && env.smtp.enabled) {
-    await sendNoticeEmail(user.email, subject, `${text}\n\n${env.webUrl}/tickets`).catch((e) => console.error('hotel notice email failed', user.id, e.message));
-  }
-}
+/// Room news goes out on every channel the person has (Telegram and email,
+/// both best-effort), with a link to where they can see the room.
+const notifyRoom = (user, subject, text) =>
+  notifyPerson({ user, email: user.email, subject, text: `${text}\n\n${env.webUrl}/tickets` });
 
 const hotelError = (res, e) => {
   if (e instanceof HotelError) return res.status(400).json({ error: e.message });
@@ -1396,7 +1392,7 @@ adminRouter.post('/room-blocks/:id/reservations', async (req, res) => {
       roommates: b.roommates, staffNote: b.staffNote, source: 'admin', byStaff: true,
     });
     await audit(req.user.id, 'hotel.add', r.id, { blockId: block.id, userId: found.user.id });
-    await notifyPerson(found.user, `Room requested at ${block.hotel.name}`,
+    await notifyRoom(found.user, `Room requested at ${block.hotel.name}`,
       `The organizers of ${block.hotel.event.title} requested a ${block.name} room for you at ${block.hotel.name}, ${r.checkIn} to ${r.checkOut}. You'll hear again once the hotel confirms it.`);
     res.json(shapeReservation(await prisma.roomReservation.findUnique({ where: { id: r.id }, include: { user: true } })));
   } catch (e) { hotelError(res, e); }
@@ -1440,7 +1436,7 @@ adminRouter.patch('/room-reservations/:id', async (req, res) => {
   await audit(req.user.id, 'hotel.update', r.id, { ...data, guestName: undefined, roommates: undefined, checkIn: b.checkIn, checkOut: b.checkOut });
   if (updated.status === 'CONFIRMED' && (r.status !== 'CONFIRMED' || (data.confirmationNumber && data.confirmationNumber !== r.confirmationNumber))) {
     const { hotel } = r.block;
-    await notifyPerson(updated.user, `Your room at ${hotel.name} is confirmed`,
+    await notifyRoom(updated.user, `Your room at ${hotel.name} is confirmed`,
       `Your ${r.block.name} room at ${hotel.name} for ${hotel.event.title} is confirmed: ${updated.checkIn} to ${updated.checkOut}` +
       `${updated.confirmationNumber ? `, confirmation number ${updated.confirmationNumber}` : ''}.`);
   }
@@ -1454,7 +1450,7 @@ adminRouter.post('/room-reservations/:id/cancel', async (req, res) => {
   await cancelReservation(r);
   await audit(req.user.id, 'hotel.cancel', r.id, { blockId: r.blockId, byStaff: true });
   const { hotel } = r.block;
-  await notifyPerson(r.user, `Your room at ${hotel.name} was cancelled`,
+  await notifyRoom(r.user, `Your room at ${hotel.name} was cancelled`,
     `The organizers of ${hotel.event.title} cancelled your ${r.block.name} room at ${hotel.name} (${r.checkIn} to ${r.checkOut}). Reach out to them if that's unexpected.`);
   res.json({ ok: true });
 });
