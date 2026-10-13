@@ -132,6 +132,16 @@ model User {
   email            String?
   emailIndex       String?        @unique
   passwordHash     String?        // staff only — attendees never get one
+  /// Two-factor for password sign-in (lib/totp.js). The secret is encrypted
+  /// at rest; the pending one is mid-setup, until a code from the app
+  /// confirms it was scanned.
+  totpSecret        String?
+  totpPendingSecret String?
+  totpEnabledAt     DateTime?
+  /// Last 30-second step a code was accepted for, so a code can't be reused.
+  totpLastStep      Int?
+  /// SHA-256 of each unused recovery code; one is removed as it's used.
+  totpRecoveryHashes String[]     @default([])
   role             Role           @default(USER)
   /// Bumped on logout or password change; a JWT's embedded `ver` claim must
   /// match this or loadUser() treats the request as signed out. Lets a

@@ -3,10 +3,14 @@ import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, requireAdmin, localDevAuthAvailable, redeemLoginCode, redeemEmailCode, LoginCodeError, linkTelegramIdentity, TelegramLinkError } from '../lib/auth.js';
+import { verifyTelegramLogin, issueToken, setSessionCookie, COOKIE, requireUser, requireAdmin, localDevAuthAvailable, redeemLoginCode, redeemEmailCode, LoginCodeError, linkTelegramIdentity, TelegramLinkError, audit } from '../lib/auth.js';
 import { loginCode as makeLoginCode } from '../lib/codes.js';
 import { blindIndex } from '../lib/crypto.js';
 import { sendOtpEmail } from '../lib/mailer.js';
+import jwt from 'jsonwebtoken';
+import QRCode from 'qrcode';
+import { newSecret, verifyCode, otpauthUrl, newRecoveryCodes, hashRecoveryCode } from '../lib/totp.js';
+import { getSettings } from '../lib/settings.js';
 
 export const authRouter = Router();
 
@@ -50,14 +54,113 @@ authRouter.post('/telegram', async (req, res) => {
 });
 
 
+/// With two-factor on, a correct password only earns a 5-minute challenge
+/// token; /password/2fa trades it plus a code for the session. The token
+/// carries tokenVersion, so a logout-everywhere or password change in
+/// between voids it.
+const CHALLENGE = 'pawpass:2fa';
+
 authRouter.post('/password', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   const user = await prisma.user.findUnique({ where: { emailIndex: blindIndex(email) } });
   if (!user?.passwordHash || user.role === 'USER' || !(await bcrypt.compare(String(password || ''), user.passwordHash)))
     return res.status(401).json({ error: 'Email or password is incorrect.' });
 
+  if (user.totpEnabledAt) {
+    const challenge = jwt.sign({ sub: user.id, ver: user.tokenVersion, aud: CHALLENGE }, env.jwtSecret, { expiresIn: '5m', algorithm: 'HS256' });
+    return res.json({ twoFactor: true, challenge });
+  }
   setSessionCookie(res, issueToken(user));
   res.json({ user: publicUser(user) });
+});
+
+/// Second step: a 6-digit code from the app, or one of the recovery codes
+/// (each works once).
+authRouter.post('/password/2fa', loginLimiter, async (req, res) => {
+  let payload;
+  try { payload = jwt.verify(String(req.body?.challenge || ''), env.jwtSecret, { algorithms: ['HS256'], audience: CHALLENGE }); }
+  catch { return res.status(401).json({ error: 'That sign-in took too long. Enter your password again.' }); }
+  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+  if (!user || user.tokenVersion !== payload.ver || !user.totpEnabledAt || !user.totpSecret)
+    return res.status(401).json({ error: 'That sign-in took too long. Enter your password again.' });
+
+  const code = String(req.body?.code || '').trim();
+  const step = verifyCode(user.totpSecret, code, { lastStep: user.totpLastStep });
+  if (step != null) {
+    // Claimed with a compare-and-swap, so the same code sent twice at once
+    // still only signs in once.
+    const { count } = await prisma.user.updateMany({
+      where: { id: user.id, OR: [{ totpLastStep: null }, { totpLastStep: { lt: step } }] },
+      data: { totpLastStep: step },
+    });
+    if (!count) return res.status(401).json({ error: 'That code was already used. Wait for the next one.' });
+  } else {
+    const hash = hashRecoveryCode(code);
+    if (!code || !user.totpRecoveryHashes.includes(hash)) return res.status(401).json({ error: 'That code isn\'t right. Check your authenticator app and try again.' });
+    await prisma.user.update({ where: { id: user.id }, data: { totpRecoveryHashes: user.totpRecoveryHashes.filter((h) => h !== hash) } });
+    await audit(user.id, 'auth.2fa.recovery_used', user.id, { left: user.totpRecoveryHashes.length - 1 });
+  }
+  setSessionCookie(res, issueToken(user));
+  res.json({ user: publicUser(user) });
+});
+
+/// Starts setup: a fresh secret, held as pending until /2fa/enable sees a
+/// code from it. Signed-in staff with a password only.
+authRouter.post('/2fa/setup', requireAdmin, async (req, res) => {
+  if (!req.user.passwordHash) return res.status(400).json({ error: 'Set a password first. Two-factor protects password sign-in.' });
+  const secret = newSecret();
+  await prisma.user.update({ where: { id: req.user.id }, data: { totpPendingSecret: secret } });
+  const settings = await getSettings();
+  const url = otpauthUrl(secret, req.user.email || req.user.displayName, settings.orgName || 'PawPass');
+  res.json({ secret, otpauthUrl: url, qr: await QRCode.toDataURL(url, { margin: 1, width: 220 }) });
+});
+
+authRouter.post('/2fa/enable', requireAdmin, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user.totpPendingSecret) return res.status(400).json({ error: 'Start setup again.' });
+  const step = verifyCode(user.totpPendingSecret, req.body?.code);
+  if (step == null) return res.status(400).json({ error: 'That code doesn\'t match. Check the app shows PawPass and try the newest code.' });
+  const codes = newRecoveryCodes();
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      totpSecret: user.totpPendingSecret, totpPendingSecret: null, totpEnabledAt: new Date(), totpLastStep: step,
+      totpRecoveryHashes: codes.map(hashRecoveryCode),
+    },
+  });
+  await audit(user.id, 'auth.2fa.enable', user.id, {});
+  // The only time the recovery codes are ever shown.
+  res.json({ user: publicUser(updated), recoveryCodes: codes });
+});
+
+/// Turning it off, or replacing the recovery codes, needs a current code
+/// (or a recovery code), not just the session.
+async function checkCurrentCode(user, code) {
+  if (verifyCode(user.totpSecret, code) != null) return true;
+  const hash = hashRecoveryCode(code);
+  return Boolean(code) && user.totpRecoveryHashes.includes(hash);
+}
+
+authRouter.post('/2fa/disable', requireAdmin, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user.totpEnabledAt) return res.status(400).json({ error: 'Two-factor is already off.' });
+  if (!(await checkCurrentCode(user, String(req.body?.code || '').trim()))) return res.status(400).json({ error: 'That code isn\'t right.' });
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { totpSecret: null, totpPendingSecret: null, totpEnabledAt: null, totpLastStep: null, totpRecoveryHashes: [] },
+  });
+  await audit(user.id, 'auth.2fa.disable', user.id, {});
+  res.json({ user: publicUser(updated) });
+});
+
+authRouter.post('/2fa/recovery-codes', requireAdmin, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user.totpEnabledAt) return res.status(400).json({ error: 'Turn on two-factor first.' });
+  if (!(await checkCurrentCode(user, String(req.body?.code || '').trim()))) return res.status(400).json({ error: 'That code isn\'t right.' });
+  const codes = newRecoveryCodes();
+  await prisma.user.update({ where: { id: user.id }, data: { totpRecoveryHashes: codes.map(hashRecoveryCode) } });
+  await audit(user.id, 'auth.2fa.recovery_regenerated', user.id, {});
+  res.json({ recoveryCodes: codes });
 });
 
 authRouter.post('/logout', async (req, res) => {
@@ -218,4 +321,6 @@ export const publicUser = (u) => ({
   legalName: u.legalName,
   fursonaName: u.fursonaName,
   hasPassword: Boolean(u.passwordHash),
+  hasTwoFactor: Boolean(u.totpEnabledAt),
+  recoveryCodesLeft: u.totpEnabledAt ? u.totpRecoveryHashes.length : null,
 });

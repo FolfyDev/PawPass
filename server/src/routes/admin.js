@@ -1646,6 +1646,7 @@ adminRouter.post('/users/:id/role', requireOwner, async (req, res) => {
 adminRouter.post('/users/:id/password', requireOwner, async (req, res) => {
   const { email, password } = req.body || {};
   if (!password || password.length < 10) return res.status(400).json({ error: 'Use at least 10 characters.' });
+
   const target = await prisma.user.findUnique({ where: { id: req.params.id } });
   if (!target) return res.status(404).json({ error: 'User not found.' });
   if (target.role === 'USER') return res.status(400).json({ error: 'End users sign in with an email code or Telegram, not a password. Promote them to staff first if they need one.' });
@@ -1654,6 +1655,20 @@ adminRouter.post('/users/:id/password', requireOwner, async (req, res) => {
     data: { email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12), tokenVersion: { increment: 1 } },
   });
   await audit(req.user.id, 'user.password', user.id, {});
+  res.json(publicUser(user));
+});
+
+/// Lost phone: an owner turns someone's two-factor off so they can sign in
+/// with just their password and set it up again. Signs them out everywhere.
+adminRouter.post('/users/:id/2fa/reset', requireOwner, async (req, res) => {
+  const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (!target.totpEnabledAt) return res.status(400).json({ error: 'Two-factor is already off for this account.' });
+  const user = await prisma.user.update({
+    where: { id: target.id },
+    data: { totpSecret: null, totpPendingSecret: null, totpEnabledAt: null, totpLastStep: null, totpRecoveryHashes: [], tokenVersion: { increment: 1 } },
+  });
+  await audit(req.user.id, 'user.2fa.reset', user.id, {});
   res.json(publicUser(user));
 });
 

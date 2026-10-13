@@ -19,6 +19,7 @@ No payments, no ticket pricing, no Stripe keys — every ticket is free.
 - **Hotels & room blocks** — partner hotels with per-night room blocks; attendees book through the hotel's link or request rooms here, staff track pickup against the contract's target and export rooming lists
 - **Analytics** — owner-only dashboard: signups over time, status/channel breakdowns
 - **Two staff roles** — Owner (full control) and Admin (day-of operations only)
+- **Two-factor sign-in** — optional authenticator-app codes for staff password sign-in, with one-time recovery codes
 - **Encrypted at rest** — names, emails, and custom-question answers are encrypted in the database
 - **Docker + Postgres** — `docker compose up` and you have a working instance
 

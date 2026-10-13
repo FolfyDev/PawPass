@@ -5,6 +5,8 @@ const FIELD_CONFIG = {
   user: [
     { field: 'email', indexField: 'emailIndex' },
     { field: 'legalName' },
+    { field: 'totpSecret' },
+    { field: 'totpPendingSecret' },
   ],
   registration: [
     { field: 'legalName', indexField: 'legalNameIndex' },

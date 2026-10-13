@@ -30,6 +30,10 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/auth/password` | Staff only — attendee rows have no hash |
 | POST | `/api/auth/link-telegram` | Attach Telegram to the signed-in account |
 | POST | `/api/auth/set-password` | Staff only |
+| POST | `/api/auth/password` | `{ email, password }`. With two-factor on, returns `{ twoFactor: true, challenge }` instead of a session |
+| POST | `/api/auth/password/2fa` | `{ challenge, code }` — a 6-digit code (each works once) or a recovery code. Challenges last 5 minutes |
+| POST | `/api/auth/2fa/setup` · `/api/auth/2fa/enable` | Staff with a password. Setup returns `{ secret, otpauthUrl, qr }`; enable takes `{ code }` and returns the recovery codes, once |
+| POST | `/api/auth/2fa/disable` · `/api/auth/2fa/recovery-codes` | `{ code }` — a current or recovery code |
 | GET | `/api/auth/me` · POST `/api/auth/logout` | |
 
 ## Attendee
@@ -101,6 +105,7 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | GET | `/api/admin/events/:id/arrivals` | `?since=` — each ticket's first entry today, numbered, for the lobby display |
 | GET | `/api/admin/users` | No `q` returns staff only |
 | POST | `/api/admin/users/:id/role` | **Owner only.** `{ role }` |
+| POST | `/api/admin/users/:id/2fa/reset` | **Owner only.** Turns off someone's two-factor (lost phone) and signs them out everywhere |
 | GET/POST | `/api/admin/campaigns` | |
 | POST | `/api/admin/campaigns/:id/send` | `{ dryRun }` to count first |
 | GET/PUT | `/api/admin/settings` | |

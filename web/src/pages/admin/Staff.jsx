@@ -20,6 +20,11 @@ export default function Staff() {
     return () => clearTimeout(t);
   }, [q]);
 
+  const resetTwoFactor = async (id) => {
+    try { await api.post(`/api/admin/users/${id}/2fa/reset`); setMsg(''); load(); }
+    catch (e) { setMsg(e.message); }
+  };
+
   const setRole = async (id, role) => {
     try { await api.post(`/api/admin/users/${id}/role`, { role }); setMsg(''); load(); setQ(''); }
     catch (e) { setMsg(e.message); }
@@ -33,13 +38,20 @@ export default function Staff() {
 
       <div className="card" style={{ padding: 0, marginBottom: 24, overflow: 'auto' }}>
         <table>
-          <thead><tr><th>Person</th><th>Telegram</th><th>Email</th><th>Role</th><th /></tr></thead>
+          <thead><tr><th>Person</th><th>Telegram</th><th>Email</th><th>Two-factor</th><th>Role</th><th /></tr></thead>
           <tbody>
             {staff.map((u) => (
               <tr key={u.id}>
                 <td><strong>{u.displayName}</strong></td>
                 <td className="small muted">{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId || '-'}</td>
                 <td className="small muted">{u.email || '-'}</td>
+                <td className="small">
+                  {u.hasTwoFactor ? <Pill tone="go">On</Pill> : u.hasPassword ? <span className="muted">Off</span> : <span className="muted">No password</span>}
+                  {isOwner && u.hasTwoFactor && u.id !== user.id && (
+                    <button className="btn sm ghost" style={{ marginLeft: 6 }} title="For a lost phone. Signs them out everywhere."
+                      onClick={() => confirm(`Turn off two-factor for ${u.displayName}? They'll sign in with just their password and should set it up again.`) && resetTwoFactor(u.id)}>Reset</button>
+                  )}
+                </td>
                 <td><Pill tone={u.role === 'OWNER' ? 'wait' : 'go'}>{u.role}</Pill></td>
                 <td style={{ textAlign: 'right' }}>
                   {isOwner && u.id !== user.id && (

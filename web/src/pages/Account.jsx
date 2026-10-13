@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
+import TwoFactorCard from '../components/TwoFactorCard.jsx';
 import { Field } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 
@@ -118,7 +119,7 @@ export default function Account() {
         </form>
       )}
 
-      {isStaff ? (
+      {isStaff && (
         <form className="card stack" onSubmit={savePassword}>
           <h2 style={{ margin: 0 }}>Password sign-in</h2>
           <p className="small muted">For staff sign-in.</p>
@@ -129,7 +130,9 @@ export default function Account() {
           {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
           <button className="btn primary">Save password</button>
         </form>
-      ) : (
+      )}
+      {isStaff && <TwoFactorCard user={user} onChange={refresh} />}
+      {!isStaff && (
         <form className="card stack" onSubmit={saveEmail}>
           <h2 style={{ margin: 0 }}>Email</h2>
           <p className="small muted">Sign-in codes are sent here.</p>

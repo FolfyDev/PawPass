@@ -34,6 +34,7 @@ const MARKERS = [
   ['0008_hotels', 'Hotel'],
   ['0009_checkin_days', 'CheckIn'],
   ['0010_incidents', 'Incident'],
+  ['0011_two_factor', 'User', 'totpSecret'],
 ];
 
 const prisma = new PrismaClient();
