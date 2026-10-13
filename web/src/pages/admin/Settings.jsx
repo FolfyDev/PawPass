@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
@@ -67,6 +68,119 @@ function RetentionCard() {
             </div>
           </div>
         ))}
+      {msg && <p className="small" style={{ margin: 0 }}>{msg}</p>}
+    </div>
+  );
+}
+
+/// Newer releases on GitHub (server/src/lib/updates.js). Upgrading is done on
+/// the host, so this shows the commands rather than running anything.
+function UpdatesCard() {
+  const [u, setU] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  useEffect(() => { api.get('/api/admin/updates').then(setU).catch(() => {}); }, []);
+  if (!u) return null;
+
+  const refresh = async () => {
+    setBusy(true); setMsg('');
+    try { setU(await api.get('/api/admin/updates?refresh=1')); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const choose = async (channel) => {
+    setMsg('');
+    try { setU(await api.put('/api/admin/updates/channel', { channel })); } catch (e) { setMsg(e.message); }
+  };
+  const t = u.target;
+  const commands = t && `git fetch --tags\ngit checkout ${t.tag}\ndocker compose up -d --build`;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(commands); setMsg('Commands copied.'); } catch { setMsg('Copy failed. Select the commands and copy them by hand.'); }
+  };
+
+  return (
+    <div className="card stack" style={{ marginBottom: 20 }}>
+      <div className="spread">
+        <h2 style={{ margin: 0 }}>Updates</h2>
+        <span className="small muted">This build: <span className="mono">{u.current}</span></span>
+      </div>
+      {!u.enabled ? (
+        <p className="small muted" style={{ margin: 0 }}>Release checks are off (<code className="mono">UPDATE_CHECK=false</code> in <code className="mono">.env</code>).</p>
+      ) : (
+        <>
+          <div className="row">
+            <div className="seg" role="group" aria-label="Release channel">
+              <button aria-current={u.channel === 'main' ? 'true' : undefined} onClick={() => choose('main')}>Stable</button>
+              <button aria-current={u.channel === 'dev' ? 'true' : undefined} onClick={() => choose('dev')}>Dev</button>
+            </div>
+            <span className="small muted">
+              {u.channel === 'dev' ? 'Stable releases and pre-releases from the Dev branch.' : 'Stable releases from main only.'}
+            </span>
+          </div>
+
+          {u.status === 'behind' && (
+            <div className="note" style={{ margin: 0 }}>
+              <div className="row" style={{ gap: 8 }}>
+                <strong>{t.name} is available</strong>
+                {t.prerelease && <span className="pill wait">Pre-release</span>}
+                <span className="small muted">{new Date(t.publishedAt).toLocaleDateString()}</span>
+              </div>
+              {u.between.length > 1 && <p className="small" style={{ margin: '6px 0 0' }}>{u.between.length} releases since this build: {u.between.map((r) => r.tag).join(', ')}.</p>}
+              {u.between.filter((r) => r.notes.trim()).map((r) => (
+                <details key={r.tag} style={{ marginTop: 8 }}>
+                  <summary className="small">What's new in {r.name}</summary>
+                  <div className="small" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{r.notes}</div>
+                </details>
+              ))}
+              <p className="small" style={{ margin: '10px 0 6px' }}>
+                To upgrade, take a backup first (<Link to="/admin/backup">Backup &amp; restore</Link>), then run this in the PawPass folder on the server.
+                Database changes apply on their own when the server restarts. Avoid doing it while check-in is busy.
+              </p>
+              <pre className="mono small" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{commands}</pre>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button className="btn sm" onClick={copy}>Copy commands</button>
+                <a className="btn sm ghost" href={t.url} target="_blank" rel="noreferrer">Release on GitHub ↗</a>
+              </div>
+            </div>
+          )}
+
+          {u.status === 'current' && (
+            <p className="small" style={{ margin: 0 }}><span className="pill go">Up to date</span> This is the newest {u.channel === 'dev' ? 'release' : 'stable release'}, {t.name}.</p>
+          )}
+
+          {u.status === 'ahead' && (
+            <div className="note" style={{ margin: 0 }}>
+              <div className="row" style={{ gap: 8 }}>
+                <span className="pill wait">Development build</span>
+                <span className="small">Newer than the latest {u.channel === 'dev' ? 'release' : 'stable release'}, {t.name}.</span>
+              </div>
+              {u.unreleasedMigrations == null ? (
+                <p className="small muted" style={{ margin: '8px 0 0' }}>Couldn't compare this build's database changes with {t.tag}.</p>
+              ) : u.unreleasedMigrations.length > 0 && (
+                <p className="small" style={{ margin: '8px 0 0' }}>
+                  <strong>Unreleased database changes:</strong>{' '}
+                  {u.unreleasedMigrations.length > 3
+                    ? `${u.unreleasedMigrations.length} (${u.unreleasedMigrations[0]} to ${u.unreleasedMigrations.at(-1)})`
+                    : u.unreleasedMigrations.join(', ')}. They aren't in any {u.channel === 'dev' ? '' : 'stable '}release yet,
+                  and they can't be undone, so this database can't go back to {t.tag}. Keep a backup from before this build if you might need to.
+                </p>
+              )}
+              <p className="small" style={{ margin: '8px 0 0' }}>
+                {u.channel === 'dev'
+                  ? <>Want to get back onto stable releases? Switch to <strong>Stable</strong> and you'll be told when one reaches or passes this build. There's no downgrade.{' '}
+                      <button className="link-btn" onClick={() => choose('main')}>Switch to stable</button></>
+                  : <>You'll be told here when a stable release reaches or passes this build. There's no downgrade.</>}
+              </p>
+            </div>
+          )}
+
+          {u.status === 'unknown' && !u.error && <p className="small muted" style={{ margin: 0 }}>No releases found on {u.repo}.</p>}
+          {u.error && <p className="small" style={{ margin: 0, color: 'var(--stop)' }}>Couldn't check for updates: {u.error}</p>}
+
+          <div className="row">
+            <button className="btn sm" disabled={busy} onClick={refresh}>{busy ? 'Checking…' : 'Check now'}</button>
+            {u.checkedAt && <span className="small muted">Checked {new Date(u.checkedAt).toLocaleString()} · <a href={`https://github.com/${u.repo}/releases`} target="_blank" rel="noreferrer">All releases ↗</a></span>}
+          </div>
+        </>
+      )}
       {msg && <p className="small" style={{ margin: 0 }}>{msg}</p>}
     </div>
   );
@@ -142,6 +256,7 @@ export default function Settings() {
       <p className="muted">Wording and branding. Server config lives in <code className="mono">.env</code>.</p>
       {msg && <p className="note good">{msg}</p>}
 
+      <UpdatesCard />
       <RetentionCard />
 
       <div className="card stack" style={{ marginBottom: 20 }}>

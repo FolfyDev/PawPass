@@ -265,6 +265,9 @@ model Event {
   vendorsOpen      Boolean        @default(false)
   vendorsCloseAt   DateTime?
   vendorInfo       String         @default("")
+  /// Optional sections switched off on the details page (lib/features.js):
+  /// hidden from the admin menu and the public site, data kept.
+  disabledFeatures String[]       @default([])
   /// When personal data (names, emails, answers...) was cleared from this
   /// event under the instance's data retention setting (lib/retention.js).
   dataPurgedAt     DateTime?

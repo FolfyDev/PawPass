@@ -20,6 +20,12 @@ export const env = {
     entityName: process.env.LEGAL_ENTITY_NAME || '',
     contactEmail: process.env.LEGAL_CONTACT_EMAIL || '',
   },
+  /// Release check on the settings page (lib/updates.js). UPDATE_CHECK=false
+  /// turns it off; UPDATE_REPO points it at a fork.
+  updates: {
+    enabled: process.env.UPDATE_CHECK !== 'false' && process.env.UPDATE_CHECK !== '0',
+    repo: /^[\w.-]+\/[\w.-]+$/.test(process.env.UPDATE_REPO || '') ? process.env.UPDATE_REPO : 'FolfyDev/PawPass',
+  },
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     username: process.env.TELEGRAM_BOT_USERNAME || '',

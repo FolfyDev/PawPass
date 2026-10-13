@@ -13,7 +13,10 @@ bootstrap().catch((e) => {
   startRetentionJob();
   const bot = createBot();
   if (bot) {
-    bot.start({ onStart: (i) => console.log(`Telegram bot @${i.username} running`) });
+
+    bot
+      .start({ onStart: (i) => console.log(`Telegram bot @${i.username} running`) })
+      .catch((err) => console.error('Telegram bot stopped:', err.description || err.message));
   } else {
     console.log('Telegram bot disabled (no TELEGRAM_BOT_TOKEN)');
   }

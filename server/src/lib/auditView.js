@@ -1,15 +1,7 @@
 import { prisma } from './db.js';
 import { PERMISSION_GROUPS } from './permissions.js';
 
-/// Turns raw AuditLog rows into what a person reads: a sentence for the
-/// action, the target's name (rows only store its id) with a link to it, and
-/// the meta as labelled values instead of JSON. Targets are looked up in one
-/// query per table for the whole page of rows; a deleted one falls back to
-/// whatever name the row's own meta kept.
 
-/// Which table an action's target id lives in, first match wins. Some
-/// actions point at one of two tables (hotel.update is used for hotels and
-/// for room requests), so a rule can list both.
 const TARGETS = [
   [/^(checkin\.offline_sync|tier\.sync|data\.purge|badge\.print_batch)$/, ['event']],
   [/^(registration|checkin)\.|^badge\.print$/, ['registration']],
@@ -50,7 +42,6 @@ const money = (cents, currency = 'usd') =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: (currency || 'usd').toUpperCase() }).format((cents || 0) / 100);
 const who = (r) => r.fursonaName || r.legalName || 'Attendee';
 
-/// How each table is fetched and named. `href` is an admin page path.
 const MODELS = {
   event: { query: {}, label: (e) => ({ label: e.title, href: `/admin/events/${e.id}` }) },
   registration: {
@@ -99,7 +90,6 @@ const MODELS = {
   staffGroup: { query: {}, label: (g) => ({ label: g.name, href: '/admin/staff' }) },
 };
 
-/// What each action says, as a sentence about the target.
 const VERBS = {
   'auth.2fa.enable': 'Turned on two-factor', 'auth.2fa.disable': 'Turned off two-factor',
   'auth.2fa.recovery_regenerated': 'Made new two-factor recovery codes', 'auth.2fa.recovery_used': 'Signed in with a recovery code',
@@ -134,7 +124,7 @@ const VERBS = {
   'registration.transfer': 'Transferred a ticket',
   'schedule.room.create': 'Added a schedule room', 'schedule.room.delete': 'Deleted a schedule room',
   'schedule.session.create': 'Added a session', 'schedule.session.update': 'Edited a session', 'schedule.session.delete': 'Deleted a session',
-  'settings.update': 'Changed instance settings', 'settings.retention': 'Changed data retention',
+  'settings.update': 'Changed instance settings', 'settings.retention': 'Changed data retention', 'settings.update_channel': 'Changed the update channel',
   'staff_group.create': 'Created a staff group', 'staff_group.update': 'Edited a staff group', 'staff_group.delete': 'Deleted a staff group',
   'submission.create': 'Submitted a panel', 'submission.withdraw': 'Withdrew a panel submission',
   'tier.create': 'Created a ticket type', 'tier.update': 'Edited a ticket type', 'tier.delete': 'Deleted a ticket type', 'tier.sync': 'Synced ticket types with Stripe',
@@ -150,7 +140,6 @@ const VERBS = {
   'voucher.create': 'Created a voucher', 'voucher.update': 'Edited a voucher', 'voucher.delete': 'Deleted a voucher',
 };
 
-/// Filter chips on the audit page: label and the action prefixes in each.
 export const AUDIT_AREAS = [
   ['attendees', 'Attendees and door', ['registration.', 'checkin.', 'badge.']],
   ['money', 'Money', ['payment.', 'donation.', 'merch.', 'merch_order.']],

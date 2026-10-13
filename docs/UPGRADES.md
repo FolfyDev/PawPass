@@ -191,3 +191,23 @@ Stripe dashboard; a full refund cancels the ticket here automatically.
 
 For local testing, `stripe listen --forward-to localhost:4000/api/stripe/webhook`
 prints a webhook secret to use instead.
+
+## Release checks and cutting a release
+
+Admin → **Settings** → **Updates** (owner only) compares this build with the
+releases at https://github.com/FolfyDev/PawPass/releases. **Stable** follows
+normal releases; **Dev** also takes releases marked *pre-release* (cut from
+the `Dev` branch). It never upgrades anything itself: it shows the commands
+for steps 2–3 above, pointed at the release's tag. `UPDATE_CHECK=false` in
+`.env` turns the check off; `UPDATE_REPO=owner/repo` points it at a fork.
+
+The build's version is `APP_VERSION` in
+[server/src/lib/version.js](../server/src/lib/version.js), in the tag format
+(`2026.1.0.0`). When cutting a release:
+
+1. Set `APP_VERSION` to the tag you're about to publish and commit it.
+2. Publish the release with that exact tag, from `main` for stable or from
+   `Dev` marked *pre-release*.
+3. On the branch, move `APP_VERSION` one step past the tag, so builds made
+   between releases show as **Development build** instead of looking like
+   the release.

@@ -12,6 +12,7 @@ import { requireAdmin, requirePerm, requireOwner, can, audit, linkTelegramIdenti
 import { EVENT_FIELD_PERMISSION, WITH_GROUPS, cleanPermissions, permissionCatalog } from '../lib/permissions.js';
 import { describeAuditRows, AUDIT_AREAS } from '../lib/auditView.js';
 import { getSettings, setSettings } from '../lib/settings.js';
+import { updateStatus, setChannel } from '../lib/updates.js';
 import { promoteFromWaitlist, createRegistration, RegistrationError, findOrCreateHeadlessUser, validateAnswers, heldByTier, HOLDS_SEAT } from '../lib/registrations.js';
 import { STAFF_PAYMENT_METHODS, recordInPersonPayment, PaymentError, toCents, refundPayment, decideCancelRequest, shapePayment, notifyPerson } from '../lib/payments.js';
 import { normalizeCode, MAX_DONATION_CENTS } from '../lib/pricing.js';
@@ -30,6 +31,7 @@ import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, A
 import { recordScan, undoLastScan, todayCounts, dailyAttendance, eventDays, hashSecret, dayIn, ScanError, DIRECTIONS } from '../lib/checkins.js';
 import { getRetention, setRetention, eventsDue, purgeEvent, purgeDue, RETENTION_CHOICES } from '../lib/retention.js';
 import { paidCents } from '../lib/vendors.js';
+import { cleanDisabledFeatures, applyDisabledFeatures } from '../lib/features.js';
 import { reserveRoom, cancelReservation, changeStay, blockTotals, hotelPayload, blockPayload, setNights, nightsBetween, HotelError, LIVE } from '../lib/hotels.js';
 
 export const adminRouter = Router();
@@ -59,7 +61,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo','vendorsOpen','vendorsCloseAt','vendorInfo'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit','scheduleEnabled','submissionsOpen','submissionsCloseAt','submissionInfo','vendorsOpen','vendorsCloseAt','vendorInfo','disabledFeatures'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -92,6 +94,7 @@ function eventPayload(body, timeZone) {
       if (!['AUTO_REFUND', 'REQUEST'].includes(body[k])) throw new RegistrationError('Choose how cancellations of paid tickets work.');
       data[k] = body[k];
     }
+    else if (k === 'disabledFeatures') data[k] = cleanDisabledFeatures(body[k]);
     else if (k === 'donationAddonLabel') data[k] = String(body[k] || '').trim() || 'Add a donation';
     else if (k === 'donationAddonPresets') {
       const presets = (Array.isArray(body[k]) ? body[k] : []).map(Number);
@@ -110,6 +113,7 @@ adminRouter.post('/events', requirePerm('events.edit'), async (req, res) => {
   try { data = eventPayload(req.body, timeZone); }
   catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
   if (!data.slug || !data.title) return res.status(400).json({ error: 'A title and URL slug are required.' });
+  applyDisabledFeatures(data, data.disabledFeatures || []);
   const event = await prisma.event.create({ data: { startsAt: new Date(), endsAt: new Date(), timezone: timeZone, ...data } });
   await audit(req.user.id, 'event.create', event.id, { title: event.title });
   res.json(event);
@@ -124,12 +128,14 @@ adminRouter.patch('/events/:id', async (req, res) => {
       return res.status(403).json({ error: "You don't have permission to do that. Ask an owner if you need it." });
     }
   }
-  const before = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true, title: true } });
+  const before = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true, title: true, disabledFeatures: true } });
   if (!before) return res.status(404).json({ error: 'Event not found.' });
   const timeZone = req.body.timezone || before.timezone || env.defaultTimezone;
   let data;
   try { data = eventPayload(req.body, timeZone); }
   catch (e) { if (e instanceof RegistrationError) return res.status(400).json({ error: e.message }); throw e; }
+  // A switched-off feature can't be made public from its own settings card.
+  applyDisabledFeatures(data, data.disabledFeatures || before.disabledFeatures);
   const event = await prisma.event.update({ where: { id: req.params.id }, data });
   // Stripe product names include the event title — keep them matching.
   if (event.title !== before.title) {
@@ -1879,6 +1885,19 @@ adminRouter.put('/settings', requireOwner, async (req, res) => {
   const s = await setSettings(req.body || {});
   await audit(req.user.id, 'settings.update', null, {});
   res.json(s);
+});
+
+/* ---------------- updates (owner only) ---------------- */
+
+/// ?refresh=1 asks GitHub again instead of using the last check (at most once a minute).
+adminRouter.get('/updates', requireOwner, async (req, res) => res.json(await updateStatus({ force: req.query.refresh === '1' })));
+
+adminRouter.put('/updates/channel', requireOwner, async (req, res) => {
+  try {
+    const channel = await setChannel(req.body?.channel);
+    await audit(req.user.id, 'settings.update_channel', null, { channel });
+    res.json(await updateStatus());
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 /// Newest first, a page at a time: `before` is the last row's id from the

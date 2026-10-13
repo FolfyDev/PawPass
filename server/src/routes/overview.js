@@ -4,6 +4,7 @@ import { requireAdmin, can } from '../lib/auth.js';
 import { todayCounts } from '../lib/checkins.js';
 import { blockTotals } from '../lib/hotels.js';
 import { HOLDS_TABLE } from '../lib/vendors.js';
+import { featureOn } from '../lib/features.js';
 
 /// One round trip for the event Overview page: headline numbers from every
 /// part of the event, plus a "needs attention" list of concrete to-dos,
@@ -13,6 +14,8 @@ overviewRouter.use(requireAdmin);
 
 const DAY = 86_400_000;
 const SETTLED = ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'];
+/// Which switchable feature (lib/features.js) an attention item's tab is in.
+const TAB_FEATURE = { hotels: 'hotels', rooms: 'hotels', volunteers: 'volunteers', submissions: 'schedule', schedule: 'schedule', vendors: 'vendors' };
 
 overviewRouter.get('/events/:id/overview', async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
@@ -61,7 +64,11 @@ overviewRouter.get('/events/:id/overview', async (req, res) => {
   // Each item: level ('bad' | 'warn' | 'info'), what, and where to fix it:
   // an event tab, or an absolute path for things outside the event.
   const attention = [];
-  const add = (level, text, tab) => attention.push({ level, text, tab });
+  const add = (level, text, tab) => {
+    const feature = TAB_FEATURE[tab.split('?')[0]];
+    if (!feature || featureOn(event, feature)) attention.push({ level, text, tab });
+  };
+  const on = (feature) => featureOn(event, feature);
   if (!event.published && phase !== 'ended') add('warn', 'The event isn\'t published, so nobody can register yet.', 'details');
   if (!tiersOnSale && phase !== 'ended') add('bad', 'No ticket type is on sale.', 'tickets');
   if (openIncidents.HIGH) add('bad', `${openIncidents.HIGH} high-severity incident report${openIncidents.HIGH === 1 ? ' is' : 's are'} open.`, '/admin/incidents');
@@ -95,12 +102,12 @@ overviewRouter.get('/events/:id/overview', async (req, res) => {
     door: today,
     moneyCents: payments.reduce((n, p) => n + p.amountCents - p.amountRefundedCents, 0),
     currency: payments[0]?.currency || 'usd',
-    volunteers: shifts.length ? { slots: shifts.reduce((n, s) => n + s.slots, 0), filled: shifts.reduce((n, s) => n + s.filledCount, 0), shifts: shifts.length } : null,
-    hotels: blocks.length ? { contracted, pickedUp, blocks: blocks.length } : null,
-    program: (sessions.length || submissions || unscheduled)
+    volunteers: on('volunteers') && shifts.length ? { slots: shifts.reduce((n, s) => n + s.slots, 0), filled: shifts.reduce((n, s) => n + s.filledCount, 0), shifts: shifts.length } : null,
+    hotels: on('hotels') && blocks.length ? { contracted, pickedUp, blocks: blocks.length } : null,
+    program: on('schedule') && (sessions.length || submissions || unscheduled)
       ? { published: sessions.find((s) => s.published)?._count._all || 0, drafts: sessions.find((s) => !s.published)?._count._all || 0, unscheduled, toReview: submissions }
       : null,
-    vendors: tableTypes.length || vendorGroups.length
+    vendors: on('vendors') && (tableTypes.length || vendorGroups.length)
       ? { tables: tableTypes.reduce((n, t) => n + t.quantity, 0), taken: tableTypes.reduce((n, t) => n + t._count.applications, 0), toReview: vendors.SUBMITTED || 0, feeDue: vendors.ACCEPTED || 0 }
       : null,
     incidents: { open: Object.values(openIncidents).reduce((n, c) => n + c, 0), high: openIncidents.HIGH || 0, scope: owner ? 'all' : 'yours' },

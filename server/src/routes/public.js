@@ -9,6 +9,7 @@ import { exportAccount, deleteAccount, AccountError } from '../lib/account.js';
 import { createRegistration, RegistrationError, registrationWindowState, findOrCreateHeadlessUser, cancelRegistration, HOLDS_SEAT, activeTiers, heldByTier } from '../lib/registrations.js';
 import { startCheckout, startOrderCheckout, syncSessionForUser, PaymentError, paymentSummary, selfCancel, notifyFriendTickets } from '../lib/payments.js';
 import { tierSaleState, checkDiscount, normalizeCode, registrationCharge, PricingError } from '../lib/pricing.js';
+import { featureOn } from '../lib/features.js';
 import { createMerchOrder, MerchOrderError, shapeOrder, itemPriceCents } from '../lib/merch.js';
 import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
 import { stripeEnabled } from '../lib/stripe.js';
@@ -103,6 +104,7 @@ publicRouter.get('/events/:slug', async (req, res) => {
     schedule: event.scheduleEnabled,
     submissionsOpen: event.submissionsOpen,
     vendorsOpen: event.vendorsOpen,
+    vouchers: featureOn(event, 'vouchers'),
     donationAddon: event.donationAddonEnabled && stripeEnabled()
       ? { label: event.donationAddonLabel, presets: event.donationAddonPresets }
       : null,
@@ -343,6 +345,7 @@ publicRouter.get('/events/:slug/rsvps', requireUser, async (req, res) => {
 publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || (!event.published && !isStaff(req.user))) return res.status(404).json({ error: 'Event not found.' });
+  if (!featureOn(event, 'merch')) return res.json([]);
   const items = await prisma.merchItem.findMany({ where: { eventId: event.id }, orderBy: { createdAt: 'asc' } });
   res.json(items.map((i) => ({
     id: i.id, name: i.name, price: i.price, priceCents: itemPriceCents(i),
@@ -355,6 +358,7 @@ publicRouter.get('/events/:slug/merch', requireUser, async (req, res) => {
 publicRouter.post('/events/:slug/merch/orders', requireUser, registerLimiter, async (req, res) => {
   const event = await prisma.event.findUnique({ where: { slug: req.params.slug } });
   if (!event || !event.published) return res.status(404).json({ error: 'Event not found.' });
+  if (!featureOn(event, 'merch')) return res.status(404).json({ error: 'This event has no merch.' });
   try {
     const order = await createMerchOrder({ event, user: req.user, items: req.body?.items });
     res.json({ ...shapeOrder(order), checkoutUrl: await startOrderCheckout(order.id) });

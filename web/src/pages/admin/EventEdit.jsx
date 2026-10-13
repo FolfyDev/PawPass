@@ -6,6 +6,7 @@ import { Field } from '../../components/Bits.jsx';
 import { forgetEventTitle } from '../../lib/eventTitle.js';
 import { localInZone } from '../../lib/tz.js';
 import { PageSkeleton } from '../../components/Skeleton.jsx';
+import { FEATURES } from '../../lib/features.js';
 
 export default function EventEdit() {
   const { id } = useParams();
@@ -44,6 +45,9 @@ export default function EventEdit() {
     await api.del(`/api/admin/events/${id}`);
     nav('/admin');
   };
+
+  const disabled = e.disabledFeatures || [];
+  const toggleFeature = (key, on) => set('disabledFeatures', on ? disabled.filter((k) => k !== key) : [...disabled, key]);
 
   const setField = (i, patch) => set('customFields', fields.map((f, n) => (n === i ? { ...f, ...patch } : f)));
 
@@ -133,6 +137,21 @@ export default function EventEdit() {
             </label>
           </div>
           <Field label="Accent colour"><input type="color" value={e.accentColor} onChange={(ev) => set('accentColor', ev.target.value)} style={{ width: 70, padding: 4 }} /></Field>
+        </section>
+
+        <section className="card stack">
+          <h2 style={{ margin: 0 }}>Features</h2>
+          <p className="small muted" style={{ margin: 0 }}>
+            Turn off what this event doesn't use. It leaves the admin menu and the public page; anything already set up is kept for when it's back on.
+          </p>
+          <div className="grid-2">
+            {FEATURES.map(([key, label, help]) => (
+              <label key={key} className="choice">
+                <input type="checkbox" checked={!disabled.includes(key)} onChange={(ev) => toggleFeature(key, ev.target.checked)} />
+                <span><strong>{label}</strong><br /><span className="small muted">{help}</span></span>
+              </label>
+            ))}
+          </div>
         </section>
 
         <section className="card stack">

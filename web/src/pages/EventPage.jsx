@@ -406,9 +406,11 @@ export default function EventPage() {
                 )
               )}
 
-              <button type="button" className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => openRegister({ voucher: true })}>
-                Have a voucher code?
-              </button>
+              {event.vouchers && (
+                <button type="button" className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => openRegister({ voucher: true })}>
+                  Have a voucher code?
+                </button>
+              )}
             </div>
           )}
         </section>
@@ -772,17 +774,17 @@ export default function EventPage() {
                   {discountMsg && <span className="small" style={{ color: 'var(--stop)' }}>{discountMsg}</span>}
                 </Field>
               )}
-              {(showVoucher || !event.state.open) && (
+              {event.vouchers && (showVoucher || !event.state.open) && (
                 <Field label="Voucher code" help="Grants free entry and a guaranteed spot">
                   <input value={form.voucherCode} onChange={(e) => setForm({ ...form, voucherCode: e.target.value })} />
                 </Field>
               )}
-              {((!showDiscount && !appliedDiscount && !usingVoucher && selectedTier?.priceCents > 0) || (!showVoucher && event.state.open)) && (
+              {((!showDiscount && !appliedDiscount && !usingVoucher && selectedTier?.priceCents > 0) || (event.vouchers && !showVoucher && event.state.open)) && (
                 <div className="row" style={{ gap: 18 }}>
                   {!showDiscount && !appliedDiscount && !usingVoucher && selectedTier?.priceCents > 0 && (
                     <button type="button" className="link-btn" onClick={() => setShowDiscount(true)}>Have a discount code?</button>
                   )}
-                  {!showVoucher && event.state.open && (
+                  {event.vouchers && !showVoucher && event.state.open && (
                     <button type="button" className="link-btn" onClick={() => setShowVoucher(true)}>Have a voucher code?</button>
                   )}
                 </div>

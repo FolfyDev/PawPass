@@ -6,6 +6,7 @@ import { blindIndex } from './crypto.js';
 import { formatInTimeZone } from './tz.js';
 import { env } from './env.js';
 import { stripeEnabled } from './stripe.js';
+import { featureOn } from './features.js';
 import { STAFF_PAYMENT_METHODS, abandonPendingPayments, releaseDiscount } from './payments.js';
 import { tierSaleState, checkDiscount, checkDonation, registrationCharge, normalizeCode, PricingError, STRIPE_MIN_CHARGE_CENTS } from './pricing.js';
 
@@ -115,6 +116,7 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
 
     let voucher = null;
   if (voucherCode) {
+    if (!featureOn(event, 'vouchers')) throw new RegistrationError("This event doesn't use voucher codes.");
     voucher = await prisma.voucherCode.findFirst({
       where: { eventId: event.id, code: voucherCode.trim().toUpperCase() },
     });

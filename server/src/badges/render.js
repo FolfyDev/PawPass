@@ -15,10 +15,6 @@ export function fillTokens(str, ctx) {
   });
 }
 
-/// The "special qualifier" is a ranked, multi-select custom field (type
-/// `qualifier`, at most one per event): an attendee can pick more than one
-/// option, and whichever pick sits first in the field's configured order
-/// (its priority rank) is the one that goes on the badge.
 function specialQualifier(reg, event) {
   const fields = Array.isArray(event?.customFields) ? event.customFields : [];
   const field = fields.find((f) => f.type === 'qualifier');
@@ -48,27 +44,13 @@ export function contextForRegistration(reg, event, settings, publicUrl) {
     ...Object.fromEntries(
       Object.entries(reg.answers || {}).map(([k, v]) => [`{{${k}}}`, v]),
     ),
-    // Computed after the answers spread so a custom field key can never
-    // clobber the resolved value (e.g. a qualifier field literally keyed
-    // "special_qualifier" would otherwise overwrite this with its raw array).
+   
     '{{special_qualifier}}': specialQualifier(reg, event),
-    // Scanned at check-in: the leading `reg.code` is what resolve() matches
-    // on (see badges.js/admin.js, which strip everything from the first "|"
-    // before looking a registration up), tier and name ride along after it
-    // purely so the payload is self-describing if read by hand or by
-    // something other than this app.
+
     '{{badge_payload}}': `${reg.code}|${tierName}|${fursonaName}`,
   };
 }
 
-/// Text fitting is measured, not estimated. The SVG rasteriser we render
-/// through does not honour textLength, and font metrics vary between the
-/// container's installed faces, so the only trustworthy width is the one that
-/// actually comes off the renderer.
-///
-/// Width scales linearly with font size, so one measurement at a reference
-/// size gives the ratio for every size. Results are cached per string, which
-/// matters when a batch print runs the same template hundreds of times.
 const REF = 100;
 const widthCache = new Map();
 
@@ -93,13 +75,6 @@ async function measureWidth(text, el) {
   return emWidth;
 }
 
-/// Returns the size to draw at and, in the pathological case, a shortened
-/// string. Long fursona names are the normal case on a label this narrow, not
-/// the edge case.
-///
-/// The linear model is slightly optimistic at small sizes because glyph
-/// hinting rounds advances up, so a 6% margin is held back. On a clear label
-/// stuck to a pre-printed badge there is no bleed area to absorb a mistake.
 const FIT_MARGIN = 0.94;
 const MIN_SCALE = 0.2;
 
@@ -116,18 +91,12 @@ async function fitText(text, el, px) {
   const scale = (box / natural) * FIT_MARGIN;
   if (scale >= MIN_SCALE) return { size: size * scale, text: str };
 
-  // Even at the smallest legible size it will not fit, so trim it. A truncated
-  // name still scans and still gets the person through the door; ink running
-  // off the die does not.
   const floorSize = size * MIN_SCALE;
   const keep = Math.max(1, Math.floor((str.length * box * FIT_MARGIN) / (emWidth * floorSize)));
   return { size: floorSize, text: `${str.slice(0, keep - 1).trimEnd()}\u2026` };
 }
 
-/// Both the `qr` and `aztec` element types render through a barcode library
-/// that hands back a self-contained `<svg viewBox="0 0 N N">...</svg>` square
-/// — this drops the wrapper and re-embeds the inner markup scaled to the
-/// element's box.
+
 function embedSquareSvg(svg, x, y, w) {
   const inner = svg.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
   const vb = /viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/.exec(svg);
