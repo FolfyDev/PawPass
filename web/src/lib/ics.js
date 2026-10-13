@@ -17,9 +17,6 @@ const vevent = ({ uid, title, venue, startsAt, endsAt, description }) => [
   'END:VEVENT',
 ];
 
-/// Builds an .ics file client-side and triggers a download — no server
-/// round-trip, since everything needed is already on the page. Several
-/// items (a personal schedule) go in one calendar file.
 export function downloadIcs(items, filename) {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PawPass//EN', ...items.flatMap(vevent), 'END:VCALENDAR'];
   const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
