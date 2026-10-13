@@ -93,8 +93,12 @@ Session is a `pawpass_session` httpOnly cookie. Send `credentials: 'include'`.
 | POST | `/api/admin/room-blocks/:id/reservations` | `{ who, checkIn, checkOut, guests, guestName, roommates, staffNote }` — `who` is a ticket code or `@telegram`. Skips the one-room limit and the cutoff, not inventory |
 | PATCH | `/api/admin/room-reservations/:id` | `{ confirmationNumber, checkIn, checkOut, guests, guestName, roommates, staffNote, status }` — a confirmation number confirms it and notifies them |
 | POST | `/api/admin/room-reservations/:id/cancel` | Releases the nights and notifies them |
-| POST | `/api/admin/checkin` | `{ value }` — a ticket URL, a secret, or a typed code |
-| POST | `/api/admin/checkin/:code/undo` | |
+| POST | `/api/admin/checkin` | `{ value, eventId, direction: ENTRY \| EXIT, force }` — `value` is a ticket URL, a secret, or a typed code. A refused scan is 409 with `code` (`already_inside`, `wrong_day`, `at_capacity`, `not_inside`, `cancelled`, `waitlist`, `unpaid`, `wrong_event`); `force` overrides the first three |
+| POST | `/api/admin/checkin/:code/undo` | Takes back the ticket's latest scan |
+| GET | `/api/admin/events/:id/checkin-manifest` | The offline scanner's copy: each ticket's status, day pass and scans; QR secrets only as SHA-256 hashes |
+| POST | `/api/admin/events/:id/checkin/sync` | `{ scans: [{ clientId, code, direction, at, force }] }` — offline scans, recorded at their own time and at most once per `clientId`; ones the rules now refuse are recorded and `flagged` |
+| GET | `/api/admin/events/:id/attendance` | `today` (`inside`, `entered`, `limit`) and arrivals per day |
+| GET | `/api/admin/events/:id/arrivals` | `?since=` — each ticket's first entry today, numbered, for the lobby display |
 | GET | `/api/admin/users` | No `q` returns staff only |
 | POST | `/api/admin/users/:id/role` | **Owner only.** `{ role }` |
 | GET/POST | `/api/admin/campaigns` | |

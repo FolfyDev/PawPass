@@ -410,3 +410,10 @@ tr.refunded-row td .mono { text-decoration: line-through; text-decoration-color:
 .pickup-meter.short > span { background: var(--signal); }
 /* The contract's pickup target, as a tick on the track. */
 .pickup-meter > i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); opacity: .55; }
+
+/* ---- scanner door status ---- */
+.door-status { display: grid; gap: 12px; }
+.door-stats { display: flex; flex-wrap: wrap; gap: 28px; }
+.door-stats > div { display: grid; gap: 2px; }
+.door-stats .eyebrow { margin: 0; }
+.door-stats strong { font: 600 26px/1.1 var(--display); }

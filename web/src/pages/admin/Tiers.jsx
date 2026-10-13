@@ -6,7 +6,7 @@ import { Field, Pill, fmtMoney } from '../../components/Bits.jsx';
 import EventTabs from '../../components/EventTabs.jsx';
 import { localInZone } from '../../lib/tz.js';
 
-const BLANK = { name: '', price: '', currency: 'usd', capacity: '', description: '', salesStartAt: '', salesEndAt: '' };
+const BLANK = { name: '', price: '', currency: 'usd', capacity: '', description: '', salesStartAt: '', salesEndAt: '', validDays: [] };
 const BLANK_CODE = { code: '', kind: 'percent', value: '', maxUses: '', tierIds: [], expiresAt: '' };
 
 // Edits keep price as a dollars string; the API takes either and stores cents.
@@ -17,7 +17,29 @@ const toDraft = (t, tz) => ({
   capacity: t.capacity ?? '',
   salesStartAt: localInZone(t.salesStartAt, tz),
   salesEndAt: localInZone(t.salesEndAt, tz),
+  validDays: t.validDays || [],
 });
+
+const dayChip = (day) => new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/// Which days a ticket gets in on. None picked = every day of the event.
+function DayPicker({ days, value, onChange }) {
+  if (days.length < 2) return null;
+  const toggle = (d) => onChange(value.includes(d) ? value.filter((x) => x !== d) : [...value, d].sort());
+  return (
+    <Field label="Valid days" help={value.length ? 'Only gets in on the days picked' : 'Every day. Pick days for a day pass'}>
+      <div className="row" style={{ gap: 6 }}>
+        {days.map((d) => (
+          <button key={d} type="button" className={`btn sm ${value.includes(d) ? 'primary' : 'ghost'}`} aria-pressed={value.includes(d)} onClick={() => toggle(d)}>{dayChip(d)}</button>
+        ))}
+        {/* A day picked earlier that's no longer inside the event's dates. */}
+        {value.filter((d) => !days.includes(d)).map((d) => (
+          <button key={d} type="button" className="btn sm danger" title="Outside the event's dates" onClick={() => toggle(d)}>{dayChip(d)} ×</button>
+        ))}
+      </div>
+    </Field>
+  );
+}
 
 const discountLabel = (d) => (d.percentOff ? `${d.percentOff}% off` : `${fmtMoney(d.amountOffCents)} off`);
 
@@ -184,6 +206,7 @@ export default function Tiers() {
                     <input type="datetime-local" value={d.salesEndAt} onChange={(e) => setDraft(t.id, { salesEndAt: e.target.value })} />
                   </Field>
                 </div>
+                <DayPicker days={data.days || []} value={d.validDays} onChange={(validDays) => setDraft(t.id, { validDays })} />
                 <div className="spread">
                   <div className="row">
                     <label className="row small"><input type="checkbox" checked={d.active} onChange={(e) => setDraft(t.id, { active: e.target.checked })} /> On sale</label>
@@ -222,6 +245,7 @@ export default function Tiers() {
               <Field label="Sale starts" help="Optional"><input type="datetime-local" value={adding.salesStartAt} onChange={(e) => setAdding({ ...adding, salesStartAt: e.target.value })} /></Field>
               <Field label="Sale ends" help="Optional"><input type="datetime-local" value={adding.salesEndAt} onChange={(e) => setAdding({ ...adding, salesEndAt: e.target.value })} /></Field>
             </div>
+            <DayPicker days={data.days || []} value={adding.validDays} onChange={(validDays) => setAdding({ ...adding, validDays })} />
             <button className="btn primary" style={{ justifySelf: 'start' }} disabled={busy === 'add' || !adding.name.trim()}>
               {busy === 'add' ? 'Adding…' : 'Add ticket type'}
             </button>

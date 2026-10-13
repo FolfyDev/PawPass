@@ -671,6 +671,7 @@ export function publicTier(t, held) {
     remaining, soldOut: remaining === 0,
     // A tier can be listed but not yet buyable (its sale hasn't opened).
     onSale: sale.buyable, salesStartAt: t.salesStartAt, salesEndAt: t.salesEndAt,
+    validDays: t.validDays || [],
   };
 }
 

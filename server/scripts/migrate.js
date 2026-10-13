@@ -32,6 +32,7 @@ const MARKERS = [
   ['0006_event_emails', 'Event', 'kbygEnabled'],
   ['0007_volunteers', 'VolunteerShift'],
   ['0008_hotels', 'Hotel'],
+  ['0009_checkin_days', 'CheckIn'],
 ];
 
 const prisma = new PrismaClient();

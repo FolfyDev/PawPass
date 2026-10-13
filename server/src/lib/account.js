@@ -13,7 +13,7 @@ export async function exportAccount(userId) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   const regs = await prisma.registration.findMany({
     where: { userId },
-    include: { event: true, payments: { orderBy: { createdAt: 'asc' } } },
+    include: { event: true, payments: { orderBy: { createdAt: 'asc' } }, checkIns: { orderBy: { at: 'asc' } } },
     orderBy: { createdAt: 'asc' },
   });
   const orders = await prisma.merchOrder.findMany({
@@ -46,6 +46,7 @@ export async function exportAccount(userId) {
       legalName: r.legalName, fursonaName: r.fursonaName, email: r.email, answers: r.answers, rsvp: r.rsvp,
       badgeTier: r.badgeTier, checkedInAt: r.checkedInAt, registeredAt: r.createdAt, termsAcceptedAt: r.tosAcceptedAt,
       payments: r.payments.map(pay),
+      doorScans: r.checkIns.map((c) => ({ day: c.day, direction: c.direction, at: c.at })),
     })),
     merchPreorders: orders.map((o) => ({
       event: o.event.title, status: o.status, pickedUpAt: o.pickedUpAt, orderedAt: o.createdAt,

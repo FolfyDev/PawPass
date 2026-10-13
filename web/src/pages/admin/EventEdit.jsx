@@ -87,6 +87,9 @@ export default function EventEdit() {
             <Field label="Capacity" help="Leave blank for unlimited">
               <input type="number" value={e.capacity ?? ''} onChange={(ev) => set('capacity', ev.target.value === '' ? null : Number(ev.target.value))} />
             </Field>
+            <Field label="Occupancy limit" help="Most people inside at once. Shown at the door; needs exit scans">
+              <input type="number" min="1" value={e.occupancyLimit ?? ''} onChange={(ev) => set('occupancyLimit', ev.target.value === '' ? null : Number(ev.target.value))} />
+            </Field>
             <Field label="Badge template">
               <select value={e.badgeTemplateId || ''} onChange={(ev) => set('badgeTemplateId', ev.target.value || null)}>
                 <option value="">Instance default</option>

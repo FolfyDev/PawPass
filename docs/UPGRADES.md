@@ -116,6 +116,7 @@ The schema is versioned in `server/prisma/migrations/`, one folder per change:
 | `0005_reminders_group_tickets` | Reminder timestamps and "buy for friends" (a ticket can point at the buyer's registration). Additive only. |
 | `0006_event_emails` | Automatic "know before you go" and thank-you messages per event. Additive only; both start off. |
 | `0007_volunteers` | Volunteer shifts and sign-ups. Additive only; sign-up stays hidden until turned on per event. Backups go to version 4. |
+| `0009_checkin_days` | Per-scan check-in log (entries/exits per day), day passes, and an occupancy limit. Existing check-ins become one entry scan each, so nobody's "arrived" status changes. Backups go to version 6. |
 | `0008_hotels` | Partner hotels, room blocks with per-night inventory, and room requests. Additive only; "Where to stay" stays hidden until turned on per event. Backups go to version 5. |
 
 v1 instances never had a migration history — they were kept in sync with

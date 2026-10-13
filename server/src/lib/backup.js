@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 /// Version of the data.json inside a backup zip. Bump it alongside any schema
 /// migration that changes the shape of a backed-up model, and add a step to
 /// UPGRADES below so older backups still restore.
-export const BACKUP_VERSION = 5;
+export const BACKUP_VERSION = 6;
 
 /// Each step converts a backup from version N to N + 1. They mirror the SQL
 /// migrations in prisma/migrations — a restore of an old backup should end up
@@ -70,6 +70,17 @@ const UPGRADES = {
   /// v4 -> v5 (0008_hotels): only new tables and defaulted columns.
   4(data) {
     return { hotel: [], roomBlock: [], roomBlockNight: [], roomReservation: [], ...data };
+  },
+  /// v5 -> v6 (0009_checkin_days): every check-in becomes one ENTRY scan on
+  /// the day it happened in the event's timezone, same as the migration.
+  5(data) {
+    const zones = Object.fromEntries((data.event || []).map((e) => [e.id, e.timezone || 'UTC']));
+    const checkIn = (data.registration || []).filter((r) => r.checkedInAt).map((r) => ({
+      id: `ci${r.id}`, registrationId: r.id, eventId: r.eventId,
+      day: new Date(r.checkedInAt).toLocaleDateString('en-CA', { timeZone: zones[r.eventId] || 'UTC' }),
+      direction: 'ENTRY', at: r.checkedInAt, scannedById: r.checkedInById || null, createdAt: r.checkedInAt,
+    }));
+    return { checkIn, ...data };
   },
 };
 

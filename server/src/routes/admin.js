@@ -25,6 +25,7 @@ import { ticketReceipt, orderReceipt } from '../lib/receipt.js';
 import { sendCampaign, sendRegistrationConfirmation, sendNoticeEmail } from '../lib/mailer.js';
 import { notifyWaitlistPromotion, notifyUser } from '../bot/index.js';
 import { signUpForShift, dropSignup, shiftPayload, shapeVolunteer, shiftHours, ATTENDANCE, VolunteerError } from '../lib/volunteers.js';
+import { recordScan, undoLastScan, todayCounts, dailyAttendance, eventDays, hashSecret, dayIn, ScanError, DIRECTIONS } from '../lib/checkins.js';
 import { reserveRoom, cancelReservation, changeStay, blockTotals, hotelPayload, blockPayload, setNights, nightsBetween, HotelError, LIVE } from '../lib/hotels.js';
 
 export const adminRouter = Router();
@@ -54,7 +55,7 @@ adminRouter.get('/events/:id', async (req, res) => {
   res.json(event);
 });
 
-const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo'];
+const EVENT_FIELDS = ['slug','title','tagline','description','venue','startsAt','endsAt','timezone','capacity','waitlistEnabled','opensAt','closesAt','published','tosTitle','tosBody','customFields','badgeTemplateId','accentColor','donationAddonEnabled','donationAddonLabel','donationAddonPresets','cancelPolicy','kbygEnabled','kbygDaysBefore','kbygMessage','thanksEnabled','thanksMessage','feedbackUrl','volunteersEnabled','volunteerInfo','hotelsEnabled','hotelInfo','occupancyLimit'];
 
 /// `timeZone` is the IANA zone the incoming startsAt/endsAt/opensAt/closesAt
 /// strings should be read as wall-clock time in — always the event's own
@@ -66,6 +67,11 @@ function eventPayload(body, timeZone) {
     if (body[k] === undefined) continue;
     if (['startsAt','endsAt','opensAt','closesAt'].includes(k)) data[k] = body[k] ? zonedTimeToUtc(body[k], timeZone) : null;
     else if (k === 'capacity') data[k] = body[k] === '' || body[k] === null ? null : Number(body[k]);
+    else if (k === 'occupancyLimit') {
+      const n = body[k] === '' || body[k] === null ? null : Number(body[k]);
+      if (n !== null && (!Number.isInteger(n) || n < 1)) throw new RegistrationError('The occupancy limit must be a whole number, or blank for none.');
+      data[k] = n;
+    }
     else if (k === 'donationAddonEnabled' || k === 'kbygEnabled' || k === 'thanksEnabled' || k === 'volunteersEnabled' || k === 'hotelsEnabled') data[k] = Boolean(body[k]);
     else if (k === 'kbygDaysBefore') {
       const days = Number(body[k]);
@@ -163,6 +169,11 @@ function tierPayload(body, existing, timeZone) {
   }
   if (body.sortOrder !== undefined) data.sortOrder = Number(body.sortOrder) || 0;
   if (body.active !== undefined) data.active = Boolean(body.active);
+  if (body.validDays !== undefined) {
+    const days = Array.isArray(body.validDays) ? body.validDays : [];
+    if (days.some((d) => !/^\d{4}-\d{2}-\d{2}$/.test(String(d)))) throw new RegistrationError('Valid days must be dates.');
+    data.validDays = [...new Set(days.map(String))].sort();
+  }
   return data;
 }
 
@@ -173,10 +184,12 @@ adminRouter.get('/events/:id/tiers', async (req, res) => {
   ]);
   const counts = await prisma.registration.groupBy({ by: ['ticketTierId'], where: { eventId: req.params.id }, _count: { _all: true } });
   const total = Object.fromEntries(counts.map((c) => [c.ticketTierId, c._count._all]));
-  const event = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true } });
+  const event = await prisma.event.findUnique({ where: { id: req.params.id }, select: { timezone: true, startsAt: true, endsAt: true } });
   res.json({
     stripe: stripeEnabled(),
     timezone: event?.timezone,
+    // For picking a day pass's valid days.
+    days: event ? eventDays(event) : [],
     tiers: tiers.map((t) => ({ ...shapeTier(t, held[t.id] || 0), registrationCount: total[t.id] || 0 })),
   });
 });
@@ -1420,50 +1433,146 @@ adminRouter.post('/room-reservations/:id/cancel', async (req, res) => {
 
 /* ---------------- check-in ---------------- */
 
-/// The scanner posts whatever the camera read: a full ticket URL, a bare
+/// Finds the ticket for whatever the scanner read: a full ticket URL, a bare
 /// secret, a typed badge code, or an Aztec badge payload (`CODE|TIER|NAME`,
-/// see `{{badge_payload}}` in render.js — only the leading code matters here).
-adminRouter.post('/checkin', async (req, res) => {
-  const raw = String(req.body.value || '').trim();
-  const primary = raw.split('|')[0].trim();
+/// see `{{badge_payload}}` in render.js — only the leading code matters).
+function scanLookup(value) {
+  const primary = String(value || '').trim().split('|')[0].trim();
   const secret = primary.split('/').pop();
-  const reg = await prisma.registration.findFirst({
-    where: { OR: [{ secret }, { code: primary.toUpperCase() }] },
-    include: { event: true, user: true, ...REG_INCLUDE },
-  });
+  return { OR: [{ secret }, { code: primary.toUpperCase() }] };
+}
+
+const scanReply = (reg, event, extra = {}) => ({
+  registration: { ...shapeReg(reg), id: reg.id, event: summarize(event), telegram: reg.user?.telegramUsername, validDays: reg.ticketTier?.validDays || [] },
+  ...extra,
+});
+
+/// One scan at the door. `direction` is ENTRY (default) or EXIT; `force`
+/// lets staff admit someone past the day-pass or already-inside rule.
+/// A rejected scan comes back as 409 with `code` and the registration, so
+/// the scanner can show who it was and offer an override.
+adminRouter.post('/checkin', async (req, res) => {
+  const reg = await prisma.registration.findFirst({ where: scanLookup(req.body.value), include: { event: true, user: true, ...REG_INCLUDE } });
   if (!reg) return res.status(404).json({ error: 'No ticket matches that code.' });
   if (req.body.eventId && reg.eventId !== req.body.eventId)
-    return res.status(409).json({ error: `That ticket is for ${reg.event.title}.`, registration: shapeReg(reg) });
-  if (reg.status === 'CANCELLED')
-    return res.status(409).json({ error: 'This ticket was cancelled.', registration: shapeReg(reg) });
-  if (reg.status === 'WAITLIST')
-    return res.status(409).json({ error: 'This registration is on the waitlist and has no confirmed spot.', registration: shapeReg(reg) });
-  if (reg.status === 'PENDING_PAYMENT')
-    return res.status(409).json({ error: 'This ticket\'s online payment never completed.', registration: shapeReg(reg) });
+    return res.status(409).json({ error: `That ticket is for ${reg.event.title}.`, code: 'wrong_event', ...scanReply(reg, reg.event) });
+  const direction = req.body.direction || 'ENTRY';
+  const firstVisit = !reg.checkedInAt;
+  try {
+    const { scan } = await recordScan({ registrationId: reg.id, direction, byId: req.user.id, force: Boolean(req.body.force) });
+    if (scan.overridden) await audit(req.user.id, 'checkin.override', reg.id, { day: scan.day });
+    const updated = await prisma.registration.findUnique({ where: { id: reg.id }, include: { user: true, ...REG_INCLUDE } });
+    res.json({ ok: true, ...scanReply(updated, reg.event, { scan, firstVisit: direction === 'ENTRY' && firstVisit, today: await todayCounts(reg.event) }) });
+  } catch (e) {
+    if (!(e instanceof ScanError)) throw e;
+    res.status(409).json({ error: e.message, code: e.code, ...scanReply(reg, reg.event, { today: await todayCounts(reg.event) }) });
+  }
+});
 
-  const already = reg.checkedInAt;
-  const updated = already
-    ? reg
-    : await prisma.registration.update({
-        where: { id: reg.id },
-        data: { checkedInAt: new Date(), checkedInById: req.user.id },
-        include: REG_INCLUDE,
-      });
+/// Takes back the ticket's most recent scan (entry or exit).
+adminRouter.post('/checkin/:code/undo', async (req, res) => {
+  const reg = await prisma.registration.findUnique({ where: { code: req.params.code } });
+  if (!reg) return res.status(404).json({ error: 'Ticket not found.' });
+  const undone = await undoLastScan(reg.id);
+  if (!undone) return res.status(400).json({ error: 'This ticket has no scans to undo.' });
+  await audit(req.user.id, 'checkin.undo', reg.id, { direction: undone.direction, day: undone.day });
+  res.json(shapeReg(await prisma.registration.findUnique({ where: { id: reg.id }, include: REG_INCLUDE })));
+});
 
+/// Everything a door scanner needs to keep working with no connection:
+/// each ticket's status, day pass, and this event's scans. QR secrets are
+/// only sent hashed, so a lost door laptop doesn't leak working tickets.
+adminRouter.get('/events/:id/checkin-manifest', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const [regs, scans] = await Promise.all([
+    prisma.registration.findMany({ where: { eventId: event.id }, include: { ticketTier: { select: { validDays: true } } } }),
+    prisma.checkIn.findMany({ where: { eventId: event.id }, select: { registrationId: true, day: true, direction: true, at: true }, orderBy: { at: 'asc' } }),
+  ]);
+  const scansBy = {};
+  for (const s of scans) (scansBy[s.registrationId] ||= []).push({ day: s.day, direction: s.direction, at: s.at });
   res.json({
-    ok: true,
-    already: Boolean(already),
-    registration: { ...shapeReg(updated), id: reg.id, event: summarize(reg.event), telegram: reg.user.telegramUsername },
+    eventId: event.id, timezone: event.timezone, days: eventDays(event), occupancyLimit: event.occupancyLimit,
+    generatedAt: new Date(),
+    tickets: regs.map((r) => ({
+      code: r.code, secretHash: hashSecret(r.secret), name: r.fursonaName || r.legalName, legalName: r.legalName,
+      status: r.status, tierName: r.tierName, badgeTier: r.badgeTier, validDays: r.ticketTier?.validDays || [],
+      checkedInAt: r.checkedInAt, scans: scansBy[r.id] || [],
+    })),
   });
 });
 
-adminRouter.post('/checkin/:code/undo', async (req, res) => {
-  const reg = await prisma.registration.update({
-    where: { code: req.params.code },
-    data: { checkedInAt: null, checkedInById: null },
+/// Scans a door scanner made while offline: `{ scans: [{ clientId, code,
+/// direction, at, force }] }`. Each is recorded at the time it happened and
+/// at most once (by clientId), even if this request is retried. Scans the
+/// rules would now refuse are still recorded — the person is already
+/// through the door — and come back flagged for staff to follow up.
+adminRouter.post('/events/:id/checkin/sync', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const scans = Array.isArray(req.body?.scans) ? req.body.scans.slice(0, 2000) : [];
+  const results = [];
+  for (const s of scans) {
+    const clientId = String(s.clientId || '').slice(0, 64);
+    const at = new Date(s.at);
+    if (!clientId || Number.isNaN(at.getTime()) || at > new Date(Date.now() + 5 * 60_000)) {
+      results.push({ clientId, ok: false, error: 'Bad scan record.' });
+      continue;
+    }
+    const reg = await prisma.registration.findFirst({ where: { code: String(s.code || '').toUpperCase(), eventId: event.id } });
+    if (!reg) { results.push({ clientId, ok: false, error: 'No ticket matches that code.' }); continue; }
+    try {
+      const { scan, duplicate, problem } = await recordScan({
+        registrationId: reg.id, direction: DIRECTIONS.includes(s.direction) ? s.direction : 'ENTRY', at,
+        byId: req.user.id, clientId, offline: true, force: Boolean(s.force),
+      });
+      if (!duplicate && problem) await audit(req.user.id, 'checkin.offline_flagged', reg.id, { code: reg.code, problem: problem.code, day: scan.day });
+      results.push({ clientId, ok: true, duplicate, flagged: problem ? `${reg.code}: ${problem.message}` : null });
+    } catch (e) {
+      if (!(e instanceof ScanError)) throw e;
+      results.push({ clientId, ok: false, error: e.message });
+    }
+  }
+  const synced = results.filter((r) => r.ok && !r.duplicate).length;
+  if (synced) await audit(req.user.id, 'checkin.offline_sync', event.id, { synced });
+  res.json({ results, today: await todayCounts(event) });
+});
+
+/// For the lobby display: each ticket's first entry today after `since`,
+/// numbered in the order people arrived today. A same-day re-entry isn't a
+/// new arrival; tomorrow, everyone is welcomed again.
+adminRouter.get('/events/:id/arrivals', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const since = req.query.since ? new Date(String(req.query.since)) : new Date(0);
+  const day = dayIn(new Date(), event.timezone);
+  const firsts = await prisma.$queryRaw`
+    SELECT "registrationId", "at", row_number() OVER (ORDER BY "at")::int AS number
+    FROM (
+      SELECT DISTINCT ON ("registrationId") "registrationId", "at"
+      FROM "CheckIn"
+      WHERE "eventId" = ${event.id} AND "day" = ${day} AND "direction" = 'ENTRY'
+      ORDER BY "registrationId", "at"
+    ) f`;
+  const fresh = firsts.filter((f) => !Number.isNaN(since.getTime()) && f.at > since).sort((a, b) => a.number - b.number);
+  const regs = fresh.length
+    ? await prisma.registration.findMany({ where: { id: { in: fresh.map((f) => f.registrationId) } }, select: { id: true, fursonaName: true, legalName: true } })
+    : [];
+  res.json({
+    today: await todayCounts(event),
+    arrivals: fresh.map((f) => {
+      const r = regs.find((x) => x.id === f.registrationId);
+      return { name: r?.fursonaName || r?.legalName || '', at: f.at, number: f.number };
+    }),
   });
-  await audit(req.user.id, 'checkin.undo', reg.id, {});
-  res.json(shapeReg(reg));
+});
+
+/// Who's inside now and today's arrivals, plus arrivals for every day.
+adminRouter.get('/events/:id/attendance', async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.id } });
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const [today, days] = await Promise.all([todayCounts(event), dailyAttendance(event)]);
+  res.json({ today, days, eventDays: eventDays(event), timezone: event.timezone });
 });
 
 adminRouter.get('/bans', async (_req, res) => {
@@ -1669,7 +1778,7 @@ adminRouter.get('/analytics', requireOwner, async (req, res) => {
 
 // Parent-before-child order — this is also the order rows get recreated in on
 // restore. Deletion (on restore, before recreating) runs the reverse of this.
-const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
+const BACKUP_MODELS = ['user', 'ban', 'badgeTemplate', 'setting', 'event', 'ticketTier', 'discountCode', 'voucherCode', 'merchItem', 'registration', 'checkIn', 'volunteerShift', 'volunteerSignup', 'hotel', 'roomBlock', 'roomBlockNight', 'roomReservation', 'merchOrder', 'merchOrderItem', 'payment', 'sale', 'donation', 'emailCampaign', 'auditLog'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (key, value) => (typeof value === 'string' && ISO_DATE.test(value) ? new Date(value) : value);
 

@@ -35,6 +35,7 @@ const CLEAR_ORDER = [
   'donation',
   'stripeEvent',
   'payment',
+  'checkIn',
   'volunteerSignup',
   'roomReservation',
   'roomBlockNight',

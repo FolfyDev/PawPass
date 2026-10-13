@@ -41,7 +41,11 @@ function AnswerInput({ f, answers, setAnswer }) {
 const tierPrice = (t) => (t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free');
 const shortDate = (d, tz) => new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: tz || undefined });
 const buyable = (t) => t.onSale !== false && !t.soldOut;
+const passDays = (t) => (t.validDays?.length
+  ? `${t.validDays.map((d) => new Date(`${d}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'long', timeZone: 'UTC' })).join(' & ')} only`
+  : '');
 const tierAvailability = (t, payOnline, tz) => [
+  passDays(t),
   t.onSale === false && t.salesStartAt ? `On sale ${shortDate(t.salesStartAt, tz)}` : '',
   t.onSale !== false && t.soldOut ? 'Sold out' : t.onSale !== false && t.remaining != null ? `${t.remaining} left` : '',
   t.onSale !== false && t.salesEndAt ? `Until ${shortDate(t.salesEndAt, tz)}` : '',

@@ -65,6 +65,11 @@ enum VolunteerAttendance {
   NO_SHOW
 }
 
+enum ScanDirection {
+  ENTRY
+  EXIT
+}
+
 /// How rooms in a hotel block get booked.
 enum RoomBlockMode {
   /// Attendees book straight with the hotel through its link or group code.
@@ -128,6 +133,7 @@ model User {
   volunteerSignups VolunteerSignup[]
   volunteerMarks   VolunteerSignup[] @relation("VolunteerAttendanceMarkedBy")
   roomReservations RoomReservation[]
+  scansMade        CheckIn[]      @relation("ScansMade")
 }
 
 model Event {
@@ -179,6 +185,9 @@ model Event {
   hotelsEnabled    Boolean        @default(false)
   /// Shown above the hotel list, e.g. "Book by Sept 1 to get the rate".
   hotelInfo        String         @default("")
+  /// Most people allowed inside at once (fire code). Only tracked
+  /// meaningfully when the door also scans people out. Null = no limit shown.
+  occupancyLimit   Int?
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
@@ -193,6 +202,7 @@ model Event {
   donations        Donation[]
   volunteerShifts  VolunteerShift[]
   hotels           Hotel[]
+  checkIns         CheckIn[]
 }
 
 model Registration {
@@ -267,12 +277,16 @@ model Registration {
 
   tosAcceptedAt DateTime?
   tosVersion    String?
+  /// First time this ticket entered the event (badge pickup). Every scan,
+  /// on every day, is in CheckIn; this stays as the "has arrived" flag the
+  /// rest of the app (emails, badges, transfers) relies on.
   checkedInAt   DateTime?
   checkedInById String?
   checkedInBy   User?              @relation("CheckedInBy", fields: [checkedInById], references: [id])
   badgePrintedAt DateTime?
   printCount    Int                @default(0)
   createdAt     DateTime           @default(now())
+  checkIns      CheckIn[]
 
   @@unique([eventId, userId])
   @@index([eventId, status])
@@ -301,6 +315,9 @@ model TicketTier {
   /// Optional sale window. Outside it the tier shows but can't be bought.
   salesStartAt    DateTime?
   salesEndAt      DateTime?
+  /// Days this ticket gets in on, as YYYY-MM-DD in the event's timezone,
+  /// e.g. a Saturday-only pass. Empty = every day of the event.
+  validDays       String[]       @default([])
   /// Inactive tiers are hidden from sale but kept, so existing registrations
   /// still point at them. Tiers with registrations can't be deleted.
   active          Boolean        @default(true)
@@ -558,6 +575,36 @@ model VolunteerSignup {
 
   @@unique([shiftId, userId])
   @@index([userId])
+}
+
+/// One scan at the door: an entry or exit on a given day. A ticket gets in
+/// once per day (again after an exit scan); occupancy is everyone whose
+/// latest scan today was an entry.
+model CheckIn {
+  id             String        @id @default(cuid())
+  registrationId String
+  registration   Registration  @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  eventId        String
+  event          Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  /// YYYY-MM-DD in the event's timezone, same convention as hotel nights.
+  day            String
+  direction      ScanDirection @default(ENTRY)
+  /// When it happened at the door, which for an offline scan is earlier
+  /// than when the server heard about it (createdAt).
+  at             DateTime      @default(now())
+  scannedById    String?
+  scannedBy      User?         @relation("ScansMade", fields: [scannedById], references: [id], onDelete: SetNull)
+  /// Made on a scanner with no connection and synced later.
+  offline        Boolean       @default(false)
+  /// The scanner's own ID for the scan, so a sync that's retried after a
+  /// dropped response can't record it twice.
+  clientId       String?       @unique
+  /// Staff let them in past a rule (day pass, already inside).
+  overridden     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+
+  @@index([eventId, day])
+  @@index([registrationId, at])
 }
 
 /// A partner hotel for an event. The rooms themselves live in its blocks.
