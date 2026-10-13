@@ -3,30 +3,19 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field } from '../../components/Bits.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
-
-// Renders a stored UTC instant as the wall-clock string an
-// <input type="datetime-local"> expects — in the event's own timezone, not
-// the browser's. Editing and re-saving that string goes back through the
-// same zone server-side (see zonedTimeToUtc in server/src/lib/tz.js), so the
-// round trip is consistent regardless of what timezone the admin is sitting in.
-const DT_PARTS = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false };
-const localInZone = (d, tz) => {
-  if (!d) return '';
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { ...DT_PARTS, timeZone: tz || 'UTC' }).formatToParts(new Date(d)).map((p) => [p.type, p.value]),
-  );
-  const hour = parts.hour === '24' ? '00' : parts.hour;
-  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
-};
+import { forgetEventTitle } from '../../lib/eventTitle.js';
+import { localInZone } from '../../lib/tz.js';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
+import { FEATURES } from '../../lib/features.js';
 
 export default function EventEdit() {
   const { id } = useParams();
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canEdit = can('events.edit');
   const nav = useNavigate();
   const [e, setE] = useState(null);
   const [templates, setTemplates] = useState([]);
+  const [tiers, setTiers] = useState([]);
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
 
@@ -39,14 +28,15 @@ export default function EventEdit() {
       closesAt: localInZone(ev.closesAt, ev.timezone),
     }));
     api.get('/api/badges/templates').then(setTemplates);
+    api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers)).catch(() => setTiers([]));
   }, [id]);
 
-  if (!e) return <p className="muted">Loading…</p>;
+  if (!e) return <PageSkeleton />;
   const set = (k, v) => setE({ ...e, [k]: v });
   const fields = e.customFields || [];
 
   const save = async () => {
-    try { await api.patch(`/api/admin/events/${id}`, e); setMsg('Saved.'); setMsgOk(true); setTimeout(() => setMsg(''), 2000); }
+    try { await api.patch(`/api/admin/events/${id}`, e); forgetEventTitle(id); setMsg('Saved.'); setMsgOk(true); setTimeout(() => setMsg(''), 2000); }
     catch (err) { setMsg(err.message); setMsgOk(false); }
   };
 
@@ -56,7 +46,22 @@ export default function EventEdit() {
     nav('/admin');
   };
 
+  const disabled = e.disabledFeatures || [];
+  const toggleFeature = (key, on) => set('disabledFeatures', on ? disabled.filter((k) => k !== key) : [...disabled, key]);
+
   const setField = (i, patch) => set('customFields', fields.map((f, n) => (n === i ? { ...f, ...patch } : f)));
+
+  // Retention by hand for one finished event: same clean-up as the
+  // automatic setting, confirmed by typing the title.
+  const clearData = async () => {
+    const typed = prompt(`This clears names, emails, and question answers from every registration for ${e.title}, plus hotel guests and volunteer notes. Payments and counts stay. It can't be undone.\n\nType the event's title to confirm.`);
+    if (typed == null) return;
+    try {
+      const r = await api.post(`/api/admin/events/${id}/purge`, { confirm: typed });
+      setE({ ...e, dataPurgedAt: r.dataPurgedAt });
+      setMsg(`Cleared ${r.registrations} registration${r.registrations === 1 ? '' : 's'}.`); setMsgOk(true);
+    } catch (err) { setMsg(err.message); setMsgOk(false); }
+  };
 
   return (
     <>
@@ -69,13 +74,17 @@ export default function EventEdit() {
           <a className="btn" href={`/e/${e.slug}`} target="_blank" rel="noreferrer">
             {e.published ? 'View public page' : 'Preview (unpublished)'}
           </a>
-          {isOwner && <button className="btn primary" onClick={save}>Save changes</button>}
+          {canEdit && <button className="btn primary" onClick={save}>Save changes</button>}
         </div>
       </div>
-      <EventTabs id={id} />
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
+      {e.dataPurgedAt && (
+        <p className="note" style={{ marginBottom: 16 }}>
+          Personal data was cleared from this event on {new Date(e.dataPurgedAt).toLocaleDateString()}. Names, emails and answers show as "Removed".
+        </p>
+      )}
 
-      <fieldset disabled={!isOwner} style={{ border: 0, margin: 0, padding: 0 }}>
+      <fieldset disabled={!canEdit} style={{ border: 0, margin: 0, padding: 0 }}>
       <div className="stack">
         <section className="card stack">
           <h2 style={{ margin: 0 }}>Basics</h2>
@@ -99,6 +108,9 @@ export default function EventEdit() {
             <Field label="Capacity" help="Leave blank for unlimited">
               <input type="number" value={e.capacity ?? ''} onChange={(ev) => set('capacity', ev.target.value === '' ? null : Number(ev.target.value))} />
             </Field>
+            <Field label="Occupancy limit" help="Most people inside at once. Shown at the door; needs exit scans">
+              <input type="number" min="1" value={e.occupancyLimit ?? ''} onChange={(ev) => set('occupancyLimit', ev.target.value === '' ? null : Number(ev.target.value))} />
+            </Field>
             <Field label="Badge template">
               <select value={e.badgeTemplateId || ''} onChange={(ev) => set('badgeTemplateId', ev.target.value || null)}>
                 <option value="">Instance default</option>
@@ -109,33 +121,76 @@ export default function EventEdit() {
             <Field label="Closes"><input type="datetime-local" value={e.closesAt} onChange={(ev) => set('closesAt', ev.target.value || null)} /></Field>
           </div>
           <div className="row">
-            <label className="row small"><input type="checkbox" checked={e.published} onChange={(ev) => set('published', ev.target.checked)} /> Published — visible and open for sign-ups</label>
+            <label className="row small"><input type="checkbox" checked={e.published} onChange={(ev) => set('published', ev.target.checked)} /> Published</label>
             <label className="row small"><input type="checkbox" checked={e.waitlistEnabled} onChange={(ev) => set('waitlistEnabled', ev.target.checked)} /> Waitlist once full</label>
+          </div>
+          {/* A div, not <Field>: Field is a <label>, and labels can't nest. */}
+          <div className="field" role="radiogroup" aria-label="Cancelling a paid ticket">
+            <span>Cancelling a paid ticket</span>
+            <label className="choice">
+              <input type="radio" name="cancelPolicy" checked={e.cancelPolicy === 'AUTO_REFUND'} onChange={() => set('cancelPolicy', 'AUTO_REFUND')} />
+              <span><strong>Self-cancel and auto-refund</strong></span>
+            </label>
+            <label className="choice">
+              <input type="radio" name="cancelPolicy" checked={e.cancelPolicy !== 'AUTO_REFUND'} onChange={() => set('cancelPolicy', 'REQUEST')} />
+              <span><strong>Request a cancellation</strong> (staff with the refunds permission approve it)</span>
+            </label>
           </div>
           <Field label="Accent colour"><input type="color" value={e.accentColor} onChange={(ev) => set('accentColor', ev.target.value)} style={{ width: 70, padding: 4 }} /></Field>
         </section>
 
         <section className="card stack">
-          <h2 style={{ margin: 0 }}>Tiers</h2>
-          <p className="small muted">Everyone can register free. Add a PayPal link to also offer a donation tier — registration completes immediately and a new tab opens to PayPal, with no confirmation step.</p>
+          <h2 style={{ margin: 0 }}>Features</h2>
+          <p className="small muted" style={{ margin: 0 }}>
+            Turn off what this event doesn't use. It leaves the admin menu and the public page; anything already set up is kept for when it's back on.
+          </p>
           <div className="grid-2">
-            <Field label="Donation tier name"><input value={e.donationTierName || ''} onChange={(ev) => set('donationTierName', ev.target.value)} /></Field>
-            <Field label="PayPal link" help="Leave blank to offer free registration only">
-              <input type="url" placeholder="https://paypal.me/…" value={e.donationPaypalLink || ''} onChange={(ev) => set('donationPaypalLink', ev.target.value || null)} />
-            </Field>
+            {FEATURES.map(([key, label, help]) => (
+              <label key={key} className="choice">
+                <input type="checkbox" checked={!disabled.includes(key)} onChange={(ev) => toggleFeature(key, ev.target.checked)} />
+                <span><strong>{label}</strong><br /><span className="small muted">{help}</span></span>
+              </label>
+            ))}
           </div>
+        </section>
+
+        <section className="card stack">
+          <h2 style={{ margin: 0 }}>Automatic messages</h2>
+          <p className="small muted" style={{ margin: 0 }}>Sent by email and Telegram. Tokens: {'{{fursona_name}} {{code}} {{event_title}}'}</p>
           <label className="row small">
-            <input type="checkbox" checked={!!e.donationRequired} onChange={(ev) => set('donationRequired', ev.target.checked)} />
-            Require payment for this event (hides the free option — for a paid add-on like an after-party)
+            <input type="checkbox" checked={!!e.kbygEnabled} onChange={(ev) => set('kbygEnabled', ev.target.checked)} />
+            Know before you go
           </label>
-          {e.donationRequired && !e.donationPaypalLink && (
-            <p className="note bad" style={{ margin: 0 }}>Add a PayPal link above, or registration will complete with nowhere to send people to pay.</p>
+          {e.kbygEnabled && (
+            <>
+              <Field label="Days before">
+                <input type="number" min="1" max="30" value={e.kbygDaysBefore ?? 3} style={{ width: 90 }}
+                  onChange={(ev) => set('kbygDaysBefore', Number(ev.target.value))} />
+              </Field>
+              <Field label="Message" help="Parking, what to bring, schedule. Date, venue and badge code are added.">
+                <textarea value={e.kbygMessage || ''} onChange={(ev) => set('kbygMessage', ev.target.value)} />
+              </Field>
+            </>
+          )}
+          <label className="row small">
+            <input type="checkbox" checked={!!e.thanksEnabled} onChange={(ev) => set('thanksEnabled', ev.target.checked)} />
+            Thank-you after the event
+          </label>
+          {e.thanksEnabled && (
+            <>
+              <Field label="Message" help="Blank = a short thanks">
+                <textarea value={e.thanksMessage || ''} onChange={(ev) => set('thanksMessage', ev.target.value)} />
+              </Field>
+              <Field label="Feedback link" help="Optional">
+                <input type="url" placeholder="https://" value={e.feedbackUrl || ''} onChange={(ev) => set('feedbackUrl', ev.target.value)} />
+              </Field>
+            </>
           )}
         </section>
 
         <section className="card stack">
           <h2 style={{ margin: 0 }}>Terms</h2>
-          <p className="small muted">Shown in a sheet on the web form before anyone can submit, and sent by the bot before <code className="mono">/accept</code>.</p>
+          <p className="small muted">Shown before anyone registers.</p>
           <Field label="Heading"><input value={e.tosTitle} onChange={(ev) => set('tosTitle', ev.target.value)} /></Field>
           <Field label="Body"><textarea style={{ minHeight: 220 }} value={e.tosBody} onChange={(ev) => set('tosBody', ev.target.value)} /></Field>
         </section>
@@ -145,7 +200,7 @@ export default function EventEdit() {
             <h2 style={{ margin: 0 }}>Extra questions</h2>
             <button className="btn sm" onClick={() => set('customFields', [...fields, { key: `q${fields.length + 1}`, label: 'New question', type: 'text', required: false }])}>Add question</button>
           </div>
-          <p className="small muted">These appear on the web form and the bot asks them in order.</p>
+          <p className="small muted">Asked on the web form and by the bot.</p>
           {fields.map((f, i) => (
             <div key={i} className="card" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
               <div className="grid-2">
@@ -158,14 +213,27 @@ export default function EventEdit() {
                   </select>
                 </Field>
                 <Field label="Options" help={f.type === 'qualifier'
-                  ? 'Comma separated, in priority order — the highest one an attendee picks is what prints on the badge'
+                  ? 'Comma separated, highest priority first'
                   : 'Comma separated, for select'}>
                   <input value={(f.options || []).join(', ')} onChange={(ev) => setField(i, { options: ev.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
               </div>
+              {tiers.length > 1 && (
+                <div className="row small" style={{ marginTop: 8 }}>
+                  <span className="muted">Ask for:</span>
+                  {tiers.map((t) => (
+                    <label key={t.id} className="row small" style={{ gap: 4 }}>
+                      <input type="checkbox" checked={(f.tierIds || []).includes(t.id)}
+                        onChange={(ev) => setField(i, { tierIds: ev.target.checked ? [...(f.tierIds || []), t.id] : (f.tierIds || []).filter((x) => x !== t.id) })} />
+                      {t.name}
+                    </label>
+                  ))}
+                  <span className="muted">(none = everyone)</span>
+                </div>
+              )}
               {f.type === 'qualifier' && (
                 <p className="small muted" style={{ marginTop: 6 }}>
-                  Attendees can pick more than one of these. Only one "Special qualifier" field is used per event — the badge shows whichever picked option is listed first above.
+                  Attendees can pick several. The badge shows the highest one.
                 </p>
               )}
               <div className="spread" style={{ marginTop: 10 }}>
@@ -177,7 +245,12 @@ export default function EventEdit() {
         </section>
 
         <div className="spread">
-          <button className="btn danger" onClick={remove}>Delete event</button>
+          <div className="row">
+            <button className="btn danger" onClick={remove}>Delete event</button>
+            {!e.dataPurgedAt && new Date(e.endsAt) < new Date() && (
+              <button className="btn ghost" title="Clears names, emails and answers but keeps the event, payments and counts" onClick={clearData}>Clear personal data now</button>
+            )}
+          </div>
           <button className="btn primary" onClick={save}>Save changes</button>
         </div>
       </div>

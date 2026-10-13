@@ -7,7 +7,7 @@ const esc = (s) => String(s ?? '')
   function openPrintWindow(tail) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
-    if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
+    if (!win) return reject(new Error('Your browser blocked the print window. Allow pop-ups for this site.'));
     win.document.write(`<!doctype html><title>${esc(tail)}</title>
 <style>@page{size:auto;margin:0} html,body{margin:0;padding:0;height:100%} img{width:100%;height:100%;object-fit:contain;display:block}</style>
 <img id="badge" src="${esc(`${api.base}/api/badges/registration/${tail}.png`)}">`);
@@ -30,7 +30,7 @@ export async function printBadge(value, mode) {
 function openPrintWindowMulti(tails) {
   return new Promise((resolve, reject) => {
     const win = window.open('', '_blank', 'width=420,height=640');
-    if (!win) return reject(new Error('Your browser blocked the print window — allow pop-ups for this site.'));
+    if (!win) return reject(new Error('Your browser blocked the print window. Allow pop-ups for this site.'));
     const imgs = tails.map((t) => `<img class="badge" src="${esc(`${api.base}/api/badges/registration/${t}.png`)}">`).join('');
     win.document.write(`<!doctype html><title>${tails.length} badges</title>
 <style>@page{size:auto;margin:0} html,body{margin:0;padding:0}
@@ -63,8 +63,8 @@ export async function printBadges(codes, mode) {
 
 export const ATTENDEE_LIST_COLUMNS = [
   ['code', 'Code'], ['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'],
-  ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tier', 'Tier'], ['badgeTier', 'Badge tier'],
-  ['paymentMethod', 'Payment'], ['paymentAmount', 'Amount'], ['checkedInAt', 'Checked in'],
+  ['email', 'Email'], ['telegram', 'Telegram'], ['status', 'Status'], ['tierName', 'Ticket'], ['badgeTier', 'Badge tier'],
+  ['paymentMethod', 'Payment'], ['paidCents', 'Paid'], ['balanceDueCents', 'Owes'], ['checkedInAt', 'Checked in'],
 ];
 
 // Blanks always sort last — a column full of "—" isn't useful to page
@@ -82,7 +82,7 @@ function sortRows(rows, key) {
 
 export function printAttendeeList(rows, eventTitle, columnKeys, sortKey = 'badgeNumber') {
   const win = window.open('', '_blank', 'width=900,height=700');
-  if (!win) throw new Error('Your browser blocked the print window — allow pop-ups for this site.');
+  if (!win) throw new Error('Your browser blocked the print window. Allow pop-ups for this site.');
 
   const cols = columnKeys?.length
     ? ATTENDEE_LIST_COLUMNS.filter(([key]) => columnKeys.includes(key))
@@ -91,14 +91,16 @@ export function printAttendeeList(rows, eventTitle, columnKeys, sortKey = 'badge
   const cell = (r, key) => {
     if (key === 'checkedInAt') return r.checkedInAt ? new Date(r.checkedInAt).toLocaleString() : '';
     if (key === 'telegram') return r.telegram ? `@${r.telegram}` : '';
-    if (key === 'paymentAmount') return r.paymentAmount != null ? `$${Number(r.paymentAmount).toFixed(2)}` : '';
+    if (key === 'paidCents' || key === 'balanceDueCents') {
+      return r[key] ? new Intl.NumberFormat(undefined, { style: 'currency', currency: (r.currency || 'usd').toUpperCase() }).format(r[key] / 100) : '';
+    }
     return r[key] ?? '';
   };
 
   const head = cols.map(([, label]) => `<th>${esc(label)}</th>`).join('');
   const body = sorted.map((r) => `<tr>${cols.map(([key]) => `<td>${esc(cell(r, key))}</td>`).join('')}</tr>`).join('');
 
-  win.document.write(`<!doctype html><title>${esc(eventTitle || 'Attendees')} — attendee list</title>
+  win.document.write(`<!doctype html><title>${esc(eventTitle || 'Attendees')} attendee list</title>
 <style>
 @page { size: 8.5in 11in; margin: 0.5in; }
 * { box-sizing: border-box; }

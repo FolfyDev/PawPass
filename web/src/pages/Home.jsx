@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import { Empty, fmtDate } from '../components/Bits.jsx';
+import { EventCardsSkeleton } from '../components/Skeleton.jsx';
 
 export default function Home() {
   const { settings } = useSession();
@@ -22,12 +23,12 @@ export default function Home() {
         {settings?.telegramBot && (
           <p className="small muted">
             Prefer chat? Register through{' '}
-            <a href={`https://t.me/${settings.telegramBot}`}>@{settings.telegramBot}</a> — send <code className="mono">/register</code>.
+            <a href={`https://t.me/${settings.telegramBot}`}>@{settings.telegramBot}</a>: send <code className="mono">/register</code>.
           </p>
         )}
       </header>
 
-      {events === null && <p className="muted">Loading events…</p>}
+      {events === null && <EventCardsSkeleton />}
       {events?.length === 0 && <Empty title="Nothing open yet">Check back soon, or follow the Telegram bot for an announcement.</Empty>}
 
       <div className="stack" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(300px,100%),1fr))', display: 'grid' }}>

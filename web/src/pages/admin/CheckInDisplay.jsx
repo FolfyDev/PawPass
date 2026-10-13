@@ -9,11 +9,10 @@ const WELCOME_MS = 4500;
 
 /// A read-only, second-monitor view meant to run fullscreen facing the
 /// crowd, not the staff working the scanner. It only ever learns about
-/// successful check-ins (it polls the same registrations list Attendees.jsx
-/// uses and watches checkedInAt) — a waitlisted or cancelled scan has
-/// nothing to poll for here, so there's no failure state to accidentally
-/// broadcast to a room full of people. No database or API changes: both
-/// endpoints it polls already exist and are already staff-authenticated.
+/// successful arrivals (each ticket's first entry of the day, from
+/// /arrivals) — a waitlisted or cancelled scan has nothing to poll for here,
+/// so there's no failure state to accidentally broadcast to a room full of
+/// people. On a multi-day event everyone is welcomed again each day.
 export default function CheckInDisplay() {
   const { eventId } = useParams();
   const { settings } = useSession();
@@ -59,21 +58,15 @@ export default function CheckInDisplay() {
       if (inFlight) return;
       inFlight = true;
       try {
-        const rows = await api.get(`/api/admin/events/${eventId}/registrations`);
+        const { today, arrivals } = await api.get(`/api/admin/events/${eventId}/arrivals?since=${encodeURIComponent(lastSeenRef.current)}`);
         if (stopped) return;
-        const checkedIn = rows
-          .filter((r) => r.checkedInAt)
-          .sort((a, b) => new Date(a.checkedInAt) - new Date(b.checkedInAt));
-        setCount(checkedIn.length);
-
-        const fresh = checkedIn.filter((r) => r.checkedInAt > lastSeenRef.current);
-        if (fresh.length) {
-          lastSeenRef.current = fresh[fresh.length - 1].checkedInAt;
-          const startNumber = checkedIn.length - fresh.length + 1;
-          fresh.forEach((r, i) => queueRef.current.push({ name: r.fursonaName || r.legalName, number: startNumber + i }));
+        setCount(today.entered);
+        if (arrivals.length) {
+          lastSeenRef.current = arrivals[arrivals.length - 1].at;
+          arrivals.forEach((a) => queueRef.current.push({ name: a.name, number: a.number }));
           advanceQueue();
         }
-      } catch { /* a missed poll just tries again in POLL_MS — nothing to show for it */ }
+      } catch { /* a missed poll just tries again in POLL_MS; nothing to show for it */ }
       finally { inFlight = false; }
     };
 
@@ -124,7 +117,7 @@ export default function CheckInDisplay() {
         position: 'absolute', bottom: '4vh', right: '4vw', margin: 0,
         font: '600 1.4vw var(--mono)', letterSpacing: '.08em', color: 'rgba(255,255,255,.45)',
       }}>
-        {count.toLocaleString()} checked in
+        {count.toLocaleString()} here today
       </p>
     </div>
   );

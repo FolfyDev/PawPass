@@ -42,6 +42,10 @@ their placeholder defaults or under 32 characters, unless `PUBLIC_URL` looks
 like local dev — so a misconfigured prod deploy fails loudly at boot instead
 of running insecurely.
 
+Optional: `UPDATE_CHECK=false` stops the settings page asking GitHub for new
+releases, and `UPDATE_REPO=owner/repo` checks a fork instead (see
+[UPGRADES.md](UPGRADES.md#release-checks-and-cutting-a-release)).
+
 ## 4. Put HTTPS in front of it
 
 Only the `web` container (port 8080) needs to be reachable from the internet;

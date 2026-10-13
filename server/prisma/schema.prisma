@@ -17,11 +17,10 @@ enum RegistrationStatus {
   CONFIRMED
   WAITLIST
   CANCELLED
-}
-
-enum RegistrationTier {
-  FREE
-  DONATION
+  /// Holds a seat while the attendee is on Stripe Checkout. Becomes CONFIRMED
+  /// from the webhook once Stripe says the session is paid, or CANCELLED when
+  /// the session expires (see lib/payments.js).
+  PENDING_PAYMENT
 }
 
 enum RsvpStatus {
@@ -34,7 +33,111 @@ enum PaymentMethod {
   CASH
   CARD
   PAYPAL
+  /// Online, via Stripe Checkout. Only ever set by lib/payments.js from a
+  /// Stripe-verified session, never by staff.
+  STRIPE
   OTHER
+}
+
+/// What happens when an attendee cancels a ticket they paid for. Free and
+/// unpaid tickets can always be cancelled directly.
+enum CancelPolicy {
+  /// They cancel and get refunded straight away (Stripe payments go back to
+  /// the card automatically).
+  AUTO_REFUND
+  /// They ask to cancel; an owner approves (which refunds) or declines.
+  REQUEST
+}
+
+enum MerchOrderStatus {
+  /// Stock is held while the buyer is on Stripe Checkout.
+  PENDING
+  PAID
+  /// Checkout expired or failed; the held stock went back.
+  CANCELLED
+  REFUNDED
+}
+
+/// Whether a volunteer turned up for their shift, as marked by staff.
+enum VolunteerAttendance {
+  PENDING
+  PRESENT
+  NO_SHOW
+}
+
+enum VendorArea {
+  DEALERS_DEN
+  ARTIST_ALLEY
+}
+
+enum VendorStatus {
+  SUBMITTED
+  WAITLISTED
+  /// Offered a table; the fee is owed (free tables skip straight to CONFIRMED).
+  ACCEPTED
+  /// Paid (or free) — they have the table.
+  CONFIRMED
+  DECLINED
+  WITHDRAWN
+  /// Taken back after acceptance, by staff or a full refund.
+  CANCELLED
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum IncidentStatus {
+  OPEN
+  RESOLVED
+}
+
+enum IncidentRole {
+  /// Who the report is about.
+  SUBJECT
+  /// Who brought it to staff.
+  REPORTER
+  WITNESS
+}
+
+enum ScanDirection {
+  ENTRY
+  EXIT
+}
+
+/// How rooms in a hotel block get booked.
+enum RoomBlockMode {
+  /// Attendees book straight with the hotel through its link or group code.
+  /// Staff copy the hotel's pickup report in, night by night.
+  HOTEL_BOOKED
+  /// Attendees request a room here. Staff send the hotel a rooming list and
+  /// enter the confirmation numbers it sends back.
+  ORGANIZER_MANAGED
+}
+
+enum RoomReservationStatus {
+  /// Holds a room in the block; not yet confirmed by the hotel.
+  REQUESTED
+  CONFIRMED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  EXPIRED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
 }
 
 /// A person. Attendees always arrive through Telegram; staff may also hold a password.
@@ -54,7 +157,21 @@ model User {
   email            String?
   emailIndex       String?        @unique
   passwordHash     String?        // staff only — attendees never get one
+  /// Two-factor for password sign-in (lib/totp.js). The secret is encrypted
+  /// at rest; the pending one is mid-setup, until a code from the app
+  /// confirms it was scanned.
+  totpSecret        String?
+  totpPendingSecret String?
+  totpEnabledAt     DateTime?
+  /// Last 30-second step a code was accepted for, so a code can't be reused.
+  totpLastStep      Int?
+  /// SHA-256 of each unused recovery code; one is removed as it's used.
+  totpRecoveryHashes String[]     @default([])
   role             Role           @default(USER)
+  /// Granted to this person directly, on top of their staff groups'
+  /// (lib/permissions.js). Only counts while role is ADMIN; owners have all.
+  permissions      String[]       @default([])
+  staffGroups      StaffGroupMember[]
   /// Bumped on logout or password change; a JWT's embedded `ver` claim must
   /// match this or loadUser() treats the request as signed out. Lets a
   /// logout invalidate the token everywhere, not just clear this browser's
@@ -67,7 +184,21 @@ model User {
   auditEntries     AuditLog[]
   sales            Sale[]         @relation("SalesProcessedBy")
   donationsProcessed Donation[]   @relation("DonationsProcessedBy")
+  paymentsProcessed Payment[]     @relation("PaymentsProcessedBy")
+  merchOrders      MerchOrder[]
+  merchPickups     MerchOrder[]   @relation("MerchPickedUpBy")
   bansCreated      Ban[]          @relation("BansCreatedBy")
+  volunteerSignups VolunteerSignup[]
+  volunteerMarks   VolunteerSignup[] @relation("VolunteerAttendanceMarkedBy")
+  roomReservations RoomReservation[]
+  scansMade        CheckIn[]      @relation("ScansMade")
+  incidentsFiled   Incident[]     @relation("IncidentsFiled")
+  incidentNotes    IncidentNote[]
+  sessionStars     SessionStar[]
+  panelSubmissions PanelSubmission[]
+  submissionsDecided PanelSubmission[] @relation("SubmissionsDecided")
+  vendorApplications VendorApplication[]
+  vendorsDecided   VendorApplication[] @relation("VendorsDecided")
 }
 
 model Event {
@@ -93,22 +224,74 @@ model Event {
   badgeTemplateId  String?
   badgeTemplate    BadgeTemplate? @relation(fields: [badgeTemplateId], references: [id])
   accentColor      String         @default("#FF5B04")
-  /// Fixed two-tier model: everyone can register free; this is the paid/optional tier.
-  donationTierName String         @default("Supporter")
-  donationPaypalLink String?      // null = donation tier is hidden for this event
-  /// When true, the free option is hidden entirely and every registration is
-  /// treated as paid (short of a voucher override) — for a special add-on
-  /// registration that always costs money, e.g. an after-party.
-  donationRequired Boolean        @default(false)
+  cancelPolicy     CancelPolicy   @default(REQUEST)
+  /// Automatic "know before you go" message, kbygDaysBefore days ahead.
+  /// Message text supports the email tokens ({{fursona_name}}, {{code}}...).
+  kbygEnabled      Boolean        @default(false)
+  kbygDaysBefore   Int            @default(3)
+  kbygMessage      String         @default("")
+  /// Automatic thank-you after the event ends, with an optional feedback link.
+  thanksEnabled    Boolean        @default(false)
+  thanksMessage    String         @default("")
+  feedbackUrl      String?
+  /// Optional "add a donation" step at online checkout, on top of the ticket.
+  /// Charged as its own line on the same Stripe session.
+  donationAddonEnabled Boolean    @default(false)
+  donationAddonLabel   String     @default("Add a donation")
+  /// Preset amounts in cents; attendees can also type their own.
+  donationAddonPresets Int[]      @default([500, 1000, 2500])
+  /// Volunteer shift sign-up on the public event page. Shifts can be set up
+  /// while this is off; nobody sees them until it's turned on.
+  volunteersEnabled Boolean       @default(false)
+  /// Shown above the shift list, e.g. where to report and what to wear.
+  volunteerInfo    String         @default("")
+  /// "Where to stay" on the public event page. Hotels can be set up while
+  /// this is off; nobody sees them until it's turned on.
+  hotelsEnabled    Boolean        @default(false)
+  /// Shown above the hotel list, e.g. "Book by Sept 1 to get the rate".
+  hotelInfo        String         @default("")
+  /// Most people allowed inside at once (fire code). Only tracked
+  /// meaningfully when the door also scans people out. Null = no limit shown.
+  occupancyLimit   Int?
+  /// The public schedule (sessions) on the event page.
+  scheduleEnabled  Boolean        @default(false)
+  /// Panel submissions: open to signed-in people while true and before
+  /// submissionsCloseAt. submissionInfo is the guidelines shown on the form.
+  submissionsOpen    Boolean      @default(false)
+  submissionsCloseAt DateTime?
+  submissionInfo   String         @default("")
+  /// Dealers' den / artist alley applications, open to signed-in people
+  /// while true and before vendorsCloseAt. vendorInfo is the guidelines.
+  vendorsOpen      Boolean        @default(false)
+  vendorsCloseAt   DateTime?
+  vendorInfo       String         @default("")
+  /// Optional sections switched off on the details page (lib/features.js):
+  /// hidden from the admin menu and the public site, data kept.
+  disabledFeatures String[]       @default([])
+  /// When personal data (names, emails, answers...) was cleared from this
+  /// event under the instance's data retention setting (lib/retention.js).
+  dataPurgedAt     DateTime?
   /// Atomically incremented to hand out sequential badge numbers.
   nextBadgeNumber  Int            @default(1)
   createdAt        DateTime       @default(now())
 
   registrations    Registration[]
+  ticketTiers      TicketTier[]
+  discountCodes    DiscountCode[]
+  merchOrders      MerchOrder[]
   campaigns        EmailCampaign[]
   merchItems       MerchItem[]
   voucherCodes     VoucherCode[]
   donations        Donation[]
+  volunteerShifts  VolunteerShift[]
+  hotels           Hotel[]
+  checkIns         CheckIn[]
+  incidents        Incident[]
+  rooms            EventRoom[]
+  sessions         ScheduleSession[]
+  submissions      PanelSubmission[]
+  vendorTableTypes VendorTableType[]
+  vendorApplications VendorApplication[]
 }
 
 model Registration {
@@ -138,16 +321,42 @@ model Registration {
   /// custom-question answers are free text and can contain anything.
   answers       String             @default("")
   status        RegistrationStatus @default(CONFIRMED)
-  tier          RegistrationTier   @default(FREE)
+  /// null for voucher redemptions, which bypass tiers entirely.
+  ticketTierId  String?
+  ticketTier    TicketTier?        @relation(fields: [ticketTierId], references: [id], onDelete: SetNull)
+  /// Denormalized copy of the tier's name at registration time, so the badge
+  /// keeps printing it even if the tier is later renamed or deleted — same
+  /// reasoning as badgeTier below.
+  tierName      String?
+  /// Discount applied to the ticket price, in cents, and the code it came
+  /// from. Snapshotted, so editing the code later doesn't change what this
+  /// registration owes.
+  discountCodeId String?
+  discountCode  DiscountCode?      @relation(fields: [discountCodeId], references: [id], onDelete: SetNull)
+  discountCents Int                @default(0)
+  /// Donation add-on the attendee chose, in cents — reused if they retry checkout.
+  donationCents Int                @default(0)
+  /// Set while a cancellation request (Event.cancelPolicy REQUEST) waits on
+  /// an owner; cleared when it's approved or declined.
+  cancelRequestedAt DateTime?
+  cancelRequestNote String?
+  /// When the "event is tomorrow" reminder went out, so it only goes once.
+  eventReminderSentAt DateTime?
+  /// When the automatic "know before you go" / thank-you messages went out.
+  kbygSentAt    DateTime?
+  thanksSentAt  DateTime?
+  /// Set on a ticket someone else bought for this person ("buy for friends"):
+  /// the buyer's registration, whose payment covers this one. This ticket is
+  /// confirmed, expired, or refunded together with the buyer's.
+  paidByRegistrationId String?
+  paidBy        Registration?      @relation("GroupPurchase", fields: [paidByRegistrationId], references: [id], onDelete: SetNull)
+  boughtFor     Registration[]     @relation("GroupPurchase")
+  /// Assigned once the registration holds a confirmed or waitlisted spot —
+  /// never while PENDING_PAYMENT, so abandoned checkouts don't burn numbers.
   badgeNumber   Int?
   rsvp          RsvpStatus         @default(YES)
   source        String             @default("web") // web | telegram | admin
-  /// How a DONATION-tier payment was actually received — set by staff, usually
-  /// via the onsite kiosk, since the donation tier is otherwise just a PayPal
-  /// link with no way for us to confirm it was paid.
-  paymentMethod PaymentMethod?
-  paymentAmount Float?
-  paymentNote   String?
+  payments      Payment[]
 
   voucherCodeId String?
   voucher       VoucherCode?       @relation(fields: [voucherCodeId], references: [id], onDelete: SetNull)
@@ -157,17 +366,181 @@ model Registration {
 
   tosAcceptedAt DateTime?
   tosVersion    String?
+  /// First time this ticket entered the event (badge pickup). Every scan,
+  /// on every day, is in CheckIn; this stays as the "has arrived" flag the
+  /// rest of the app (emails, badges, transfers) relies on.
   checkedInAt   DateTime?
   checkedInById String?
   checkedInBy   User?              @relation("CheckedInBy", fields: [checkedInById], references: [id])
   badgePrintedAt DateTime?
   printCount    Int                @default(0)
   createdAt     DateTime           @default(now())
+  checkIns      CheckIn[]
+  incidentRoles IncidentPerson[]
 
   @@unique([eventId, userId])
   @@index([eventId, status])
+  @@index([ticketTierId])
+  @@index([paidByRegistrationId])
   @@index([legalNameIndex])
   @@index([emailIndex])
+}
+
+/// A purchasable (or free) ticket type for an event, e.g. "Attendee",
+/// "Sponsor", "Early bird". PawPass is the source of truth; each paid tier is
+/// pushed to Stripe as a Product + Price (see lib/stripe.js syncTier).
+model TicketTier {
+  id              String         @id @default(cuid())
+  eventId         String
+  event           Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name            String
+  description     String         @default("")
+  /// Integer cents. 0 = free.
+  priceCents      Int            @default(0)
+  currency        String         @default("usd")
+  /// Per-tier limit on top of the event's own capacity; null = no tier limit.
+  /// Counts CONFIRMED + PENDING_PAYMENT, same as the event capacity does.
+  capacity        Int?
+  sortOrder       Int            @default(0)
+  /// Optional sale window. Outside it the tier shows but can't be bought.
+  salesStartAt    DateTime?
+  salesEndAt      DateTime?
+  /// Days this ticket gets in on, as YYYY-MM-DD in the event's timezone,
+  /// e.g. a Saturday-only pass. Empty = every day of the event.
+  validDays       String[]       @default([])
+  /// Inactive tiers are hidden from sale but kept, so existing registrations
+  /// still point at them. Tiers with registrations can't be deleted.
+  active          Boolean        @default(true)
+  stripeProductId String?        @unique
+  stripePriceId   String?
+  stripeSyncedAt  DateTime?
+  /// Last sync failure, shown to staff; cleared on the next successful sync.
+  stripeSyncError String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  registrations   Registration[]
+
+  @@index([eventId])
+}
+
+/// Money received for a registration — either a Stripe Checkout attempt, or
+/// an in-person payment staff recorded at the kiosk/attendee editor. No card
+/// data is ever stored; Stripe rows only hold Stripe's own IDs.
+model Payment {
+  id                    String        @id @default(cuid())
+  /// Exactly one of registrationId / merchOrderId / vendorApplicationId is
+  /// set — enforced by the Payment_one_target CHECK constraint (migrations 0003, 0014).
+  registrationId        String?
+  registration          Registration? @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  merchOrderId          String?
+  merchOrder            MerchOrder?   @relation(fields: [merchOrderId], references: [id], onDelete: Cascade)
+  vendorApplicationId   String?
+  vendorApplication     VendorApplication? @relation(fields: [vendorApplicationId], references: [id], onDelete: Cascade)
+  method                PaymentMethod
+  status                PaymentStatus @default(PENDING)
+  /// Integer cents.
+  amountCents           Int
+  amountRefundedCents   Int           @default(0)
+  /// Part of amountCents that was the donation add-on, for reporting.
+  donationCents         Int           @default(0)
+  /// Stripe's processing fee and what actually lands in the account, from
+  /// the charge's balance transaction. Null until fetched (or not Stripe).
+  feeCents              Int?
+  netCents              Int?
+  currency              String        @default("usd")
+  note                  String?
+  stripeSessionId       String?       @unique
+  stripePaymentIntentId String?       @unique
+  /// When the Stripe Checkout session (and so the held seat) lapses.
+  expiresAt             DateTime?
+  /// When the "your held spot expires soon" nudge went out.
+  holdReminderSentAt    DateTime?
+  paidAt                DateTime?
+  /// Staff member who recorded an in-person payment; null for Stripe.
+  processedById         String?
+  processedBy           User?         @relation("PaymentsProcessedBy", fields: [processedById], references: [id], onDelete: SetNull)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([registrationId])
+  @@index([merchOrderId])
+  @@index([vendorApplicationId])
+  @@index([status, expiresAt])
+}
+
+/// A percent- or amount-off code for ticket tiers, applied by PawPass before
+/// checkout (not a Stripe coupon, so the charged amount is always exactly
+/// what PawPass computed).
+model DiscountCode {
+  id             String         @id @default(cuid())
+  eventId        String
+  event          Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  code           String
+  /// Exactly one of percentOff (1-100) / amountOffCents is set.
+  percentOff     Int?
+  amountOffCents Int?
+  /// null = unlimited. usedCount is claimed with a compare-and-swap, and
+  /// given back if a checkout hold lapses unpaid.
+  maxUses        Int?
+  usedCount      Int            @default(0)
+  /// Tier IDs it applies to; empty = every tier.
+  tierIds        String[]       @default([])
+  active         Boolean        @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime       @default(now())
+
+  registrations  Registration[]
+
+  @@unique([eventId, code])
+}
+
+/// An online merch pre-order, picked up at the event.
+model MerchOrder {
+  id            String           @id @default(cuid())
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        MerchOrderStatus @default(PENDING)
+  totalCents    Int
+  currency      String           @default("usd")
+  pickedUpAt    DateTime?
+  /// When staff sent the "ready for pickup" message.
+  readyNotifiedAt DateTime?
+  pickedUpById  String?
+  pickedUpBy    User?            @relation("MerchPickedUpBy", fields: [pickedUpById], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  items         MerchOrderItem[]
+  payments      Payment[]
+
+  @@index([eventId, status])
+  @@index([userId])
+}
+
+model MerchOrderItem {
+  id             String     @id @default(cuid())
+  orderId        String
+  order          MerchOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId         String
+  item           MerchItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// Snapshots, so a later price or name change doesn't rewrite the order.
+  name           String
+  unitPriceCents Int
+  quantity       Int
+
+  @@index([orderId])
+}
+
+/// Stripe webhook event IDs already applied. Stripe retries deliveries and
+/// can send the same event more than once; inserting here inside the same
+/// transaction as the update makes a duplicate a no-op.
+model StripeEvent {
+  id          String   @id // evt_...
+  type        String
+  processedAt DateTime @default(now())
 }
 
 /// Everything about how a badge looks lives here as data, so it is editable in the UI.
@@ -210,9 +583,12 @@ model MerchItem {
   /// Atomically incremented on each sale via a compare-and-swap update, so
   /// concurrent sales at the table can never oversell past maxCount.
   soldCount Int      @default(0)
+  /// Can be pre-ordered online through Stripe (needs a price and Stripe set up).
+  preorder  Boolean  @default(false)
   createdAt DateTime @default(now())
 
   sales     Sale[]
+  orderItems MerchOrderItem[]
 
   @@index([eventId])
 }
@@ -236,8 +612,8 @@ model Sale {
 /// A cash/card/etc. donation taken in person at the table — not tied to any
 /// merch item or event registration, e.g. a walk-up donation box. Recorded
 /// from the Merch tab (where staff are already handling in-person payments)
-/// and rolled into the Cash reconciliation totals alongside donation-tier
-/// registrations and merch sales.
+/// and rolled into the Cash reconciliation totals alongside ticket
+/// payments and merch sales.
 model Donation {
   id            String        @id @default(cuid())
   eventId       String
@@ -250,6 +626,395 @@ model Donation {
   createdAt     DateTime      @default(now())
 
   @@index([eventId])
+}
+
+/// A block of volunteer time for one role at an event, e.g. "Door crew,
+/// Sat 10:00-12:00, 4 people". Anyone signed in can take a slot; they don't
+/// need a ticket, since plenty of volunteers only come to help.
+model VolunteerShift {
+  id          String            @id @default(cuid())
+  eventId     String
+  event       Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  role        String
+  description String            @default("")
+  location    String?
+  startsAt    DateTime
+  endsAt      DateTime
+  slots       Int
+  /// Claimed with a compare-and-swap against slots on sign-up (same pattern
+  /// as MerchItem.soldCount), so two people can't take the last slot at once.
+  filledCount Int               @default(0)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  signups     VolunteerSignup[]
+
+  @@index([eventId, startsAt])
+}
+
+model VolunteerSignup {
+  id          String              @id @default(cuid())
+  shiftId     String
+  shift       VolunteerShift      @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Free text from the volunteer, e.g. "can only stay until 11:30".
+  note        String?
+  attendance  VolunteerAttendance @default(PENDING)
+  markedAt    DateTime?
+  markedById  String?
+  markedBy    User?               @relation("VolunteerAttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  source      String              @default("web") // web | admin
+  createdAt   DateTime            @default(now())
+
+  @@unique([shiftId, userId])
+  @@index([userId])
+}
+
+/// A kind of vendor table, e.g. "Dealers' den, full table, $150, 30 of
+/// them". Applicants ask for one; accepting someone takes one of `quantity`.
+model VendorTableType {
+  id          String              @id @default(cuid())
+  eventId     String
+  event       Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  area        VendorArea          @default(DEALERS_DEN)
+  name        String
+  description String              @default("")
+  /// Integer cents, 0 = free. Snapshotted onto an application when accepted.
+  priceCents  Int                 @default(0)
+  currency    String              @default("usd")
+  quantity    Int
+  sortOrder   Int                 @default(0)
+  active      Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+
+  applications VendorApplication[]
+
+  @@index([eventId])
+}
+
+/// A dealer or artist applying for a table. One live application per area
+/// per person per event.
+model VendorApplication {
+  id            String           @id @default(cuid())
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area          VendorArea
+  /// What they asked for, then what they were given on acceptance.
+  tableTypeId   String?
+  tableType     VendorTableType? @relation(fields: [tableTypeId], references: [id], onDelete: SetNull)
+  businessName  String
+  /// What they make or sell.
+  description   String           @default("")
+  portfolioUrls String[]         @default([])
+  /// Helpers working the table with them, as names.
+  assistants    String           @default("")
+  /// For organizers: power, accessibility, neighbors to sit near.
+  notes         String           @default("")
+  status        VendorStatus     @default(SUBMITTED)
+  /// Fee owed, fixed when accepted.
+  feeCents      Int?
+  currency      String           @default("usd")
+  tableNumber   String?
+  /// Staff-only.
+  reviewNote    String           @default("")
+  decidedAt     DateTime?
+  decidedById   String?
+  decidedBy     User?            @relation("VendorsDecided", fields: [decidedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  payments      Payment[]
+
+  @@index([eventId, status])
+  @@index([userId])
+}
+
+/// A room or space at the venue that sessions are scheduled into.
+model EventRoom {
+  id        String            @id @default(cuid())
+  eventId   String
+  event     Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name      String
+  capacity  Int?
+  sortOrder Int               @default(0)
+  createdAt DateTime          @default(now())
+
+  sessions  ScheduleSession[]
+
+  @@index([eventId])
+}
+
+/// One item on the schedule: a panel, a dance, an opening ceremony. Only
+/// published sessions with a time show publicly; an accepted submission
+/// starts here as an unpublished, unscheduled draft.
+model ScheduleSession {
+  id           String           @id @default(cuid())
+  eventId      String
+  event        Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  roomId       String?
+  room         EventRoom?       @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  title        String
+  description  String           @default("")
+  /// Who's running it, as it should appear publicly.
+  hosts        String           @default("")
+  track        String?
+  startsAt     DateTime?
+  endsAt       DateTime?
+  published    Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  stars        SessionStar[]
+  submission   PanelSubmission?
+
+  @@index([eventId, startsAt])
+  @@index([roomId])
+}
+
+/// An attendee's "I want to go to this".
+model SessionStar {
+  sessionId String
+  session   ScheduleSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+
+  @@id([sessionId, userId])
+  @@index([userId])
+}
+
+/// A proposed panel, from the public submission form.
+model PanelSubmission {
+  id            String           @id @default(cuid())
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  /// The public blurb, if accepted.
+  description   String           @default("")
+  hosts         String           @default("")
+  lengthMinutes Int              @default(60)
+  /// Free text, e.g. "Saturday afternoon, not before noon".
+  availability  String           @default("")
+  /// For the reviewers only: equipment, accessibility, content notes.
+  notes         String           @default("")
+  status        SubmissionStatus @default(SUBMITTED)
+  /// Staff-only, never shown to the submitter.
+  reviewNote    String           @default("")
+  decidedAt     DateTime?
+  decidedById   String?
+  decidedBy     User?            @relation("SubmissionsDecided", fields: [decidedById], references: [id], onDelete: SetNull)
+  sessionId     String?          @unique
+  session       ScheduleSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([eventId, status])
+  @@index([userId])
+}
+
+/// A confidential code-of-conduct / safety report. Any staff member can
+/// file one; only owners see every report (admins see the ones they filed).
+/// Free text and the people involved are encrypted at rest (lib/db.js).
+model Incident {
+  id           String           @id @default(cuid())
+  eventId      String?
+  event        Event?           @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  occurredAt   DateTime
+  location     String?
+  /// harassment | safety | medical | property | conduct | other
+  category     String           @default("conduct")
+  severity     IncidentSeverity @default(MEDIUM)
+  status       IncidentStatus   @default(OPEN)
+  /// Short, plain title for the list, e.g. "Unwanted contact in dealers den".
+  /// Kept unencrypted so the list can be searched; details go in `details`.
+  summary      String
+  /// Encrypted.
+  details      String           @default("")
+  /// Encrypted. What was decided and done.
+  resolution   String           @default("")
+  resolvedAt   DateTime?
+  filedById    String?
+  filedBy      User?            @relation("IncidentsFiled", fields: [filedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  people       IncidentPerson[]
+  notes        IncidentNote[]
+  bans         Ban[]
+
+  @@index([eventId, status])
+  @@index([filedById])
+}
+
+/// Someone involved in an incident: linked to their ticket when there is
+/// one, or just a name and contact as given.
+model IncidentPerson {
+  id             String        @id @default(cuid())
+  incidentId     String
+  incident       Incident      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  role           IncidentRole  @default(SUBJECT)
+  registrationId String?
+  registration   Registration? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  /// Encrypted, as are contact and notes.
+  name           String        @default("")
+  contact        String        @default("")
+  notes          String        @default("")
+  createdAt      DateTime      @default(now())
+
+  @@index([incidentId])
+  @@index([registrationId])
+}
+
+/// Follow-ups on an incident, append-only, in order.
+model IncidentNote {
+  id         String   @id @default(cuid())
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  authorId   String?
+  author     User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Encrypted.
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([incidentId])
+}
+
+/// One scan at the door: an entry or exit on a given day. A ticket gets in
+/// once per day (again after an exit scan); occupancy is everyone whose
+/// latest scan today was an entry.
+model CheckIn {
+  id             String        @id @default(cuid())
+  registrationId String
+  registration   Registration  @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  eventId        String
+  event          Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  /// YYYY-MM-DD in the event's timezone, same convention as hotel nights.
+  day            String
+  direction      ScanDirection @default(ENTRY)
+  /// When it happened at the door, which for an offline scan is earlier
+  /// than when the server heard about it (createdAt).
+  at             DateTime      @default(now())
+  scannedById    String?
+  scannedBy      User?         @relation("ScansMade", fields: [scannedById], references: [id], onDelete: SetNull)
+  /// Made on a scanner with no connection and synced later.
+  offline        Boolean       @default(false)
+  /// The scanner's own ID for the scan, so a sync that's retried after a
+  /// dropped response can't record it twice.
+  clientId       String?       @unique
+  /// Staff let them in past a rule (day pass, already inside).
+  overridden     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+
+  @@index([eventId, day])
+  @@index([registrationId, at])
+}
+
+/// A partner hotel for an event. The rooms themselves live in its blocks.
+model Hotel {
+  id          String      @id @default(cuid())
+  eventId     String
+  event       Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name        String
+  address     String?
+  url         String?
+  phone       String?
+  description String      @default("")
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  blocks      RoomBlock[]
+
+  @@index([eventId])
+}
+
+/// Rooms of one type held at a hotel at a negotiated rate, e.g. "King,
+/// $149/night, 40 rooms Thu-Sun, cutoff Aug 15". Inventory is per night
+/// (RoomBlockNight), since hotel contracts are.
+model RoomBlock {
+  id               String            @id @default(cuid())
+  hotelId          String
+  hotel            Hotel             @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  name             String
+  description      String            @default("")
+  /// Per night, before tax. Paid to the hotel, never through PawPass.
+  rateCents        Int               @default(0)
+  currency         String            @default("usd")
+  mode             RoomBlockMode     @default(HOTEL_BOOKED)
+  bookingUrl       String?
+  groupCode        String?
+  /// After this the hotel releases unbooked rooms; requests and
+  /// self-service cancellations close.
+  cutoffAt         DateTime?
+  maxGuests        Int               @default(4)
+  /// Share of contracted room nights the contract requires to be picked up
+  /// (e.g. 80) before attrition penalties apply. Null = no target tracked.
+  attritionPercent Int?
+  /// Only people with a confirmed ticket see the booking link and group
+  /// code, or can request a room.
+  attendeesOnly    Boolean           @default(true)
+  active           Boolean           @default(true)
+  /// Staff-only, e.g. contract contact and terms.
+  staffNotes       String            @default("")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  nights           RoomBlockNight[]
+  reservations     RoomReservation[]
+
+  @@index([hotelId])
+}
+
+model RoomBlockNight {
+  id             String    @id @default(cuid())
+  blockId        String
+  block          RoomBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  /// The night's date as YYYY-MM-DD in the event's timezone ("the night of
+  /// the 12th" checks in on the 12th, out on the 13th). Plain text so no
+  /// timezone conversion can ever shift it a day.
+  night          String
+  contracted     Int
+  /// Rooms taken by live ORGANIZER_MANAGED reservations, claimed with a
+  /// compare-and-swap against contracted (same pattern as
+  /// VolunteerShift.filledCount).
+  held           Int       @default(0)
+  /// HOTEL_BOOKED: the hotel's own pickup count for the night, entered by staff.
+  reportedPickup Int?
+
+  @@unique([blockId, night])
+}
+
+/// One room request in an ORGANIZER_MANAGED block.
+model RoomReservation {
+  id                 String                @id @default(cuid())
+  blockId            String
+  block              RoomBlock             @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Encrypted at rest. The name the room is booked under, as on their ID.
+  guestName          String
+  /// Encrypted at rest. Free text: who else is in the room.
+  roommates          String                @default("")
+  guests             Int                   @default(1)
+  /// YYYY-MM-DD, same as RoomBlockNight.night. checkOut is exclusive.
+  checkIn            String
+  checkOut           String
+  status             RoomReservationStatus @default(REQUESTED)
+  confirmationNumber String?
+  note               String?
+  staffNote          String?
+  source             String                @default("web") // web | admin
+  cancelledAt        DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([blockId, status])
+  @@index([userId])
 }
 
 /// A code that grants a free, guaranteed-confirmed registration tagged with a
@@ -323,11 +1088,35 @@ model Ban {
   createdById      String?
   createdBy        User?    @relation("BansCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt        DateTime @default(now())
+  /// The incident report this ban came out of, if any.
+  incidentId       String?
+  incident         Incident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
 
   @@index([legalName])
   @@index([email])
   @@index([telegramId])
   @@index([telegramUsername])
+}
+
+/// A named set of permissions staff can be put in, e.g. "Door team".
+model StaffGroup {
+  id          String             @id @default(cuid())
+  name        String             @unique
+  description String             @default("")
+  permissions String[]           @default([])
+  createdAt   DateTime           @default(now())
+  members     StaffGroupMember[]
+}
+
+model StaffGroupMember {
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groupId   String
+  group     StaffGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@id([userId, groupId])
+  @@index([groupId])
 }
 
 model AuditLog {
@@ -338,4 +1127,6 @@ model AuditLog {
   target    String?
   meta      Json     @default("{}")
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

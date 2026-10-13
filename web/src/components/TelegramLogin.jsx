@@ -26,7 +26,7 @@ export default function TelegramLogin({ botUsername, onDone, mode = 'login', lab
   }, [botUsername, mode, onDone]);
 
   if (!botUsername)
-    return <p className="note bad">Telegram sign-in is not configured. Set TELEGRAM_BOT_USERNAME and run /setdomain with BotFather.</p>;
+    return <p className="note bad">Telegram sign-in isn't set up.</p>;
 
   return (
     <div>

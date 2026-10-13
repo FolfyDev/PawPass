@@ -5,12 +5,30 @@ const FIELD_CONFIG = {
   user: [
     { field: 'email', indexField: 'emailIndex' },
     { field: 'legalName' },
+    { field: 'totpSecret' },
+    { field: 'totpPendingSecret' },
   ],
   registration: [
     { field: 'legalName', indexField: 'legalNameIndex' },
     { field: 'email', indexField: 'emailIndex' },
     { field: 'fursonaName' },
     { field: 'answers', json: true },
+  ],
+  roomReservation: [
+    { field: 'guestName' },
+    { field: 'roommates' },
+  ],
+  incident: [
+    { field: 'details' },
+    { field: 'resolution' },
+  ],
+  incidentPerson: [
+    { field: 'name' },
+    { field: 'contact' },
+    { field: 'notes' },
+  ],
+  incidentNote: [
+    { field: 'body' },
   ],
 };
 
@@ -19,9 +37,27 @@ const RELATION_TO_MODEL = {
   checkedInBy: 'user',
   createdBy: 'user',
   processedBy: 'user',
+  markedBy: 'user',
   registration: 'registration',
   registrations: 'registration',
   redemptions: 'registration',
+  paidBy: 'registration',
+  boughtFor: 'registration',
+  merchOrder: 'merchOrder',
+  // Volunteer roster: shift -> signups -> user.
+  signups: 'volunteerSignup',
+  // Hotels: hotel -> blocks -> reservations -> user.
+  blocks: 'roomBlock',
+  block: 'roomBlock',
+  reservations: 'roomReservation',
+  // Incidents: incident -> people (-> registration) / notes. IncidentPerson
+  // also has a plain `notes` column; it's decrypted as a field before this
+  // relation pass sees it, and a string is left alone here.
+  people: 'incidentPerson',
+  notes: 'incidentNote',
+  incident: 'incident',
+  author: 'user',
+  filedBy: 'user',
 };
 
 function encryptData(model, data) {

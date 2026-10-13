@@ -11,11 +11,20 @@ No payments, no ticket pricing, no Stripe keys — every ticket is free.
 
 - **Attendee side** — browse events, register, accept the terms, keep the ticket in your wallet app
 - **Telegram bot** — `/register` walks through the whole thing and finishes with `/accept`
+- **Event overview** — one page per event with the headline numbers and a "needs attention" list (panels to review, fees due, hotel blocks short of target, thin volunteer shifts…), with the event's sections grouped in the sidebar
 - **Admin side** — schedule events, scan to check in, design badges, print, mass email
+- **Schedule & panel submissions** — rooms and sessions with double-booking checks, a public schedule attendees can star and export to their calendar, and a submission form with a review queue that feeds accepted panels onto the schedule
+- **Dealers' den & artist alley** — table types with fees and limits, applications with portfolios, a review queue, table numbers, and fees paid online through Stripe or recorded in person
+- **Incident reports** — a confidential, encrypted log of code-of-conduct and safety reports with follow-ups, and a one-click ban from a report
 - **Site-wide bans** — block someone from registering for any event, with attempt logging
+- **Door check-in** — multi-day entry with day passes, entry/exit scanning with a live headcount against the venue's limit, and an offline mode that keeps the scanner working through Wi-Fi drops and syncs afterwards
+- **Volunteers** — shifts per event with slot limits; people sign up on the event page, staff run the roster, mark attendance, and see hours per volunteer
+- **Hotels & room blocks** — partner hotels with per-night room blocks; attendees book through the hotel's link or request rooms here, staff track pickup against the contract's target and export rooming lists
 - **Analytics** — owner-only dashboard: signups over time, status/channel breakdowns
 - **Two staff roles** — Owner (full control) and Admin (day-of operations only)
+- **Two-factor sign-in** — optional authenticator-app codes for staff password sign-in, with one-time recovery codes
 - **Encrypted at rest** — names, emails, and custom-question answers are encrypted in the database
+- **Data retention** — optionally clear names, emails and answers a set number of months after each event ends, keeping payments and counts
 - **Docker + Postgres** — `docker compose up` and you have a working instance
 
 ---
@@ -158,7 +167,7 @@ web/
 ```bash
 # terminal 1
 docker compose up db
-cd server && npm install && npx prisma db push && npm run dev
+cd server && npm install && npm run db:migrate && npm run dev
 
 # terminal 2
 cd web && npm install && npm run dev     # proxies /api to :4000

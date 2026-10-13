@@ -4,6 +4,7 @@ import { api } from '../../lib/api.js';
 import { eventDayState } from '../../lib/checkin.js';
 import { usePageMeta } from '../../lib/meta.js';
 import { Empty, Pill, fmtDate } from '../../components/Bits.jsx';
+import { RowsSkeleton } from '../../components/Skeleton.jsx';
 
 const DAY_ORDER = { today: 0, upcoming: 1, ended: 2 };
 
@@ -34,7 +35,7 @@ export default function CheckInSelect() {
       <h1>Check in &amp; print</h1>
       <p className="muted">Which event are you checking in for?</p>
 
-      {events === null && <p className="muted">Loading events…</p>}
+      {events === null && <RowsSkeleton rows={3} />}
       {events?.length === 0 && <Empty title="No events yet">Create an event first, then come back here to check people in.</Empty>}
 
       <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fill,minmax(min(300px,100%),1fr))' }}>

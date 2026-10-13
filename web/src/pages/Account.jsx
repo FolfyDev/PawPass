@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import TelegramLogin from '../components/TelegramLogin.jsx';
+import TwoFactorCard from '../components/TwoFactorCard.jsx';
 import { Field } from '../components/Bits.jsx';
 import { usePageMeta } from '../lib/meta.js';
 
@@ -20,6 +21,19 @@ export default function Account() {
   const [fursonaName, setFursonaName] = useState(user.fursonaName || '');
   const [fnMsg, setFnMsg] = useState('');
   const [fnMsgOk, setFnMsgOk] = useState(true);
+  const [delMsg, setDelMsg] = useState('');
+  const nav = useNavigate();
+
+  const deleteAccount = async () => {
+    const typed = prompt('This removes your name, email and Telegram from PawPass and signs you out. It can\'t be undone. Type DELETE to confirm.');
+    if (typed == null) return;
+    setDelMsg('');
+    try {
+      await api.post('/api/my/account/delete', { confirm: typed.trim() });
+      await refresh();
+      nav('/');
+    } catch (e) { setDelMsg(e.message); }
+  };
 
   const saveFursonaName = async (e) => {
     e.preventDefault();
@@ -88,15 +102,15 @@ export default function Account() {
 
       {params.get('justRegistered') === '1' && (
         <p className="note good" style={{ marginBottom: 20 }}>
-          You're registered! Your email works to sign back in any time — we'll send a one-time code, no password needed.
-          {!user.telegramId && ' You can also link Telegram above for one-tap sign-in.'}
+          You're registered! Sign back in any time with an emailed code.
+          {!user.telegramId && ' Or link Telegram above.'}
         </p>
       )}
 
       {settings?.askFursonaName !== false && (
         <form className="card stack" style={{ marginBottom: 20 }} onSubmit={saveFursonaName}>
           <h2 style={{ margin: 0 }}>Badge name</h2>
-          <p className="small muted">Updates any event you're currently registered for, not just future ones.</p>
+          <p className="small muted">Applies to all your current registrations.</p>
           <Field label={settings?.fursonaNameLabel || 'Fursona name'} help="The big name on your badge">
             <input value={fursonaName} onChange={(e) => setFursonaName(e.target.value)} />
           </Field>
@@ -105,10 +119,10 @@ export default function Account() {
         </form>
       )}
 
-      {isStaff ? (
+      {isStaff && (
         <form className="card stack" onSubmit={savePassword}>
           <h2 style={{ margin: 0 }}>Password sign-in</h2>
-          <p className="small muted">Staff can sign in with a password as a Telegram-independent fallback.</p>
+          <p className="small muted">For staff sign-in.</p>
           <Field label="Email"><input type="email" value={pw.email} onChange={(e) => setPw({ ...pw, email: e.target.value })} /></Field>
           <Field label="New password" help="At least 10 characters">
             <input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} />
@@ -116,15 +130,26 @@ export default function Account() {
           {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
           <button className="btn primary">Save password</button>
         </form>
-      ) : (
+      )}
+      {isStaff && <TwoFactorCard user={user} onChange={refresh} />}
+      {!isStaff && (
         <form className="card stack" onSubmit={saveEmail}>
           <h2 style={{ margin: 0 }}>Email</h2>
-          <p className="small muted">This is where a sign-in code goes if you use the "Email code" option on the sign-in page.</p>
+          <p className="small muted">Sign-in codes are sent here.</p>
           <Field label="Email"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
           {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
           <button className="btn primary">Save email</button>
         </form>
       )}
+
+      <section className="card stack" style={{ marginTop: 20 }}>
+        <h2 style={{ margin: 0 }}>Your data</h2>
+        <div className="row">
+          <a className="btn" href={`${api.base}/api/my/data`}>Download my data</a>
+          {!isStaff && <button type="button" className="btn danger" onClick={deleteAccount}>Delete my account</button>}
+        </div>
+        {delMsg && <p className="note bad" style={{ margin: 0 }}>{delMsg}</p>}
+      </section>
     </div>
   );
 }

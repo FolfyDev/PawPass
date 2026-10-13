@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { printBadge, printBadges, printAttendeeList, ATTENDEE_LIST_COLUMNS } from '../../lib/print.js';
-import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate } from '../../components/Bits.jsx';
+import { StatusPill, Pill, Empty, Field, PaymentButtons, fmtDate, fmtMoney, fieldsForTier } from '../../components/Bits.jsx';
 import Modal from '../../components/Modal.jsx';
 import PrintPreviewModal from '../../components/PrintPreviewModal.jsx';
-import EventTabs from '../../components/EventTabs.jsx';
 
 const PAGE_SIZES = [10, 20, 50, 100];
 const BULK_SORT_KEYS = [['badgeNumber', 'Badge #'], ['fursonaName', 'Badge name'], ['legalName', 'Preferred name'], ['code', 'Code']];
@@ -57,9 +56,11 @@ function compareRows(a, b, key, dir) {
 
 export default function Attendees() {
   const { id } = useParams();
-  const { settings } = useSession();
+  const { settings, can } = useSession();
+  const canRefund = can('payments.refund');
   const [rows, setRows] = useState(null);
-  const [q, setQ] = useState('');
+  // ?q= opens with a search filled in (links from the audit log use it).
+  const [q, setQ] = useState(useSearchParams()[0].get('q') || '');
   const [event, setEvent] = useState(null);
   const [msg, setMsg] = useState('');
   const [msgOk, setMsgOk] = useState(true);
@@ -80,7 +81,11 @@ export default function Attendees() {
   const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = () => api.get(`/api/admin/events/${id}/registrations?q=${encodeURIComponent(q)}`).then(setRows);
-  useEffect(() => { api.get(`/api/admin/events/${id}`).then(setEvent); }, [id]);
+  const [tiers, setTiers] = useState([]);
+  useEffect(() => {
+    api.get(`/api/admin/events/${id}`).then(setEvent);
+    api.get(`/api/admin/events/${id}/tiers`).then((r) => setTiers(r.tiers)).catch(() => setTiers([]));
+  }, [id]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [q, id]);
   useEffect(() => { setSelected(new Set()); }, [id]);
   useEffect(() => { setPage(1); }, [q, id, sort, pageSize]);
@@ -174,14 +179,66 @@ export default function Attendees() {
       legalName: r.legalName || '',
       fursonaName: r.fursonaName || '',
       email: r.email || '',
-      paymentMethod: r.paymentMethod || '',
-      paymentAmount: r.paymentAmount != null ? String(r.paymentAmount) : '',
-      paymentNote: r.paymentNote || '',
+      ticketTierId: r.ticketTierId || '',
       status: r.status || 'CONFIRMED',
       answers: { ...(r.answers || {}) },
     });
+    setPaymentDraft({ method: '', amount: r.balanceDueCents ? (r.balanceDueCents / 100).toFixed(2) : '', note: '' });
     setEditMsg('');
     setEditMsgOk(false);
+  };
+
+  // Payments save immediately (they're money, not a form field), so they
+  // refresh `editing` from the server response instead of waiting for Save.
+  const [paymentDraft, setPaymentDraft] = useState({ method: '', amount: '', note: '' });
+  const recordPayment = async () => {
+    setEditMsg('');
+    try {
+      const updated = await api.post(`/api/admin/registrations/${editing.code}/payments`, paymentDraft);
+      setEditing((e) => ({ ...e, ...updated }));
+      setPaymentDraft({ method: '', amount: updated.balanceDueCents ? (updated.balanceDueCents / 100).toFixed(2) : '', note: '' });
+      setEditMsg('Payment recorded.'); setEditMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+  };
+  const refund = async (p) => {
+    const left = p.amountCents - p.amountRefundedCents;
+    const input = prompt(
+      `Refund how much? Up to ${fmtMoney(left, p.currency)}.` +
+      (p.method === 'STRIPE' ? ' This goes back to their card through Stripe.' : ` Record the ${p.method.toLowerCase()} you hand back.`) +
+      ' Refunding everything also cancels the ticket.',
+      (left / 100).toFixed(2),
+    );
+    if (input == null) return;
+    setEditMsg('');
+    try {
+      const r = await api.post(`/api/admin/payments/${p.id}/refund`, { amount: input });
+      setEditing((e) => ({ ...e, ...r.registration }));
+      setEditForm((f) => ({ ...f, status: r.registration.status }));
+      setEditMsg('Refund done.'); setEditMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+  };
+
+  const decideCancel = async (approve) => {
+    if (approve && !confirm(`Refund ${fmtMoney(editing.paidCents, editing.currency)} and cancel this ticket? They'll be told by Telegram or email.`)) return;
+    setEditMsg('');
+    try {
+      const updated = await api.post(`/api/admin/registrations/${editing.code}/cancel-request`, { approve });
+      setEditing((e) => ({ ...e, ...updated }));
+      setEditForm((f) => ({ ...f, status: updated.status }));
+      setEditMsg(approve ? 'Refunded and cancelled.' : 'Declined. They have been told.'); setEditMsgOk(true);
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
+  };
+
+  const undoPayment = async (p) => {
+    if (!confirm(`Remove the ${fmtMoney(p.amountCents, p.currency)} ${p.method.toLowerCase()} payment?`)) return;
+    try {
+      const updated = await api.del(`/api/admin/payments/${p.id}`);
+      setEditing((e) => ({ ...e, ...updated }));
+      load();
+    } catch (e) { setEditMsg(e.message); setEditMsgOk(false); }
   };
 
   const setAnswer = (key, value) => setEditForm((f) => ({ ...f, answers: { ...f.answers, [key]: value } }));
@@ -194,9 +251,7 @@ export default function Attendees() {
         legalName: editForm.legalName,
         fursonaName: editForm.fursonaName,
         email: editForm.email,
-        paymentMethod: editForm.paymentMethod || null,
-        paymentAmount: editForm.paymentAmount === '' ? null : Number(editForm.paymentAmount),
-        paymentNote: editForm.paymentNote,
+        ...(editForm.ticketTierId !== (editing.ticketTierId || '') ? { ticketTierId: editForm.ticketTierId || null } : {}),
         status: editForm.status,
         answers: editForm.answers,
       });
@@ -253,7 +308,7 @@ export default function Attendees() {
     try {
       const r = await api.post('/api/admin/registrations/combine', { keepCode, dropCode });
       setMsg(r.skipped?.length
-        ? `Combined — ${r.skipped.length} other registration${r.skipped.length === 1 ? '' : 's'} couldn't be moved: ${r.skipped.join(', ')}.`
+        ? `Combined. ${r.skipped.length} other registration${r.skipped.length === 1 ? '' : 's'} couldn't be moved: ${r.skipped.join(', ')}.`
         : 'Registrations combined.');
       setMsgOk(true);
       setCombining(null);
@@ -277,7 +332,6 @@ export default function Attendees() {
           <a className="btn" href={`${api.base}/api/admin/events/${id}/registrations.csv`}>Export CSV</a>
         </div>
       </div>
-      <EventTabs id={id} />
 
       <div className="row" style={{ marginBottom: 14 }}>
         <input placeholder="Search name, fursona, code or email" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 340 }} />
@@ -308,7 +362,7 @@ export default function Attendees() {
                 <SortTh label="Preferred name" sortKey="legalName" sort={sort} onSort={toggleSort} />
                 <th>Contact</th>
                 <SortTh label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
-                <th>Tier</th>
+                <th>Ticket</th>
                 <th>Badge tier</th>
                 <th>Payment</th>
                 <th>Printed</th>
@@ -321,19 +375,27 @@ export default function Attendees() {
                 <tr key={r.code}>
                   <td><input type="checkbox" checked={selected.has(r.code)} onChange={() => toggleRow(r.code)} /></td>
                   <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.code}</td>
-                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.badgeNumber ?? '—'}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}><strong>{r.fursonaName || '—'}</strong></td>
+                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{r.badgeNumber ?? '-'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}><strong>{r.fursonaName || '-'}</strong></td>
                   <td style={{ whiteSpace: 'nowrap' }}>{r.legalName}</td>
                   <td className="small muted">{r.telegram ? `@${r.telegram}` : ''}{r.email ? <><br />{r.email}</> : ''}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}><StatusPill status={r.status} checkedInAt={r.checkedInAt} /></td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{r.tier === 'DONATION' ? <Pill tone="go">Donation</Pill> : <Pill>Free</Pill>}</td>
-                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '—'}</td>
-                  <td className="small muted">
-                    {r.tier !== 'DONATION' ? '—' : r.paymentMethod
-                      ? <>{r.paymentMethod}{r.paymentAmount != null ? ` · $${Number(r.paymentAmount).toFixed(2)}` : ''}{r.paymentNote ? <><br />{r.paymentNote}</> : ''}</>
-                      : <Pill tone="wait">Unrecorded</Pill>}
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <StatusPill status={r.status} checkedInAt={r.checkedInAt} />
+                    {r.cancelRequestedAt && <> <Pill tone="wait">Cancel requested</Pill></>}
                   </td>
-                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.printCount ? `${r.printCount}×` : '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{r.tierName ? <Pill tone={r.tierPriceCents ? 'go' : ''}>{r.tierName}</Pill> : '-'}{r.paidBy && <div className="small muted">bought by {r.paidBy.name}</div>}</td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.badgeTier ? <Pill tone="go">{r.badgeTier}</Pill> : '-'}</td>
+                  <td className="small muted">
+                    {r.status === 'PENDING_PAYMENT' ? <Pill tone="wait">Checkout open</Pill>
+                      // A refunded ticket doesn't "owe" anything — it's done.
+                      : r.payments?.some((p) => p.status === 'REFUNDED') && !r.paidCents ? <span className="refunded-box">Refunded</span>
+                      : r.status === 'CANCELLED' ? '-'
+                      : r.balanceDueCents > 0 ? <Pill tone="wait">Owes {fmtMoney(r.balanceDueCents, r.currency)}</Pill>
+                      : r.payments?.some((p) => p.amountRefundedCents > 0) ? <>{r.paymentMethod} · {fmtMoney(r.paidCents, r.currency)} <span className="refunded-box">Part refunded</span></>
+                      : r.paidCents > 0 ? <>{r.paymentMethod} · {fmtMoney(r.paidCents, r.currency)}</>
+                      : '-'}
+                  </td>
+                  <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{r.printCount ? `${r.printCount}×` : '-'}</td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.createdAt, event?.timezone)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <a className="btn sm" href={`${api.base}/api/badges/registration/${r.code}.png`} target="_blank" rel="noreferrer">Preview</a>{' '}
@@ -399,10 +461,10 @@ export default function Attendees() {
             </div>
 
             <div className="grid-2">
-              <Field label="From" help={bulkSortKey === 'badgeNumber' ? 'Leave blank for no lower bound' : 'e.g. "A" — leave blank for no lower bound'}>
+              <Field label="From" help={bulkSortKey === 'badgeNumber' ? 'Optional' : 'e.g. "A", or blank'}>
                 <input value={bulkFrom} onChange={(e) => setBulkFrom(e.target.value)} placeholder={bulkSortKey === 'badgeNumber' ? '1' : 'A'} />
               </Field>
-              <Field label="To" help={bulkSortKey === 'badgeNumber' ? 'Leave blank for no upper bound' : 'e.g. "M" — leave blank for no upper bound'}>
+              <Field label="To" help={bulkSortKey === 'badgeNumber' ? 'Optional' : 'e.g. "M", or blank'}>
                 <input value={bulkTo} onChange={(e) => setBulkTo(e.target.value)} placeholder={bulkSortKey === 'badgeNumber' ? '50' : 'M'} />
               </Field>
             </div>
@@ -444,6 +506,23 @@ export default function Attendees() {
           <div className="stack">
             <p className="mono small muted" style={{ margin: 0 }}>{editing.code}</p>
             {editMsg && <p className={`note ${editMsgOk ? 'good' : 'bad'}`}>{editMsg}</p>}
+            {editing.cancelRequestedAt && (
+              <div className="note stack" style={{ margin: 0, gap: 8 }}>
+                <span>
+                  <strong>Cancellation requested</strong> {fmtDate(editing.cancelRequestedAt, event?.timezone)}
+                  {editing.cancelRequestNote && <>: “{editing.cancelRequestNote}”</>}
+                </span>
+                {canRefund ? (
+                  <div className="row">
+                    <button className="btn sm danger" onClick={() => decideCancel(true)}>Approve and refund {fmtMoney(editing.paidCents, editing.currency)}</button>
+                    <button className="btn sm" onClick={() => decideCancel(false)}>Decline</button>
+                  </div>
+                ) : <span className="small muted">Someone with the Refunds and cancellations permission needs to approve or decline it.</span>}
+              </div>
+            )}
+            {editing.status === 'PENDING_PAYMENT' && (
+              <p className="note" style={{ margin: 0 }}>Paying online right now. Marking them Confirmed gives them the spot without payment.</p>
+            )}
             <Field label="Registration status">
               <div className="row">
                 <button type="button" className={`btn sm ${editForm.status === 'CONFIRMED' ? 'primary' : ''}`}
@@ -471,7 +550,7 @@ export default function Attendees() {
               </div>
             </Field>
 
-            <Field label="Telegram account" help="Search by name or username to link or replace">
+            <Field label="Telegram account" help="Search to link">
               <div className="stack" style={{ gap: 6 }}>
                 <p className="small muted" style={{ margin: 0 }}>{editing.telegram ? `Currently @${editing.telegram}` : 'Not linked'}</p>
                 <input placeholder="Search name or username" value={telegramQuery} onChange={(e) => setTelegramQuery(e.target.value)} />
@@ -488,7 +567,7 @@ export default function Attendees() {
               </div>
             </Field>
 
-            {(event?.customFields || []).map((f) => (
+            {fieldsForTier(event, editForm.ticketTierId).map((f) => (
               <Field key={f.key} label={f.label} help={f.help}>
                 {f.type === 'select' ? (
                   <select value={editForm.answers[f.key] || ''} onChange={(e) => setAnswer(f.key, e.target.value)}>
@@ -517,21 +596,65 @@ export default function Attendees() {
               </Field>
             ))}
 
-            {editing.tier === 'DONATION' && (
-              <>
-                <Field label="Payment method">
-                  <PaymentButtons value={editForm.paymentMethod} onChange={(v) => setEditForm({ ...editForm, paymentMethod: v })} />
-                </Field>
-                <div className="grid-2">
-                  <Field label="Amount">
-                    <input type="number" step="0.01" value={editForm.paymentAmount} onChange={(e) => setEditForm({ ...editForm, paymentAmount: e.target.value })} />
-                  </Field>
-                  <Field label="Note">
-                    <input value={editForm.paymentNote} onChange={(e) => setEditForm({ ...editForm, paymentNote: e.target.value })} />
-                  </Field>
-                </div>
-              </>
+            {tiers.length > 0 && (
+              <Field label="Ticket type" help={editing.badgeTier ? 'Voucher redemptions normally have none' : undefined}>
+                <select value={editForm.ticketTierId} onChange={(e) => setEditForm({ ...editForm, ticketTierId: e.target.value })}>
+                  <option value="">None</option>
+                  {tiers.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} · {t.priceCents ? fmtMoney(t.priceCents, t.currency) : 'Free'}{t.active ? '' : ' (not on sale)'}</option>
+                  ))}
+                </select>
+              </Field>
             )}
+
+            <div className="card stack" style={{ background: 'var(--paper)', boxShadow: 'none' }}>
+              <div className="spread">
+                <h3 style={{ margin: 0 }}>Payments <a className="small" style={{ fontWeight: 400 }} href={`${api.base}/api/admin/registrations/${editing.code}/receipt`} target="_blank" rel="noreferrer">Receipt</a></h3>
+                {editing.tierPriceCents > 0 && (
+                  <span className="small muted">
+                    Paid {fmtMoney(editing.paidCents, editing.currency)} of {fmtMoney(editing.tierPriceCents, editing.currency)}
+                  </span>
+                )}
+              </div>
+              {editing.payments?.length ? (
+                <table>
+                  <tbody>
+                    {editing.payments.map((p) => (
+                      <tr key={p.id} className={p.status === 'REFUNDED' ? 'refunded-row' : undefined}>
+                        <td className="small">{fmtDate(p.paidAt || p.createdAt, event?.timezone)}</td>
+                        <td className="small">{p.method}</td>
+                        <td className="mono small">
+                          {fmtMoney(p.amountCents, p.currency)}
+                          {p.amountRefundedCents > 0 && <span className="muted"> ({fmtMoney(p.amountRefundedCents, p.currency)} refunded)</span>}
+                        </td>
+                        <td>
+                          {p.status === 'PAID' ? <Pill tone="go">Paid</Pill>
+                            : p.status === 'REFUNDED' ? <span className="refunded-box">Refunded</span>
+                            : p.status === 'PARTIALLY_REFUNDED' ? <span className="refunded-box">Part refunded</span>
+                            : <Pill tone={p.status === 'PENDING' ? 'wait' : ''}>{p.status.replace('_', ' ').toLowerCase()}</Pill>}
+                        </td>
+                        <td className="small muted">{p.note}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {canRefund && ['PAID', 'PARTIALLY_REFUNDED'].includes(p.status) && (
+                            <button className="btn sm ghost" onClick={() => refund(p)}>Refund</button>
+                          )}
+                          {p.method !== 'STRIPE' && p.amountRefundedCents === 0 && <button className="btn sm ghost" onClick={() => undoPayment(p)}>Remove</button>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <p className="small muted" style={{ margin: 0 }}>No payments recorded.</p>}
+              <p className="small muted" style={{ margin: 0 }}>Stripe refunds go back to the card.</p>
+              <div className="row" style={{ alignItems: 'end' }}>
+                <PaymentButtons value={paymentDraft.method} onChange={(v) => setPaymentDraft({ ...paymentDraft, method: v })} />
+                <input type="number" step="0.01" min="0" placeholder="Amount" value={paymentDraft.amount} style={{ width: 100 }}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, amount: e.target.value })} />
+                <input placeholder="Note (optional)" value={paymentDraft.note} style={{ width: 160 }}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, note: e.target.value })} />
+                <button className="btn sm" disabled={!paymentDraft.method || paymentDraft.amount === ''} onClick={recordPayment}>Record payment</button>
+              </div>
+            </div>
           </div>
         </Modal>
       )}
@@ -541,8 +664,7 @@ export default function Attendees() {
           footer={<button className="btn ghost" onClick={() => setCombining(null)}>Cancel</button>}>
           <div className="stack">
             <p className="small muted" style={{ margin: 0 }}>
-              Pick which registration to keep — the other is cancelled, and any Telegram account or email the kept one is
-              missing gets copied over from it.
+              Pick the one to keep. The other is cancelled.
             </p>
             {combining.map((r) => (
               <div key={r.code} className="spread card" style={{ padding: 12, alignItems: 'center' }}>

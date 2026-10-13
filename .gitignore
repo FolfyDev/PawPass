@@ -5,3 +5,4 @@ certs/*
 !certs/.gitkeep
 uploads/
 env
+teststuff.txt

@@ -20,6 +20,12 @@ export const env = {
     entityName: process.env.LEGAL_ENTITY_NAME || '',
     contactEmail: process.env.LEGAL_CONTACT_EMAIL || '',
   },
+  /// Release check on the settings page (lib/updates.js). UPDATE_CHECK=false
+  /// turns it off; UPDATE_REPO points it at a fork.
+  updates: {
+    enabled: process.env.UPDATE_CHECK !== 'false' && process.env.UPDATE_CHECK !== '0',
+    repo: /^[\w.-]+\/[\w.-]+$/.test(process.env.UPDATE_REPO || '') ? process.env.UPDATE_REPO : 'FolfyDev/PawPass',
+  },
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     username: process.env.TELEGRAM_BOT_USERNAME || '',
@@ -61,6 +67,19 @@ export const env = {
     serviceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '',
     get enabled() {
       return Boolean(this.issuerId && this.serviceAccount);
+    },
+  },
+  /// Optional. Without a secret key, paid ticket tiers still exist but are
+  /// paid at the door (staff record it at the kiosk or attendee editor), and
+  /// nothing is pushed to Stripe.
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY || '',
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    /// How long a seat is held while someone is on Stripe Checkout. Stripe
+    /// accepts 30 minutes to 24 hours.
+    checkoutMinutes: Math.min(Math.max(Number(process.env.STRIPE_CHECKOUT_EXPIRES_MINUTES || 30), 30), 1440),
+    get enabled() {
+      return Boolean(this.secretKey);
     },
   },
     turnstile: {

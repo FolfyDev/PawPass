@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react';
+
 export const Pill = ({ tone = '', children }) => <span className={`pill ${tone}`}>{children}</span>;
 
 export const StatusPill = ({ status, checkedInAt }) => {
   if (checkedInAt) return <Pill tone="go">Checked in</Pill>;
   if (status === 'WAITLIST') return <Pill tone="wait">Waitlist</Pill>;
+  if (status === 'PENDING_PAYMENT') return <Pill tone="wait">Awaiting payment</Pill>;
   if (status === 'CANCELLED') return <Pill tone="stop">Cancelled</Pill>;
   return <Pill>Confirmed</Pill>;
 };
@@ -10,7 +13,7 @@ export const StatusPill = ({ status, checkedInAt }) => {
 export function Field({ label, help, children }) {
   return (
     <label className="field">
-      <span>{label}{help && <span className="help"> — {help}</span>}</span>
+      <span>{label}{help && <span className="help"> · {help}</span>}</span>
       {children}
     </label>
   );
@@ -25,11 +28,45 @@ export function Empty({ title, children }) {
   );
 }
 
+/// Integer cents to "$12.50" (or "€12.50" for a eur tier).
+export const fmtMoney = (cents, currency = 'usd') =>
+  new Intl.NumberFormat(undefined, { style: 'currency', currency: (currency || 'usd').toUpperCase() }).format((cents || 0) / 100);
+
 export const fmtDate = (d, tz) =>
   new Date(d).toLocaleString(undefined, {
     weekday: 'short', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZone: tz || undefined,
   });
+
+/// "Sat, Oct 12, 10:00 AM – 12:30 PM" for a shift, with the end date
+/// spelled out only when it runs past midnight.
+export const fmtTimeRange = (start, end, tz) => {
+  const day = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz || undefined });
+  const endText = day(start) === day(end)
+    ? new Date(end).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined })
+    : fmtDate(end, tz);
+  return `${fmtDate(start, tz)} – ${endText}`;
+};
+
+/// Hotel nights are plain "YYYY-MM-DD" dates (no time, no timezone), so they
+/// are formatted as UTC noon — never shifted a day by the viewer's zone.
+export const fmtNight = (s, opts = { weekday: 'short', month: 'short', day: 'numeric' }) =>
+  new Date(`${s}T12:00:00Z`).toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
+
+export const addDays = (s, n) => {
+  const d = new Date(`${s}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+/// "Fri, May 3 – Sun, May 5 · 2 nights"
+export const fmtStay = (checkIn, checkOut) => {
+  const nights = Math.round((new Date(checkOut) - new Date(checkIn)) / 86_400_000);
+  return `${fmtNight(checkIn)} – ${fmtNight(checkOut)} · ${nights} night${nights === 1 ? '' : 's'}`;
+};
+
+/// 2 -> "2h", 1.5 -> "1.5h".
+export const fmtHours = (h) => `${Math.round(h * 100) / 100}h`;
 
 export function Avatar({ src, name, size = 28 }) {
   const style = { width: size, height: size, borderRadius: '50%' };
@@ -80,3 +117,33 @@ export function PaymentButtons({ value, onChange }) {
     </div>
   );
 }
+
+/// Live "29:41 left" for a held seat. Calls onExpire once when it hits zero.
+export function HoldCountdown({ until, onExpire }) {
+  const end = until ? new Date(until).getTime() : null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!end) return undefined;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [end]);
+  const left = end ? Math.max(0, Math.ceil((end - now) / 1000)) : null;
+  useEffect(() => {
+    if (left === 0) onExpire?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left === 0]);
+  if (left === null) return null;
+  if (left === 0) return <span className="hold-countdown expired">Your hold has expired</span>;
+  const m = Math.floor(left / 60);
+  const sec = String(left % 60).padStart(2, '0');
+  return (
+    <span className={`hold-countdown${left <= 120 ? ' urgent' : ''}`} role="timer" aria-live="off">
+      Spot held for <strong className="mono">{m}:{sec}</strong>
+    </span>
+  );
+}
+
+/// The event's custom questions that apply to a ticket type. Mirrors
+/// fieldsForTier on the server: a question with tierIds is only for those.
+export const fieldsForTier = (event, tierId) =>
+  (event?.customFields || []).filter((f) => !f.tierIds?.length || (tierId && f.tierIds.includes(tierId)));

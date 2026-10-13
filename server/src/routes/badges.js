@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { env } from '../lib/env.js';
-import { requireAdmin, requireOwner, audit } from '../lib/auth.js';
+import { requireAdmin, requirePerm, audit } from '../lib/auth.js';
 import { getSettings } from '../lib/settings.js';
 import { STARTER_TEMPLATE, BADGE_TOKENS, LABEL_PRESETS } from '../badges/template.js';
 import { renderBadgePNG, renderSampleSVG, renderBadgeSVG, contextForRegistration } from '../badges/render.js';
@@ -14,8 +14,8 @@ badgeRouter.use(requireAdmin);
 // templates, not just rendering/printing them) is owner-only. `GET
 // /templates` stays plain requireAdmin — EventEdit.jsx's read-only template
 // picker needs it for every staff member viewing an event, not just owners.
-badgeRouter.get('/tokens', requireOwner, (_req, res) => res.json(BADGE_TOKENS));
-badgeRouter.get('/presets', requireOwner, (_req, res) => res.json(LABEL_PRESETS));
+badgeRouter.get('/tokens', requirePerm('badges.design'), (_req, res) => res.json(BADGE_TOKENS));
+badgeRouter.get('/presets', requirePerm('badges.design'), (_req, res) => res.json(LABEL_PRESETS));
 
 badgeRouter.get('/templates', async (_req, res) => {
   res.json(await prisma.badgeTemplate.findMany({ orderBy: { createdAt: 'asc' } }));
@@ -24,14 +24,14 @@ badgeRouter.get('/templates', async (_req, res) => {
 /// New templates start as a blank canvas — the operator builds the layout
 /// from scratch. The seeded "Default badge" (STARTER_TEMPLATE) is the only
 /// one that ships pre-built; see bootstrap() in index.js.
-badgeRouter.post('/templates', requireOwner, async (req, res) => {
+badgeRouter.post('/templates', requirePerm('badges.design'), async (req, res) => {
   const t = await prisma.badgeTemplate.create({
     data: { elements: [], ...req.body, name: req.body.name || 'Untitled badge' },
   });
   res.json(t);
 });
 
-badgeRouter.patch('/templates/:id', requireOwner, async (req, res) => {
+badgeRouter.patch('/templates/:id', requirePerm('badges.design'), async (req, res) => {
   const { name, widthMm, heightMm, dpi, background, elements, isDefault } = req.body;
   if (isDefault) await prisma.badgeTemplate.updateMany({ data: { isDefault: false } });
   const t = await prisma.badgeTemplate.update({
@@ -41,12 +41,12 @@ badgeRouter.patch('/templates/:id', requireOwner, async (req, res) => {
   res.json(t);
 });
 
-badgeRouter.delete('/templates/:id', requireOwner, async (req, res) => {
+badgeRouter.delete('/templates/:id', requirePerm('badges.design'), async (req, res) => {
   await prisma.badgeTemplate.delete({ where: { id: req.params.id } });
   res.json({ ok: true });
 });
 
-badgeRouter.post('/templates/:id/duplicate', requireOwner, async (req, res) => {
+badgeRouter.post('/templates/:id/duplicate', requirePerm('badges.design'), async (req, res) => {
   const src = await prisma.badgeTemplate.findUnique({ where: { id: req.params.id } });
   if (!src) return res.status(404).json({ error: 'Template not found.' });
   const { id, createdAt, isDefault, ...rest } = src;
@@ -55,7 +55,7 @@ badgeRouter.post('/templates/:id/duplicate', requireOwner, async (req, res) => {
 
 /// Live preview for the designer. Accepts an unsaved template body so the
 /// canvas can update as the operator drags things around.
-badgeRouter.post('/preview.svg', requireOwner, async (req, res) => {
+badgeRouter.post('/preview.svg', requirePerm('badges.design'), async (req, res) => {
   const svg = await renderSampleSVG(req.body.template || STARTER_TEMPLATE, req.body.overrides);
   res.type('image/svg+xml').send(svg);
 });
@@ -81,19 +81,19 @@ async function resolve(raw) {
   return { reg, template, ctx: contextForRegistration(reg, reg.event, settings, env.publicUrl) };
 }
 
-badgeRouter.get('/registration/:code.png', async (req, res) => {
+badgeRouter.get('/registration/:code.png', requirePerm('checkin', 'badges.design'), async (req, res) => {
   const r = await resolve(req.params.code);
   if (!r) return res.status(404).json({ error: 'Ticket not found.' });
   res.type('png').send(await renderBadgePNG(r.template, r.ctx));
 });
 
-badgeRouter.get('/registration/:code.svg', async (req, res) => {
+badgeRouter.get('/registration/:code.svg', requirePerm('checkin', 'badges.design'), async (req, res) => {
   const r = await resolve(req.params.code);
   if (!r) return res.status(404).json({ error: 'Ticket not found.' });
   res.type('image/svg+xml').send(await renderBadgeSVG(r.template, r.ctx));
 });
 
-badgeRouter.get('/registration/:code.zpl', async (req, res) => {
+badgeRouter.get('/registration/:code.zpl', requirePerm('checkin', 'badges.design'), async (req, res) => {
   const r = await resolve(req.params.code);
   if (!r) return res.status(404).json({ error: 'Ticket not found.' });
   res.type('text/plain').send(await badgeToZPL(r.template, r.ctx, req.query));
@@ -103,7 +103,7 @@ badgeRouter.get('/registration/:code.zpl', async (req, res) => {
 /// accepted like /print has, so the frontend calls this right after handing
 /// the badge image to the OS print dialog — best-effort, same as /print's
 /// own guarantee really (a successful send doesn't confirm the label came out).
-badgeRouter.post('/registration/:code/printed', async (req, res) => {
+badgeRouter.post('/registration/:code/printed', requirePerm('checkin'), async (req, res) => {
   const raw = req.params.code;
   const reg = await prisma.registration.findFirst({ where: { OR: [{ secret: raw }, { code: raw.toUpperCase() }] } });
   if (!reg) return res.status(404).json({ error: 'Ticket not found.' });
@@ -117,7 +117,7 @@ badgeRouter.post('/registration/:code/printed', async (req, res) => {
 
 /// Scan-to-print: the badge desk scans a QR, this renders and pushes the job
 /// straight to the ZD500 over port 9100.
-badgeRouter.post('/print', async (req, res) => {
+badgeRouter.post('/print', requirePerm('checkin'), async (req, res) => {
   const raw = String(req.body.value || req.body.code || '').trim();
   const primary = raw.split('|')[0].trim();
   const secret = primary.split('/').pop();
@@ -150,7 +150,7 @@ badgeRouter.post('/print', async (req, res) => {
 /// Batch print, e.g. everyone checked in but not yet badged — or, when the
 /// caller hands over an explicit `codes` list (the attendee portal's
 /// select-with-checkboxes flow), exactly that set instead of an event-wide filter.
-badgeRouter.post('/print-batch', async (req, res) => {
+badgeRouter.post('/print-batch', requirePerm('checkin'), async (req, res) => {
   const regs = await prisma.registration.findMany({
     where: req.body.codes?.length
       ? { code: { in: req.body.codes.map((c) => String(c).toUpperCase()) } }
@@ -180,5 +180,5 @@ badgeRouter.post('/print-batch', async (req, res) => {
   res.json({ printed: results.filter((r) => r.ok).length, results });
 });
 
-badgeRouter.get('/printer', requireOwner, (_req, res) =>
+badgeRouter.get('/printer', requirePerm('checkin', 'badges.design'), (_req, res) =>
   res.json({ host: env.zebra.host, port: env.zebra.port, dpi: env.zebra.dpi }));

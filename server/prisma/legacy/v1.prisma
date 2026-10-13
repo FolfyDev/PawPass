@@ -1,0 +1,347 @@
+// Frozen snapshot of the final PawPass v1 schema. Never edit — it exists so
+// scripts/migrate.js can bring a v1 database created by `prisma db push` (no
+// migration history) up to exactly this shape before adopting it into
+// prisma/migrations as 0001_v1_baseline. New schema changes go in
+// ../schema.prisma plus a new migration, never here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+  OWNER
+}
+
+enum RegistrationStatus {
+  CONFIRMED
+  WAITLIST
+  CANCELLED
+}
+
+enum RegistrationTier {
+  FREE
+  DONATION
+}
+
+enum RsvpStatus {
+  YES
+  MAYBE
+  NO
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  PAYPAL
+  OTHER
+}
+
+/// A person. Attendees always arrive through Telegram; staff may also hold a password.
+model User {
+  id               String         @id @default(cuid())
+  telegramId       String?        @unique
+  telegramUsername String?
+  telegramPhotoUrl String?
+  displayName      String
+  /// Encrypted at rest (see lib/crypto.js). Never queried directly, so no
+  /// blind index is needed here (compare Registration.legalName below).
+  legalName        String?
+  fursonaName      String?
+  /// Encrypted at rest; emailIndex carries the @unique constraint instead of
+  /// the column itself, since encryption uses a random IV per value and the
+  /// same address never encrypts to the same ciphertext twice.
+  email            String?
+  emailIndex       String?        @unique
+  passwordHash     String?        // staff only — attendees never get one
+  role             Role           @default(USER)
+  /// Bumped on logout or password change; a JWT's embedded `ver` claim must
+  /// match this or loadUser() treats the request as signed out. Lets a
+  /// logout invalidate the token everywhere, not just clear this browser's
+  /// cookie — see issueToken()/loadUser() in lib/auth.js.
+  tokenVersion     Int            @default(0)
+  createdAt        DateTime       @default(now())
+
+  registrations    Registration[]
+  checkIns         Registration[] @relation("CheckedInBy")
+  auditEntries     AuditLog[]
+  sales            Sale[]         @relation("SalesProcessedBy")
+  donationsProcessed Donation[]   @relation("DonationsProcessedBy")
+  bansCreated      Ban[]          @relation("BansCreatedBy")
+}
+
+model Event {
+  id               String         @id @default(cuid())
+  slug             String         @unique
+  title            String
+  tagline          String?
+  description      String         @default("")
+  venue            String?
+  startsAt         DateTime
+  endsAt           DateTime
+  timezone         String         @default("America/New_York")
+  capacity         Int?           // null = unlimited
+  waitlistEnabled  Boolean        @default(true)
+  opensAt          DateTime?
+  closesAt         DateTime?
+  published        Boolean        @default(false)
+  tosTitle         String         @default("Code of Conduct & Terms")
+  tosBody          String         @default("")
+  /// Extra questions, rendered on web and asked by the bot.
+  /// [{ key, label, type: text|select|checkbox|number, required, options[], help }]
+  customFields     Json           @default("[]")
+  badgeTemplateId  String?
+  badgeTemplate    BadgeTemplate? @relation(fields: [badgeTemplateId], references: [id])
+  accentColor      String         @default("#FF5B04")
+  /// Fixed two-tier model: everyone can register free; this is the paid/optional tier.
+  donationTierName String         @default("Supporter")
+  donationPaypalLink String?      // null = donation tier is hidden for this event
+  /// When true, the free option is hidden entirely and every registration is
+  /// treated as paid (short of a voucher override) — for a special add-on
+  /// registration that always costs money, e.g. an after-party.
+  donationRequired Boolean        @default(false)
+  /// Atomically incremented to hand out sequential badge numbers.
+  nextBadgeNumber  Int            @default(1)
+  createdAt        DateTime       @default(now())
+
+  registrations    Registration[]
+  campaigns        EmailCampaign[]
+  merchItems       MerchItem[]
+  voucherCodes     VoucherCode[]
+  donations        Donation[]
+}
+
+model Registration {
+  id            String             @id @default(cuid())
+  /// Human-readable, printed on the badge. e.g. "RL7-4KQ2"
+  code          String             @unique
+  /// Opaque secret embedded in the QR so codes can't be guessed.
+  secret        String             @unique
+  eventId       String
+  event         Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// legalName, fursonaName, email, and answers are all encrypted at rest
+  /// (see lib/crypto.js). legalNameIndex/emailIndex are blind indexes (HMAC
+  /// of the lowercased, trimmed value) that stand in for the encrypted
+  /// column wherever the app needs an exact-match lookup, e.g. the
+  /// duplicate-registration check in findOrCreateHeadlessUser — the
+  /// encrypted column itself can't be filtered, sorted, or matched by
+  /// substring at the DB level, since encryption uses a random IV per value.
+  legalName     String
+  legalNameIndex String?
+  fursonaName   String
+  email         String?
+  emailIndex    String?
+  /// Encrypted JSON (stringified before encryption, parsed back on read) —
+  /// custom-question answers are free text and can contain anything.
+  answers       String             @default("")
+  status        RegistrationStatus @default(CONFIRMED)
+  tier          RegistrationTier   @default(FREE)
+  badgeNumber   Int?
+  rsvp          RsvpStatus         @default(YES)
+  source        String             @default("web") // web | telegram | admin
+  /// How a DONATION-tier payment was actually received — set by staff, usually
+  /// via the onsite kiosk, since the donation tier is otherwise just a PayPal
+  /// link with no way for us to confirm it was paid.
+  paymentMethod PaymentMethod?
+  paymentAmount Float?
+  paymentNote   String?
+
+  voucherCodeId String?
+  voucher       VoucherCode?       @relation(fields: [voucherCodeId], references: [id], onDelete: SetNull)
+  /// Denormalized copy of the voucher's badgeTier at redemption time, so the
+  /// badge keeps showing it even if the voucher is later edited or deleted.
+  badgeTier     String?
+
+  tosAcceptedAt DateTime?
+  tosVersion    String?
+  checkedInAt   DateTime?
+  checkedInById String?
+  checkedInBy   User?              @relation("CheckedInBy", fields: [checkedInById], references: [id])
+  badgePrintedAt DateTime?
+  printCount    Int                @default(0)
+  createdAt     DateTime           @default(now())
+
+  @@unique([eventId, userId])
+  @@index([eventId, status])
+  @@index([legalNameIndex])
+  @@index([emailIndex])
+}
+
+/// Everything about how a badge looks lives here as data, so it is editable in the UI.
+model BadgeTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  widthMm   Float    @default(85.6)
+  heightMm  Float    @default(54)
+  dpi       Int      @default(300)
+  background String  @default("#0E1116")
+  /// [{ id, type: text|qr|image|rect|line, x, y, w, h, ... }] — mm units, top-left origin
+  elements  Json     @default("[]")
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  events    Event[]
+}
+
+model EmailCampaign {
+  id          String   @id @default(cuid())
+  eventId     String?
+  event       Event?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  subject     String
+  body        String   // supports {{fursona_name}} {{legal_name}} {{code}} {{event_title}}
+  audience    String   @default("all") // all | checked_in | not_checked_in | waitlist
+  sentAt      DateTime?
+  sentCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+/// A merch/inventory item sold at an event's table, e.g. a shirt or a print.
+/// Scoped per event, like registrations and campaigns.
+model MerchItem {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name      String
+  price     Float?
+  maxCount  Int
+  /// Atomically incremented on each sale via a compare-and-swap update, so
+  /// concurrent sales at the table can never oversell past maxCount.
+  soldCount Int      @default(0)
+  createdAt DateTime @default(now())
+
+  sales     Sale[]
+
+  @@index([eventId])
+}
+
+/// One recorded merch sale. Attributed to the staff member who processed it,
+/// not the buyer — there's no attendee lookup at the merch table.
+model Sale {
+  id            String        @id @default(cuid())
+  itemId        String
+  item          MerchItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  quantity      Int           @default(1)
+  paymentMethod PaymentMethod
+  paymentNote   String?
+  processedById String
+  processedBy   User          @relation("SalesProcessedBy", fields: [processedById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  @@index([itemId])
+}
+
+/// A cash/card/etc. donation taken in person at the table — not tied to any
+/// merch item or event registration, e.g. a walk-up donation box. Recorded
+/// from the Merch tab (where staff are already handling in-person payments)
+/// and rolled into the Cash reconciliation totals alongside donation-tier
+/// registrations and merch sales.
+model Donation {
+  id            String        @id @default(cuid())
+  eventId       String
+  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  amount        Float
+  paymentMethod PaymentMethod
+  note          String?
+  processedById String
+  processedBy   User          @relation("DonationsProcessedBy", fields: [processedById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  @@index([eventId])
+}
+
+/// A code that grants a free, guaranteed-confirmed registration tagged with a
+/// custom badge label — e.g. "Organizer", "Photographer" — set by whoever
+/// creates the code, not a fixed list. Redeemable only through the public web
+/// registration form.
+model VoucherCode {
+  id          String         @id @default(cuid())
+  eventId     String
+  event       Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  code        String         @unique
+  badgeTier   String
+  maxUses     Int            @default(1)
+  /// Atomically incremented via a compare-and-swap update on redemption, same
+  /// pattern as MerchItem.soldCount, so a limited-use code can't be
+  /// double-redeemed by two people at once.
+  usedCount   Int            @default(0)
+  createdAt   DateTime       @default(now())
+
+  redemptions Registration[]
+
+  @@index([eventId])
+}
+
+/// Single-use sign-in codes handed out by the bot. This is how someone signs
+/// in when the Login Widget is unavailable — on localhost, on plain HTTP, or
+/// before /setdomain has been configured.
+model LoginCode {
+  code       String   @id
+  telegramId String
+  createdAt  DateTime @default(now())
+  usedAt     DateTime?
+
+  @@index([telegramId])
+}
+
+/// Single-use sign-in codes emailed to attendees who don't use Telegram —
+/// the only other way an end user signs in, now that end users can't set a
+/// password. emailIndex is a blind index (see lib/crypto.js); the email
+/// address itself isn't stored here at all, so there's nothing to encrypt.
+model EmailLoginCode {
+  code       String   @id
+  emailIndex String
+  createdAt  DateTime @default(now())
+  usedAt     DateTime?
+
+  @@index([emailIndex])
+}
+
+/// Conversation state for the registration bot.
+model BotSession {
+  telegramId String   @id
+  state      String   @default("idle")
+  draft      Json     @default("{}")
+  updatedAt  DateTime @updatedAt
+}
+
+/// Single-row-per-key store for branding and instance settings.
+model Setting {
+  key   String @id
+  value Json
+}
+
+model Ban {
+  id               String   @id @default(cuid())
+  legalName        String?
+  email            String?
+  telegramId       String?
+  telegramUsername String?
+  reason           String   @default("")
+  createdById      String?
+  createdBy        User?    @relation("BansCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime @default(now())
+
+  @@index([legalName])
+  @@index([email])
+  @@index([telegramId])
+  @@index([telegramUsername])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  target    String?
+  meta      Json     @default("{}")
+  createdAt DateTime @default(now())
+}

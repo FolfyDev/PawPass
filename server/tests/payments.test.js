@@ -1,0 +1,673 @@
+import { test, describe, beforeEach, afterEach, after } from 'node:test';
+import assert from 'node:assert/strict';
+import request from 'supertest';
+import Stripe from 'stripe';
+import { app } from '../src/app.js';
+import { prisma } from '../src/lib/db.js';
+import { env } from '../src/lib/env.js';
+import { setStripeClient } from '../src/lib/stripe.js';
+import { sweepExpiredHolds } from '../src/lib/payments.js';
+import { resetDb, closeDb, createEvent, createStaff, nextEmail } from './helpers/db.js';
+import { WEBHOOK_SECRET, fakeStripe, deliver, stripeEvent } from './helpers/stripe.js';
+
+// The real SDK, for signing webhooks by hand (local crypto, no network).
+const real = new Stripe('sk_test_pawpass_dummy');
+
+describe('stripe payments', () => {
+  let stripe;
+
+  beforeEach(async () => {
+    await resetDb();
+    piSeq = 0;
+    stripe = fakeStripe();
+    setStripeClient(stripe);
+    env.stripe.webhookSecret = WEBHOOK_SECRET;
+  });
+
+  afterEach(() => {
+    setStripeClient(null);
+    env.stripe.webhookSecret = '';
+    env.stripe.secretKey = '';
+  });
+
+  after(async () => {
+    await closeDb();
+  });
+
+  const register = (event, ticketTierId, body = {}) => request(app)
+    .post(`/api/events/${event.slug}/register`)
+    .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true, ticketTierId, ...body });
+
+  async function paidRegistration(eventOverrides = {}) {
+    const event = await createEvent(eventOverrides, { tiers: [{ name: 'Sponsor', priceCents: 2500 }] });
+    const res = await register(event, event.ticketTiers[0].id);
+    const reg = await prisma.registration.findUnique({ where: { code: res.body.code }, include: { payments: true } });
+    return { event, res, reg, session: [...stripe.sessions.values()].at(-1) };
+  }
+
+  /// Marks a session paid, and creates the charge behind it (so refunds and
+  /// fee lookups have something to find).
+  let piSeq = 0;
+  const complete = (session, intent) => {
+    const s = stripe.sessions.get(session.id);
+    const pi = intent || (piSeq++ === 0 ? 'pi_test_1' : `pi_test_${piSeq}`);
+    Object.assign(s, { status: 'complete', payment_status: 'paid', payment_intent: pi });
+    if (![...stripe.charges.values()].some((c) => c.payment_intent === pi)) {
+      stripe.charges.set(`ch_for_${pi}`, { id: `ch_for_${pi}`, object: 'charge', payment_intent: pi, amount: s.amount_total, amount_refunded: 0 });
+    }
+    return s;
+  };
+
+  test('a paid tier holds the seat and hands back a Checkout URL', async () => {
+    const { res, reg, session } = await paidRegistration();
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'PENDING_PAYMENT');
+    assert.equal(res.body.checkoutUrl, session.url);
+    assert.equal(reg.badgeNumber, null);
+    assert.equal(reg.payments.length, 1);
+    assert.equal(reg.payments[0].stripeSessionId, session.id);
+    // The tier was pushed to Stripe on demand, at the right amount.
+    const price = [...stripe.prices.values()][0];
+    assert.equal(price.unit_amount, 2500);
+    assert.equal(price.currency, 'usd');
+  });
+
+  test('the completed webhook confirms the ticket, and a redelivery is a no-op', async () => {
+    const { reg, session } = await paidRegistration();
+    const event = stripeEvent('checkout.session.completed', complete(session));
+
+    const first = await deliver(event);
+    assert.equal(first.status, 200);
+    const confirmed = await prisma.registration.findUnique({ where: { id: reg.id }, include: { payments: true } });
+    assert.equal(confirmed.status, 'CONFIRMED');
+    assert.equal(confirmed.badgeNumber, 1);
+    assert.equal(confirmed.payments[0].status, 'PAID');
+    assert.equal(confirmed.payments[0].stripePaymentIntentId, 'pi_test_1');
+
+    const again = await deliver(event);
+    assert.equal(again.status, 200);
+    assert.equal(again.body.duplicate, true);
+    assert.equal((await prisma.event.findUnique({ where: { id: reg.eventId } })).nextBadgeNumber, 2);
+  });
+
+  test('a correctly signed event that lies about the payment confirms nothing', async () => {
+    // Someone with the webhook secret signs "this session is paid" — but
+    // Stripe itself still says it's open, and that's what gets applied.
+    const { reg, session } = await paidRegistration();
+    const forged = { ...session, status: 'complete', payment_status: 'paid' };
+    const res = await deliver(stripeEvent('checkout.session.completed', forged));
+    assert.equal(res.status, 200);
+    assert.equal((await prisma.registration.findUnique({ where: { id: reg.id } })).status, 'PENDING_PAYMENT');
+  });
+
+  test('a paid session for the wrong amount is flagged, not confirmed', async () => {
+    const { reg, session } = await paidRegistration();
+    Object.assign(complete(session), { amount_total: 100 });
+    await deliver(stripeEvent('checkout.session.completed', stripe.sessions.get(session.id)));
+    assert.equal((await prisma.registration.findUnique({ where: { id: reg.id } })).status, 'PENDING_PAYMENT');
+    assert.equal(await prisma.auditLog.count({ where: { action: 'payment.mismatch' } }), 1);
+  });
+
+  test('refuses a test-mode event on a live-mode instance', async () => {
+    const { reg, session } = await paidRegistration();
+    env.stripe.secretKey = 'sk_live_pawpass_dummy';
+    const res = await deliver({ ...stripeEvent('checkout.session.completed', complete(session)), livemode: false });
+    assert.equal(res.status, 400);
+    assert.equal((await prisma.registration.findUnique({ where: { id: reg.id } })).status, 'PENDING_PAYMENT');
+  });
+
+  test('a late event for an earlier partial refund does not undo a full one', async () => {
+    const { reg, session } = await paidRegistration();
+    await deliver(stripeEvent('checkout.session.completed', complete(session)));
+    const charge = { id: 'ch_test_2', object: 'charge', payment_intent: 'pi_test_1', amount: 2500, amount_refunded: 2500 };
+    stripe.charges.set(charge.id, charge);
+    await deliver(stripeEvent('charge.refunded', charge));
+    // Stale state from an earlier partial refund (as if fetched before the full one).
+    stripe.charges.set(charge.id, { ...charge, amount_refunded: 1000 });
+    await deliver(stripeEvent('charge.refunded', { ...charge, amount_refunded: 1000 }));
+    const p = await prisma.payment.findFirst({ where: { registrationId: reg.id, status: { not: 'EXPIRED' } } });
+    assert.equal(p.status, 'REFUNDED');
+    assert.equal(p.amountRefundedCents, 2500);
+  });
+
+  test('cuts off an address sending forged webhooks without blocking Stripe', async () => {
+    const { reg, session } = await paidRegistration();
+    // Two proxy hops, like Cloudflare Tunnel -> nginx: the client's address
+    // first, then the private address of the proxy in between.
+    const from = (ip) => request(app).post('/api/stripe/webhook')
+      .set('Content-Type', 'application/json').set('X-Forwarded-For', `${ip}, 172.18.0.3`);
+
+    let status;
+    for (let i = 0; i < 31; i++) {
+      ({ status } = await from('203.0.113.66').set('stripe-signature', 't=1,v1=forged').send('{}'));
+    }
+    assert.equal(status, 429, 'the forging address is blocked after 30 rejections');
+
+    // A real delivery from a different address still goes through.
+    const payload = JSON.stringify(stripeEvent('checkout.session.completed', complete(session)));
+    const header = real.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
+    const ok = await from('3.18.12.63').set('stripe-signature', header).send(payload);
+    assert.equal(ok.status, 200);
+    assert.equal((await prisma.registration.findUnique({ where: { id: reg.id } })).status, 'CONFIRMED');
+  });
+
+  test('rejects a webhook with a bad signature', async () => {
+    const res = await request(app).post('/api/stripe/webhook')
+      .set('Content-Type', 'application/json').set('stripe-signature', 't=1,v1=deadbeef')
+      .send(JSON.stringify(stripeEvent('checkout.session.completed', {})));
+    assert.equal(res.status, 400);
+  });
+
+  test('the success page can settle the session without the webhook', async () => {
+    const { session, reg } = await paidRegistration();
+    complete(session);
+    const agent = request.agent(app);
+    // The guest registration set a session cookie on that response — sign
+    // in as the same user to call the sync endpoint.
+    const user = await prisma.user.findUnique({ where: { id: reg.userId } });
+    await prisma.loginCode.create({ data: { code: 'SYNCTEST1', telegramId: 'tg-sync' } });
+    await prisma.user.update({ where: { id: user.id }, data: { telegramId: 'tg-sync' } });
+    await agent.get('/l/SYNCTEST1');
+    const res = await agent.post('/api/my/payments/sync').send({ sessionId: session.id });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'CONFIRMED');
+  });
+
+  test('an expired session cancels the hold and promotes the waitlist', async () => {
+    const event = await createEvent({ capacity: 1, waitlistEnabled: true }, { tiers: [{ name: 'Sponsor', priceCents: 2500 }, { name: 'Attendee' }] });
+    const [sponsor, attendee] = event.ticketTiers;
+    const paid = await register(event, sponsor.id);
+    assert.equal(paid.body.status, 'PENDING_PAYMENT');
+
+    const free = await register(event, attendee.id, { legalName: 'Second Person' });
+    assert.equal(free.body.status, 'WAITLIST', 'the pending checkout holds the only seat');
+
+    // A paid ticket can waitlist too; it pays only if a spot opens.
+    const paidWhenFull = await register(event, sponsor.id, { legalName: 'Third Person' });
+    assert.equal(paidWhenFull.body.status, 'WAITLIST');
+
+    const session = [...stripe.sessions.values()][0];
+    stripe.sessions.get(session.id).status = 'expired';
+    await deliver(stripeEvent('checkout.session.expired', stripe.sessions.get(session.id)));
+
+    assert.equal((await prisma.registration.findUnique({ where: { code: paid.body.code } })).status, 'CANCELLED');
+    assert.equal((await prisma.registration.findUnique({ where: { code: free.body.code } })).status, 'CONFIRMED');
+  });
+
+  test('the sweeper settles a hold whose webhook never arrived', async () => {
+    const { reg, session } = await paidRegistration();
+    stripe.sessions.get(session.id).status = 'expired';
+    await prisma.payment.updateMany({ where: { registrationId: reg.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    await sweepExpiredHolds();
+    assert.equal((await prisma.registration.findUnique({ where: { id: reg.id } })).status, 'CANCELLED');
+  });
+
+  test('a full refund in Stripe cancels the ticket', async () => {
+    const { reg, session } = await paidRegistration();
+    await deliver(stripeEvent('checkout.session.completed', complete(session)));
+    const charge = { id: 'ch_test_1', object: 'charge', payment_intent: 'pi_test_1', amount: 2500, amount_refunded: 2500 };
+    stripe.charges.set(charge.id, charge);
+    await deliver(stripeEvent('charge.refunded', charge));
+    const after = await prisma.registration.findUnique({ where: { id: reg.id }, include: { payments: true } });
+    assert.equal(after.status, 'CANCELLED');
+    assert.equal(after.payments[0].status, 'REFUNDED');
+  });
+
+  test('check-in refuses a ticket whose payment never completed', async () => {
+    const { res } = await paidRegistration();
+    const { user, password } = await createStaff({ role: 'ADMIN' });
+    const agent = request.agent(app);
+    await agent.post('/api/auth/password').send({ email: user.email, password });
+    const scan = await agent.post('/api/admin/checkin').send({ value: res.body.code });
+    assert.equal(scan.status, 409);
+  });
+
+  test('changing a tier price makes a new Stripe price and archives the old one', async () => {
+    const event = await createEvent({}, { tiers: [] });
+    const { user, password } = await createStaff({ role: 'OWNER' });
+    const agent = request.agent(app);
+    await agent.post('/api/auth/password').send({ email: user.email, password });
+
+    const created = await agent.post(`/api/admin/events/${event.id}/tiers`).send({ name: 'Sponsor', price: '25.00' });
+    assert.equal(created.status, 200);
+    assert.ok(created.body.stripeProductId);
+    const firstPrice = created.body.stripePriceId;
+
+    const renamed = await agent.patch(`/api/admin/tiers/${created.body.id}`).send({ name: 'Super Sponsor' });
+    assert.equal(renamed.body.stripePriceId, firstPrice, 'a rename keeps the price');
+    assert.equal(stripe.products.get(created.body.stripeProductId).name, `${event.title}: Super Sponsor`);
+
+    const repriced = await agent.patch(`/api/admin/tiers/${created.body.id}`).send({ price: '30' });
+    assert.notEqual(repriced.body.stripePriceId, firstPrice);
+    assert.equal(stripe.prices.get(repriced.body.stripePriceId).unit_amount, 3000);
+    assert.equal(stripe.prices.get(firstPrice).active, false);
+    assert.equal(stripe.products.get(created.body.stripeProductId).default_price, repriced.body.stripePriceId);
+  });
+
+  /* ------------------------------------------------ helpers for below ---- */
+
+  async function owner() {
+    const { user, password } = await createStaff({ role: 'OWNER' });
+    const agent = request.agent(app);
+    await agent.post('/api/auth/password').send({ email: user.email, password });
+    return agent;
+  }
+
+  let signInSeq = 0;
+  async function signInAs(userId) {
+    const tg = `tg-test-${++signInSeq}-${Date.now()}`;
+    await prisma.user.update({ where: { id: userId }, data: { telegramId: tg } });
+    await prisma.loginCode.create({ data: { code: `SIGNIN${signInSeq}${Date.now()}`.slice(0, 20), telegramId: tg } });
+    const code = (await prisma.loginCode.findFirst({ where: { telegramId: tg } })).code;
+    const agent = request.agent(app);
+    await agent.get(`/l/${code}`);
+    return agent;
+  }
+
+  const lastSession = () => [...stripe.sessions.values()].at(-1);
+
+  /* --------------------------------------------------- discount codes ---- */
+
+  test('a percent discount code lowers the checkout and is given back if the hold lapses', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Sponsor', priceCents: 5000 }] });
+    const code = await prisma.discountCode.create({ data: { eventId: event.id, code: 'SPRING20', percentOff: 20, maxUses: 1 } });
+
+    const preview = await request(app).post(`/api/events/${event.slug}/discount`).send({ code: 'spring20', ticketTierId: event.ticketTiers[0].id });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.ticketCents, 4000);
+
+    const res = await register(event, event.ticketTiers[0].id, { discountCode: 'spring20' });
+    assert.equal(res.body.status, 'PENDING_PAYMENT');
+    assert.equal(lastSession().amount_total, 4000);
+    assert.equal(res.body.chargeCents, 4000);
+    assert.equal((await prisma.discountCode.findUnique({ where: { id: code.id } })).usedCount, 1);
+
+    // Used up while that hold is live.
+    const second = await register(event, event.ticketTiers[0].id, { legalName: 'Second Person', discountCode: 'SPRING20' });
+    assert.equal(second.status, 400);
+
+    stripe.sessions.get(lastSession().id).status = 'expired';
+    const session = [...stripe.sessions.values()][0];
+    stripe.sessions.get(session.id).status = 'expired';
+    await deliver(stripeEvent('checkout.session.expired', session));
+    assert.equal((await prisma.discountCode.findUnique({ where: { id: code.id } })).usedCount, 0);
+  });
+
+  test('a discount code limited to one tier is refused on another', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Sponsor', priceCents: 5000 }, { name: 'Attendee', priceCents: 2000 }] });
+    await prisma.discountCode.create({ data: { eventId: event.id, code: 'SPONSORONLY', amountOffCents: 1000, tierIds: [event.ticketTiers[0].id] } });
+    const res = await register(event, event.ticketTiers[1].id, { discountCode: 'SPONSORONLY' });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /doesn't apply/);
+  });
+
+  /* --------------------------------------------------- donation add-on ---- */
+
+  test('a donation add-on is a second line on the same checkout, and reported separately', async () => {
+    const event = await createEvent({ donationAddonEnabled: true }, { tiers: [{ name: 'Sponsor', priceCents: 2500 }] });
+    const res = await register(event, event.ticketTiers[0].id, { donationCents: 1000 });
+    assert.equal(res.body.status, 'PENDING_PAYMENT');
+    const session = lastSession();
+    assert.equal(session.line_items.length, 2);
+    assert.equal(session.amount_total, 3500);
+
+    await deliver(stripeEvent('checkout.session.completed', complete(session)));
+    const reg = await prisma.registration.findUnique({ where: { code: res.body.code } });
+    assert.equal(reg.status, 'CONFIRMED');
+
+    const agent = await owner();
+    const recon = await agent.get(`/api/admin/events/${event.id}/reconciliation`);
+    assert.equal(recon.body.tickets.STRIPE.total, 25);
+    assert.equal(recon.body.donations.STRIPE.total, 10);
+    // 2.9% + 30c on $35.00, from the fake balance transaction.
+    assert.equal(recon.body.stripe.feeCents, 132);
+    assert.equal(recon.body.stripe.netCents, 3500 - 132);
+  });
+
+  test('a ticket awaiting payment reports the full amount to pay, donation included', async () => {
+    const event = await createEvent({ donationAddonEnabled: true }, { tiers: [{ name: 'Basic', priceCents: 500 }] });
+    const res = await register(event, event.ticketTiers[0].id, { donationCents: 1000 });
+    assert.equal(lastSession().amount_total, 1500);
+    assert.equal(res.body.chargeCents, 1500);
+    const agent = await signInAs((await prisma.registration.findUnique({ where: { code: res.body.code } })).userId);
+    const [ticket] = (await agent.get('/api/my/tickets')).body;
+    assert.equal(ticket.chargeCents, 1500);
+  });
+
+  test('a free ticket with a donation goes through checkout for just the donation', async () => {
+    const event = await createEvent({ donationAddonEnabled: true }, { tiers: [{ name: 'Attendee' }] });
+    const res = await register(event, event.ticketTiers[0].id, { donationCents: 500 });
+    assert.equal(res.body.status, 'PENDING_PAYMENT');
+    assert.equal(lastSession().amount_total, 500);
+    assert.equal(lastSession().line_items.length, 1);
+  });
+
+  test('ignores a donation when the event has the add-on turned off', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Attendee' }] });
+    const res = await register(event, event.ticketTiers[0].id, { donationCents: 500 });
+    assert.equal(res.body.status, 'CONFIRMED');
+  });
+
+  /* ------------------------------------------------------ sale windows ---- */
+
+  test('a tier outside its sale window cannot be bought, and an ended one drops off the page', async () => {
+    const hour = 3600_000;
+    const event = await createEvent({}, {
+      tiers: [
+        { name: 'Early bird', priceCents: 2000, salesEndAt: new Date(Date.now() - hour) },
+        { name: 'Late', priceCents: 3000, salesStartAt: new Date(Date.now() + hour) },
+        { name: 'Regular', priceCents: 2500 },
+      ],
+    });
+    const [early, late] = event.ticketTiers;
+    assert.equal((await register(event, early.id)).status, 400);
+    const notYet = await register(event, late.id, { legalName: 'Too Early' });
+    assert.equal(notYet.status, 400);
+    assert.match(notYet.body.error, /go on sale/);
+
+    const page = await request(app).get(`/api/events/${event.slug}`);
+    assert.deepEqual(page.body.tiers.map((t) => [t.name, t.onSale]), [['Late', false], ['Regular', true]]);
+  });
+
+  /* ----------------------------------------------------------- refunds ---- */
+
+  test('the refund button refunds through Stripe and a full refund cancels the ticket', async () => {
+    const { reg, session } = await paidRegistration();
+    await deliver(stripeEvent('checkout.session.completed', complete(session)));
+    const payment = await prisma.payment.findFirst({ where: { registrationId: reg.id, status: 'PAID' } });
+
+    const agent = await owner();
+    const partial = await agent.post(`/api/admin/payments/${payment.id}/refund`).send({ amount: '5.00' });
+    assert.equal(partial.status, 200);
+    assert.equal(partial.body.registration.status, 'CONFIRMED');
+    assert.equal((await prisma.payment.findUnique({ where: { id: payment.id } })).status, 'PARTIALLY_REFUNDED');
+
+    const tooMuch = await agent.post(`/api/admin/payments/${payment.id}/refund`).send({ amount: '100' });
+    assert.equal(tooMuch.status, 400);
+
+    const rest = await agent.post(`/api/admin/payments/${payment.id}/refund`).send({});
+    assert.equal(rest.status, 200);
+    assert.equal(rest.body.registration.status, 'CANCELLED');
+    const after = await prisma.payment.findUnique({ where: { id: payment.id } });
+    assert.equal(after.status, 'REFUNDED');
+    assert.equal(after.amountRefundedCents, 2500);
+  });
+
+  test('refunding an in-person payment just records it', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Sponsor', priceCents: 5000 }] });
+    const agent = await owner();
+    const reg = await agent.post('/api/admin/registrations').send({
+      eventId: event.id, legalName: 'Walk In', ticketTierId: event.ticketTiers[0].id, payment: { method: 'CASH', amount: '50' },
+    });
+    const payment = reg.body.payments[0];
+    const res = await agent.post(`/api/admin/payments/${payment.id}/refund`).send({ amount: '20' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.registration.paidCents, 3000);
+    assert.equal(res.body.registration.balanceDueCents, 2000);
+  });
+
+  test('only owners can refund', async () => {
+    const { reg, session } = await paidRegistration();
+    await deliver(stripeEvent('checkout.session.completed', complete(session)));
+    const payment = await prisma.payment.findFirst({ where: { registrationId: reg.id, status: 'PAID' } });
+    const { user, password } = await createStaff({ role: 'ADMIN' });
+    const admin = request.agent(app);
+    await admin.post('/api/auth/password').send({ email: user.email, password });
+    assert.equal((await admin.post(`/api/admin/payments/${payment.id}/refund`).send({})).status, 403);
+  });
+
+  /* --------------------------------------------------- merch pre-orders ---- */
+
+  async function preorderSetup() {
+    const event = await createEvent({}, { tiers: [{ name: 'Attendee' }] });
+    const shirt = await prisma.merchItem.create({ data: { eventId: event.id, name: 'Shirt', price: 20, maxCount: 3, preorder: true } });
+    const res = await register(event, event.ticketTiers[0].id);
+    const reg = await prisma.registration.findUnique({ where: { code: res.body.code } });
+    return { event, shirt, reg, agent: await signInAs(reg.userId) };
+  }
+
+  test('a merch pre-order holds stock through checkout and is marked paid', async () => {
+    const { event, shirt, agent } = await preorderSetup();
+    const res = await agent.post(`/api/events/${event.slug}/merch/orders`).send({ items: [{ itemId: shirt.id, quantity: 2 }] });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.checkoutUrl);
+    assert.equal(lastSession().amount_total, 4000);
+    assert.equal((await prisma.merchItem.findUnique({ where: { id: shirt.id } })).soldCount, 2);
+
+    // Only 1 left — someone else can't take 2.
+    const tooMany = await agent.post(`/api/events/${event.slug}/merch/orders`).send({ items: [{ itemId: shirt.id, quantity: 2 }] });
+    assert.equal(tooMany.status, 400);
+
+    await deliver(stripeEvent('checkout.session.completed', complete(lastSession())));
+    const orders = await agent.get('/api/my/merch-orders');
+    assert.equal(orders.body[0].status, 'PAID');
+
+    const staff = await owner();
+    const merch = await staff.get(`/api/admin/events/${event.id}/merch`);
+    assert.equal(merch.body.preorders.length, 1);
+    const picked = await staff.post(`/api/admin/merch-orders/${orders.body[0].id}/pickup`).send({});
+    assert.ok(picked.body.pickedUpAt);
+    const recon = await staff.get(`/api/admin/events/${event.id}/reconciliation`);
+    assert.equal(recon.body.merch.STRIPE.total, 40);
+  });
+
+  test('an expired pre-order puts its stock back', async () => {
+    const { event, shirt, agent } = await preorderSetup();
+    await agent.post(`/api/events/${event.slug}/merch/orders`).send({ items: [{ itemId: shirt.id, quantity: 3 }] });
+    const session = lastSession();
+    stripe.sessions.get(session.id).status = 'expired';
+    await deliver(stripeEvent('checkout.session.expired', session));
+    assert.equal((await prisma.merchItem.findUnique({ where: { id: shirt.id } })).soldCount, 0);
+    assert.equal((await prisma.merchOrder.findFirst({ where: { eventId: event.id } })).status, 'CANCELLED');
+  });
+
+  test('pre-orders are only for confirmed attendees and pre-order items', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Attendee' }] });
+    const tableOnly = await prisma.merchItem.create({ data: { eventId: event.id, name: 'Sticker', price: 2, maxCount: 10 } });
+    const stranger = await prisma.user.create({ data: { displayName: 'No Ticket' } });
+    const agent = await signInAs(stranger.id);
+    const res = await agent.post(`/api/events/${event.slug}/merch/orders`).send({ items: [{ itemId: tableOnly.id, quantity: 1 }] });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /confirmed attendees/);
+  });
+
+  /* ----------------------------------------------- cancellation policy ---- */
+
+  async function paidAndSignedIn(policy) {
+    const event = await createEvent({ cancelPolicy: policy }, { tiers: [{ name: 'Sponsor', priceCents: 2500 }] });
+    const res = await register(event, event.ticketTiers[0].id);
+    await deliver(stripeEvent('checkout.session.completed', complete(lastSession())));
+    const reg = await prisma.registration.findUnique({ where: { code: res.body.code } });
+    return { event, reg, agent: await signInAs(reg.userId) };
+  }
+
+  test('AUTO_REFUND: an attendee cancelling a paid ticket is refunded straight away', async () => {
+    const { reg, agent } = await paidAndSignedIn('AUTO_REFUND');
+    const res = await agent.post(`/api/my/tickets/${reg.code}/cancel`).send({});
+    assert.equal(res.status, 200);
+    assert.equal(res.body.outcome, 'refunded');
+    const after = await prisma.registration.findUnique({ where: { id: reg.id }, include: { payments: true } });
+    assert.equal(after.status, 'CANCELLED');
+    assert.equal(after.payments.find((p) => p.stripePaymentIntentId).status, 'REFUNDED');
+  });
+
+  test('REQUEST: cancelling asks an owner, who can approve (refund) or decline', async () => {
+    const { reg, agent } = await paidAndSignedIn('REQUEST');
+    const res = await agent.post(`/api/my/tickets/${reg.code}/cancel`).send({ note: 'Got sick' });
+    assert.equal(res.body.outcome, 'requested');
+    const pending = await prisma.registration.findUnique({ where: { id: reg.id } });
+    assert.equal(pending.status, 'CONFIRMED');
+    assert.ok(pending.cancelRequestedAt);
+    assert.equal((await agent.post(`/api/my/tickets/${reg.code}/cancel`).send({})).body.outcome, 'already_requested');
+
+    const staff = await owner();
+    const declined = await staff.post(`/api/admin/registrations/${reg.code}/cancel-request`).send({ approve: false });
+    assert.equal(declined.body.status, 'CONFIRMED');
+    assert.equal(declined.body.cancelRequestedAt, null);
+
+    await agent.post(`/api/my/tickets/${reg.code}/cancel`).send({});
+    const approved = await staff.post(`/api/admin/registrations/${reg.code}/cancel-request`).send({ approve: true });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.status, 'CANCELLED');
+    assert.ok(approved.body.payments.some((p) => p.status === 'REFUNDED'));
+  });
+
+  test('a free ticket is cancelled directly whatever the policy', async () => {
+    const event = await createEvent({ cancelPolicy: 'REQUEST' }, { tiers: [{ name: 'Attendee' }] });
+    const res = await register(event, event.ticketTiers[0].id);
+    const reg = await prisma.registration.findUnique({ where: { code: res.body.code } });
+    const agent = await signInAs(reg.userId);
+    const cancel = await agent.post(`/api/my/tickets/${reg.code}/cancel`).send({});
+    assert.equal(cancel.body.outcome, 'cancelled');
+  });
+
+  test('the admin event list counts confirmed and held spots, not cancelled ones', async () => {
+    const event = await createEvent({ capacity: 10 }, { tiers: [{ name: 'Attendee' }, { name: 'Sponsor', priceCents: 2500 }] });
+    const [free, paid] = event.ticketTiers;
+    const a = await register(event, free.id);
+    await register(event, free.id, { legalName: 'Second Person' });
+    await register(event, paid.id, { legalName: 'Mid Checkout' });
+    await prisma.registration.update({ where: { code: a.body.code }, data: { status: 'CANCELLED' } });
+
+    const staff = await owner();
+    const list = await staff.get('/api/admin/events');
+    const row = list.body.find((e) => e.id === event.id);
+    assert.equal(row.confirmed, 1);
+    assert.equal(row.awaitingPayment, 1);
+    assert.equal(row.registrationCount, 2);
+    assert.equal((await request(app).get(`/api/events/${event.slug}`)).body.confirmed, 1);
+  });
+
+  /* ------------------------------------------------- paid waitlist ---- */
+
+  test('a paid waitlisted ticket gets a timed hold to pay when a spot opens', async () => {
+    const event = await createEvent({ capacity: 1, waitlistEnabled: true }, { tiers: [{ name: 'Sponsor', priceCents: 2500 }] });
+    const tier = event.ticketTiers[0];
+    const first = await register(event, tier.id);
+    const second = await register(event, tier.id, { legalName: 'Second Person' });
+    assert.equal(second.body.status, 'WAITLIST');
+    assert.equal((await prisma.payment.count({ where: { registration: { code: second.body.code } } })), 0, 'nothing charged while waitlisted');
+
+    const s1 = [...stripe.sessions.values()][0];
+    stripe.sessions.get(s1.id).status = 'expired';
+    await deliver(stripeEvent('checkout.session.expired', s1));
+
+    const promoted = await prisma.registration.findUnique({ where: { code: second.body.code }, include: { payments: true } });
+    assert.equal(promoted.status, 'PENDING_PAYMENT');
+    assert.equal(promoted.payments[0].status, 'PENDING');
+    assert.ok(promoted.payments[0].expiresAt > new Date());
+    assert.equal((await prisma.registration.findUnique({ where: { code: first.body.code } })).status, 'CANCELLED');
+  });
+
+  /* ----------------------------------------------- buy for friends ---- */
+
+  test('buying for friends charges every ticket in one checkout and confirms them together', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Basic', priceCents: 1000 }] });
+    const friendA = nextEmail();
+    const res = await register(event, event.ticketTiers[0].id, {
+      friends: [{ name: 'Friend A', contact: friendA }, { name: 'Friend B', contact: nextEmail() }],
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'PENDING_PAYMENT');
+    assert.equal(lastSession().amount_total, 3000);
+    assert.equal(res.body.chargeCents, 3000);
+    assert.equal(res.body.boughtFor.length, 2);
+
+    await deliver(stripeEvent('checkout.session.completed', complete(lastSession())));
+    const friends = await prisma.registration.findMany({ where: { paidBy: { code: res.body.code } } });
+    assert.deepEqual(friends.map((f) => f.status), ['CONFIRMED', 'CONFIRMED']);
+    assert.ok(friends.every((f) => f.badgeNumber != null));
+
+    // The friend signs in with the email it was bought under and sees it, paid.
+    const friendUser = await prisma.user.findUnique({ where: { emailIndex: (await import('../src/lib/crypto.js')).blindIndex(friendA) } });
+    const agent = await signInAs(friendUser.id);
+    const [ticket] = (await agent.get('/api/my/tickets')).body;
+    assert.equal(ticket.status, 'CONFIRMED');
+    assert.equal(ticket.balanceDueCents, 0);
+    assert.equal(ticket.paidBy.code, res.body.code);
+    const receipt = await agent.get(`/api/my/tickets/${ticket.code}/receipt`);
+    assert.match(receipt.text, /paid for by/);
+  });
+
+  test('if the buyer never pays, the friends tickets go too', async () => {
+    const event = await createEvent({ capacity: 3 }, { tiers: [{ name: 'Basic', priceCents: 1000 }] });
+    const res = await register(event, event.ticketTiers[0].id, { friends: [{ name: 'Friend A', contact: nextEmail() }] });
+    const s1 = lastSession();
+    stripe.sessions.get(s1.id).status = 'expired';
+    await deliver(stripeEvent('checkout.session.expired', s1));
+    const all = await prisma.registration.findMany({ where: { eventId: event.id } });
+    assert.ok(all.every((r) => r.status === 'CANCELLED'), JSON.stringify(all.map((r) => r.status)));
+    assert.equal(res.body.boughtFor.length, 1);
+  });
+
+  test('cancelling one friend ticket refunds just its share from the buyer', async () => {
+    const event = await createEvent({ cancelPolicy: 'AUTO_REFUND' }, { tiers: [{ name: 'Basic', priceCents: 1000 }] });
+    const res = await register(event, event.ticketTiers[0].id, { friends: [{ name: 'Friend A', contact: nextEmail() }] });
+    await deliver(stripeEvent('checkout.session.completed', complete(lastSession())));
+    const friend = await prisma.registration.findFirst({ where: { paidBy: { code: res.body.code } } });
+    const agent = await signInAs(friend.userId);
+    const cancel = await agent.post(`/api/my/tickets/${friend.code}/cancel`).send({});
+    assert.equal(cancel.body.outcome, 'requested', 'group tickets always go through an owner');
+
+    const staff = await owner();
+    const approved = await staff.post(`/api/admin/registrations/${friend.code}/cancel-request`).send({ approve: true });
+    assert.equal(approved.body.status, 'CANCELLED');
+    const buyer = await prisma.registration.findUnique({ where: { code: res.body.code }, include: { payments: true } });
+    assert.equal(buyer.status, 'CONFIRMED');
+    const paid = buyer.payments.find((p) => p.stripePaymentIntentId);
+    assert.equal(paid.amountRefundedCents, 1000);
+    assert.equal(paid.status, 'PARTIALLY_REFUNDED');
+  });
+
+  test('free tickets for friends are confirmed straight away', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Attendee' }] });
+    const res = await register(event, event.ticketTiers[0].id, { friends: [{ name: 'Friend A', contact: nextEmail() }] });
+    assert.equal(res.body.status, 'CONFIRMED');
+    assert.equal(res.body.boughtFor[0].status, 'CONFIRMED');
+  });
+
+  test('refuses friends without a way to reach them, or more spots than are left', async () => {
+    const event = await createEvent({ capacity: 2 }, { tiers: [{ name: 'Attendee' }] });
+    const noContact = await register(event, event.ticketTiers[0].id, { friends: [{ name: 'Friend A', contact: '' }] });
+    assert.equal(noContact.status, 400);
+    const tooMany = await register(event, event.ticketTiers[0].id, { legalName: 'Big Group', friends: [{ name: 'A Friend', contact: nextEmail() }, { name: 'B Friend', contact: nextEmail() }] });
+    assert.equal(tooMany.status, 400);
+    assert.match(tooMany.body.error, /spots left/);
+  });
+
+  /* ---------------------------------------------- receipts, reminders ---- */
+
+  test('a receipt lists the ticket, discount, donation and payment', async () => {
+    const event = await createEvent({ donationAddonEnabled: true }, { tiers: [{ name: 'Sponsor', priceCents: 5000 }] });
+    await prisma.discountCode.create({ data: { eventId: event.id, code: 'TEN', amountOffCents: 1000 } });
+    const res = await register(event, event.ticketTiers[0].id, { discountCode: 'TEN', donationCents: 500 });
+    await deliver(stripeEvent('checkout.session.completed', complete(lastSession())));
+    const reg = await prisma.registration.findUnique({ where: { code: res.body.code } });
+    const html = (await (await signInAs(reg.userId)).get(`/api/my/tickets/${reg.code}/receipt`)).text;
+    for (const bit of ['Sponsor', '$50.00', 'Discount', '$10.00', 'Donation', '$5.00', '$45.00', 'Card (online)']) assert.ok(html.includes(bit), bit);
+  });
+
+  test('reminders: hold expiring, event tomorrow, pre-order ready — each sent once', async () => {
+    const { sendHoldReminders, sendEventReminders, notifyPreordersReady } = await import('../src/lib/reminders.js');
+    const event = await createEvent({ startsAt: new Date(Date.now() + 24 * 3600_000), endsAt: new Date(Date.now() + 30 * 3600_000) },
+      { tiers: [{ name: 'Sponsor', priceCents: 1000 }, { name: 'Free' }] });
+    const pending = await register(event, event.ticketTiers[0].id);
+    await prisma.payment.updateMany({ where: { registration: { code: pending.body.code } }, data: { expiresAt: new Date(Date.now() + 3 * 60_000) } });
+    await sendHoldReminders();
+    await sendHoldReminders();
+    const pay = await prisma.payment.findFirst({ where: { registration: { code: pending.body.code } } });
+    assert.ok(pay.holdReminderSentAt);
+
+    const free = await register(event, event.ticketTiers[1].id, { legalName: 'Free Person' });
+    await sendEventReminders();
+    assert.ok((await prisma.registration.findUnique({ where: { code: free.body.code } })).eventReminderSentAt);
+
+    const shirt = await prisma.merchItem.create({ data: { eventId: event.id, name: 'Shirt', price: 20, maxCount: 5, preorder: true } });
+    const reg = await prisma.registration.findUnique({ where: { code: free.body.code } });
+    const agent = await signInAs(reg.userId);
+    await agent.post(`/api/events/${event.slug}/merch/orders`).send({ items: [{ itemId: shirt.id, quantity: 1 }] });
+    await deliver(stripeEvent('checkout.session.completed', complete(lastSession(), 'pi_shirt')));
+    assert.equal(await notifyPreordersReady(event.id), 1);
+    assert.equal(await notifyPreordersReady(event.id), 0, 'only once');
+  });
+});

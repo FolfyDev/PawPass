@@ -33,9 +33,7 @@ export default function Backup() {
       <p className="eyebrow">Instance</p>
       <h1>Backup &amp; restore</h1>
       <p className="muted">
-        Everything this app manages events, registrations, merch, sales, donations, vouchers, badge templates,
-        settings, and uploaded files (logos, cached Telegram photos) as one file. Owner-only, since restoring
-        replaces all of it.
+        All data and uploads in one file.
       </p>
 
       <div className="card stack" style={{ marginBottom: 24 }}>
@@ -47,10 +45,7 @@ export default function Backup() {
       <div className="card stack">
         <h2 style={{ margin: 0 }}>Restore from a backup</h2>
         <p className="note bad" style={{ margin: 0 }}>
-          This replaces ALL current data, every registration, sale, donation, and event with the contents of the
-          file you upload. Anything created since that backup was taken is gone. This cannot be undone. If the
-          backup is from a different instance, your own account may not exist in it, and you could be signed out
-          once it's done.
+          Replaces ALL current data with the file's contents. This can't be undone.
         </p>
         <input type="file" accept=".zip,application/zip" onChange={(e) => setFile(e.target.files?.[0] || null)} />
         <label className="field">

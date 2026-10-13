@@ -4,15 +4,48 @@ import { findMatchingBan } from './bans.js';
 import { audit } from './auth.js';
 import { blindIndex } from './crypto.js';
 import { formatInTimeZone } from './tz.js';
+import { env } from './env.js';
+import { stripeEnabled } from './stripe.js';
+import { featureOn } from './features.js';
+import { STAFF_PAYMENT_METHODS, abandonPendingPayments, releaseDiscount } from './payments.js';
+import { tierSaleState, checkDiscount, checkDonation, registrationCharge, normalizeCode, PricingError, STRIPE_MIN_CHARGE_CENTS } from './pricing.js';
 
 export class RegistrationError extends Error {}
 
-const PAYMENT_METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
+/// Statuses that occupy a seat against event (and tier) capacity. A
+/// PENDING_PAYMENT registration holds its seat while the attendee is on
+/// Stripe Checkout, so two people can't both pay for the last one.
+export const HOLDS_SEAT = ['CONFIRMED', 'PENDING_PAYMENT'];
 
-export function validateAnswers(event, answers = {}) {
+/// Active tiers in display order — the same order everywhere they're listed.
+export function activeTiers(eventId, db = prisma) {
+  return db.ticketTier.findMany({
+    where: { eventId, active: true },
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+  });
+}
+
+/// Seats taken per tier, for "N left" / sold-out display.
+export async function heldByTier(eventId) {
+  const rows = await prisma.registration.groupBy({
+    by: ['ticketTierId'],
+    where: { eventId, status: { in: HOLDS_SEAT } },
+    _count: { _all: true },
+  });
+  return Object.fromEntries(rows.map((r) => [r.ticketTierId, r._count._all]));
+}
+
+/// The custom questions that apply to a ticket type. A question with
+/// `tierIds` is only asked for those tiers; without, it's asked of everyone.
+/// Voucher registrations (no tier) only get the everyone questions.
+export function fieldsForTier(event, tierId) {
   const fields = Array.isArray(event.customFields) ? event.customFields : [];
+  return fields.filter((f) => !f.tierIds?.length || (tierId && f.tierIds.includes(tierId)));
+}
+
+export function validateAnswers(event, answers = {}, tierId = null) {
   const clean = {};
-  for (const f of fields) {
+  for (const f of fieldsForTier(event, tierId)) {
     const value = answers[f.key];
     const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
     if (f.required && empty) throw new RegistrationError(`${f.label} is required.`);
@@ -21,22 +54,34 @@ export function validateAnswers(event, answers = {}) {
   return clean;
 }
 
-export function registrationWindowState(event, confirmedCount) {
+/// `heldCount` is registrations in HOLDS_SEAT, not just CONFIRMED.
+export function registrationWindowState(event, heldCount) {
   const now = new Date();
   if (!event.published) return { open: false, reason: 'Registration is not open yet.' };
   if (event.opensAt && now < event.opensAt)
     return { open: false, reason: `Registration opens ${formatInTimeZone(event.opensAt, event.timezone)}.` };
   if (event.closesAt && now > event.closesAt)
     return { open: false, reason: 'Registration has closed.' };
-  if (event.capacity && confirmedCount >= event.capacity) {
+  if (event.capacity && heldCount >= event.capacity) {
     return event.waitlistEnabled
-      ? { open: true, waitlist: true, reason: 'This event is full — you will join the waitlist.' }
+      ? { open: true, waitlist: true, reason: 'This event is full. You will join the waitlist.' }
       : { open: false, reason: 'This event is full.' };
   }
   return { open: true, waitlist: false };
 }
 
-export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, tier, paymentMethod, paymentAmount, paymentNote, voucherCode }) {
+/// How a paid tier gets paid depends on where the registration comes from:
+///   - staff (source 'admin') with `inPersonPayment` -> recorded as PAID now
+///   - attendee, Stripe configured                   -> PENDING_PAYMENT + a
+///     pending Payment; the caller follows up with startCheckout()
+///   - anything else                                 -> CONFIRMED, balance due
+///     (pay at the door — what v1's PayPal tier effectively was)
+/// `inPersonPayment` is { method, amountCents, note }.
+///
+/// Attendee registrations can also carry a `discountCode` (reduces the
+/// ticket price, online or at the door) and `donationCents` (the optional
+/// add-on — only charged online, so ignored without Stripe).
+export async function createRegistration({ event, user, legalName, fursonaName, email, answers, source, tosVersion, ticketTierId, voucherCode, discountCode, donationCents, inPersonPayment, processedById, friends }) {
   const ban = await findMatchingBan({ legalName, email, telegramId: user.telegramId, telegramUsername: user.telegramUsername });
   if (ban) {
     await audit(null, 'ban.blocked_registration', ban.id, {
@@ -56,6 +101,8 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
   const existing = await prisma.registration.findUnique({
     where: { eventId_userId: { eventId: event.id, userId: user.id } },
   });
+  if (existing?.status === 'PENDING_PAYMENT')
+    throw new RegistrationError('You already have a registration for this event waiting on payment. Finish paying from your tickets, or cancel it there to start over.');
   if (existing && existing.status !== 'CANCELLED')
     throw new RegistrationError('You are already registered for this event.');
 
@@ -69,6 +116,7 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
 
     let voucher = null;
   if (voucherCode) {
+    if (!featureOn(event, 'vouchers')) throw new RegistrationError("This event doesn't use voucher codes.");
     voucher = await prisma.voucherCode.findFirst({
       where: { eventId: event.id, code: voucherCode.trim().toUpperCase() },
     });
@@ -76,10 +124,59 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
     if (voucher.usedCount >= voucher.maxUses) throw new RegistrationError('That voucher code has already been used.');
   }
 
-  const cleanAnswers = validateAnswers(event, answers);
+
+  // Vouchers bypass tiers entirely, same as they bypass capacity.
+  let tier = null;
+  if (!voucher) {
+    const tiers = await activeTiers(event.id);
+    if (!tiers.length) throw new RegistrationError('No tickets are on sale for this event right now.');
+    // Staff at the kiosk can still sell a tier outside its sale window.
+    const buyable = source === 'admin' ? tiers : tiers.filter((t) => tierSaleState(t).buyable);
+    tier = ticketTierId ? tiers.find((t) => t.id === ticketTierId) : buyable.length === 1 ? buyable[0] : null;
+    if (!tier) throw new RegistrationError(ticketTierId ? 'That ticket type is not available.' : 'Choose a ticket type.');
+    if (!buyable.includes(tier)) {
+      const sale = tierSaleState(tier);
+      throw new RegistrationError(sale.reason === 'not_yet'
+        ? `${tier.name} tickets go on sale ${formatInTimeZone(sale.at, event.timezone)}.`
+        : `${tier.name} tickets are no longer on sale.`);
+    }
+  }
+
+  const cleanAnswers = validateAnswers(event, answers, tier?.id);
+
+  // Discount codes and the donation add-on are attendee-side only; staff
+  // just enter what they actually took at the kiosk.
+  let discount = null;
+  let discountCents = 0;
+  let donation = 0;
+  if (tier && source !== 'admin') {
+    try {
+      if (normalizeCode(discountCode)) {
+        discount = await prisma.discountCode.findUnique({ where: { eventId_code: { eventId: event.id, code: normalizeCode(discountCode) } } });
+        discountCents = checkDiscount(discount, tier);
+      }
+      if (stripeEnabled()) donation = checkDonation(event, donationCents);
+    } catch (e) {
+      if (e instanceof PricingError) throw new RegistrationError(e.message);
+      throw e;
+    }
+  }
+  // "Buy for friends": extra tickets on the same tier, paid by this buyer.
+  const friendList = source !== 'admin' && !voucher ? await resolveFriends({ event, buyer: user, friends }) : [];
+  if (friendList.length && tier.priceCents > 0 && !stripeEnabled())
+    throw new RegistrationError('Buying tickets for friends needs online payment, which is not set up for this event.');
+
+  const paid = tier?.priceCents > 0;
+  const staffPaid = paid && source === 'admin' && inPersonPayment?.method;
+  if (staffPaid) {
+    if (!STAFF_PAYMENT_METHODS.includes(inPersonPayment.method)) throw new RegistrationError('Choose how the payment was received.');
+    if (!Number.isInteger(inPersonPayment.amountCents) || inPersonPayment.amountCents < 0) throw new RegistrationError('Enter the amount received.');
+  }
+  const charge = registrationCharge({ tierPriceCents: tier?.priceCents, discountCents, donationCents: donation, friends: friendList.length });
+  const online = charge.totalCents > 0 && source !== 'admin' && stripeEnabled();
 
   return prisma.$transaction(async (tx) => {
-    let chosenTier, status;
+    let status;
 
     if (voucher) {
       const claimed = await tx.voucherCode.updateMany({
@@ -87,21 +184,42 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
         data: { usedCount: { increment: 1 } },
       });
       if (claimed.count === 0) throw new RegistrationError('That voucher code has already been used.');
-      chosenTier = 'FREE';
       status = 'CONFIRMED';
     } else {
-      if (event.capacity) {
+      if (event.capacity || tier.capacity != null) {
         await tx.$queryRaw`SELECT id FROM "Event" WHERE id = ${event.id} FOR UPDATE`;
       }
-      const confirmedCount = await tx.registration.count({
-        where: { eventId: event.id, status: 'CONFIRMED' },
+      const held = await tx.registration.count({
+        where: { eventId: event.id, status: { in: HOLDS_SEAT } },
       });
-      const state = registrationWindowState(event, confirmedCount);
+      const state = registrationWindowState(event, held);
       if (!state.open) throw new RegistrationError(state.reason);
-      chosenTier = event.donationRequired ? 'DONATION' : tier === 'DONATION' ? 'DONATION' : 'FREE';
-      if (chosenTier === 'DONATION' && !event.donationPaypalLink)
-        throw new RegistrationError('The donation tier is not available for this event.');
-      status = state.waitlist ? 'WAITLIST' : 'CONFIRMED';
+      const seats = 1 + friendList.length;
+      if (friendList.length && (state.waitlist || (event.capacity && held + seats > event.capacity)))
+        throw new RegistrationError(`There aren't ${seats} spots left. Try with fewer friends.`);
+      if (tier.capacity != null) {
+        const tierHeld = await tx.registration.count({
+          where: { ticketTierId: tier.id, status: { in: HOLDS_SEAT } },
+        });
+        if (tierHeld + seats > tier.capacity)
+          throw new RegistrationError(friendList.length ? `Not enough ${tier.name} tickets left for ${seats}.` : `${tier.name} tickets are sold out.`);
+      }
+      // A waitlisted ticket isn't charged yet. If a spot opens, promotion
+      // (promoteFromWaitlist) puts it on a timed hold to pay, or confirms it
+      // straight away if there's nothing to pay.
+      if (!state.waitlist && online && charge.totalCents < STRIPE_MIN_CHARGE_CENTS)
+        throw new RegistrationError(`Online payments must be at least $${(STRIPE_MIN_CHARGE_CENTS / 100).toFixed(2)}.`);
+      status = state.waitlist ? 'WAITLIST' : online ? 'PENDING_PAYMENT' : 'CONFIRMED';
+
+      if (discount) {
+        // Claimed here, compare-and-swap like vouchers; lib/payments.js gives
+        // it back if the checkout hold lapses unpaid.
+        const claimed = await tx.discountCode.updateMany({
+          where: { id: discount.id, active: true, ...(discount.maxUses != null ? { usedCount: { lt: discount.maxUses } } : {}) },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (claimed.count === 0) throw new RegistrationError('That discount code has been used up.');
+      }
     }
 
     const data = {
@@ -110,39 +228,121 @@ export async function createRegistration({ event, user, legalName, fursonaName, 
       email: email?.trim() || null,
       answers: cleanAnswers,
       status,
-      tier: chosenTier,
+      ticketTierId: tier?.id ?? null,
+      tierName: tier?.name ?? null,
       rsvp: 'YES',
       source,
       tosAcceptedAt: new Date(),
       tosVersion: tosVersion || null,
-      paymentMethod: chosenTier === 'DONATION' && PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null,
-      paymentAmount: chosenTier === 'DONATION' && paymentAmount != null && !isNaN(Number(paymentAmount)) ? Number(paymentAmount) : null,
-      paymentNote: chosenTier === 'DONATION' ? (paymentNote?.trim() || null) : null,
       voucherCodeId: voucher?.id || null,
       badgeTier: voucher?.badgeTier || null,
+      discountCodeId: discount?.id ?? null,
+      discountCents,
+      donationCents: donation,
     };
 
-
-    
-    if (existing) {
-      return tx.registration.update({ where: { id: existing.id }, data });
+    // Badge numbers go to spots that are actually held — a PENDING_PAYMENT
+    // registration gets one when the payment lands (lib/payments.js markPaid).
+    if (status !== 'PENDING_PAYMENT' && existing?.badgeNumber == null) {
+      const updatedEvent = await tx.event.update({
+        where: { id: event.id },
+        data: { nextBadgeNumber: { increment: 1 } },
+      });
+      data.badgeNumber = updatedEvent.nextBadgeNumber - 1;
     }
 
-    const updatedEvent = await tx.event.update({
-      where: { id: event.id },
-      data: { nextBadgeNumber: { increment: 1 } },
-    });
-    return tx.registration.create({
-      data: {
-        ...data,
-        code: ticketCode(),
-        secret: ticketSecret(),
-        eventId: event.id,
-        userId: user.id,
-        badgeNumber: updatedEvent.nextBadgeNumber - 1,
-      },
+    const reg = existing
+      ? await tx.registration.update({ where: { id: existing.id }, data })
+      : await tx.registration.create({
+          data: { ...data, code: ticketCode(), secret: ticketSecret(), eventId: event.id, userId: user.id },
+        });
+
+    if (staffPaid) {
+      await tx.payment.create({
+        data: {
+          registrationId: reg.id, method: inPersonPayment.method, status: 'PAID',
+          amountCents: inPersonPayment.amountCents, currency: tier.currency,
+          note: inPersonPayment.note?.trim() || null, paidAt: new Date(), processedById: processedById || null,
+        },
+      });
+    } else if (status === 'PENDING_PAYMENT') {
+      // The hold itself — startCheckout attaches a Stripe session to this row.
+      // A little over the checkout window, so the session (created a moment
+      // later with the full window) is what actually decides when it lapses.
+      await tx.payment.create({
+        data: {
+          registrationId: reg.id, method: 'STRIPE', status: 'PENDING',
+          amountCents: charge.totalCents, donationCents: charge.donationCents, currency: tier.currency,
+          expiresAt: new Date(Date.now() + (env.stripe.checkoutMinutes + 2) * 60_000),
+        },
+      });
+    }
+
+    // Each friend gets their own registration on the same tier, held (or
+    // confirmed) together with the buyer's and covered by the buyer's payment.
+    for (const f of friendList) {
+      let friendUser = f.user;
+      if (!friendUser) friendUser = await tx.user.create({ data: { displayName: f.name, legalName: f.name, email: f.email } });
+      const prior = await tx.registration.findUnique({ where: { eventId_userId: { eventId: event.id, userId: friendUser.id } } });
+      if (prior) await tx.registration.delete({ where: { id: prior.id } }); // a cancelled leftover (resolveFriends refused live ones)
+      const friendData = {
+        code: ticketCode(), secret: ticketSecret(), eventId: event.id, userId: friendUser.id,
+        legalName: f.name, fursonaName: '', email: f.email || friendUser.email || null, answers: {},
+        status, ticketTierId: tier.id, tierName: tier.name, rsvp: 'YES', source,
+        paidByRegistrationId: reg.id,
+      };
+      if (status !== 'PENDING_PAYMENT') {
+        const ev = await tx.event.update({ where: { id: event.id }, data: { nextBadgeNumber: { increment: 1 } } });
+        friendData.badgeNumber = ev.nextBadgeNumber - 1;
+      }
+      await tx.registration.create({ data: friendData });
+    }
+
+    return tx.registration.findUnique({
+      where: { id: reg.id },
+      include: { ticketTier: true, payments: { orderBy: { createdAt: 'asc' } }, boughtFor: true },
     });
   }, { maxWait: 10000, timeout: 10000 });
+}
+
+const MAX_FRIENDS = 5;
+
+/// Validates the friends a buyer is getting tickets for. Each needs a name
+/// and a way to reach them, so they can sign in and see their ticket: an
+/// email (an account is made for it if there isn't one) or the Telegram
+/// username of someone who has already messaged the bot.
+async function resolveFriends({ event, buyer, friends }) {
+  if (!Array.isArray(friends) || !friends.length) return [];
+  if (friends.length > MAX_FRIENDS) throw new RegistrationError(`You can buy for up to ${MAX_FRIENDS} friends at once.`);
+  const out = [];
+  for (const raw of friends) {
+    const name = String(raw?.name || '').trim();
+    const contact = String(raw?.contact || '').trim();
+    if (name.length < 2) throw new RegistrationError('Enter a name for each friend.');
+    if (!contact) throw new RegistrationError(`Add an email or Telegram username for ${name}.`);
+
+    let user = null;
+    let friendEmail = null;
+    if (/^\S+@\S+\.\S+$/.test(contact)) {
+      friendEmail = contact.toLowerCase();
+      user = await prisma.user.findUnique({ where: { emailIndex: blindIndex(friendEmail) } });
+    } else {
+      const handle = contact.replace(/^@/, '');
+      user = await prisma.user.findFirst({ where: { telegramUsername: { equals: handle, mode: 'insensitive' } } });
+      if (!user) throw new RegistrationError(`@${handle} has not messaged the bot yet. Ask them to send /start, or use their email.`);
+    }
+    if (user?.id === buyer.id) throw new RegistrationError("You're already getting your own ticket.");
+    if (user && out.some((o) => o.user?.id === user.id)) throw new RegistrationError(`${name} is listed twice.`);
+    if (friendEmail && out.some((o) => o.email === friendEmail)) throw new RegistrationError(`${contact} is listed twice.`);
+    if (user) {
+      const live = await prisma.registration.findFirst({ where: { eventId: event.id, userId: user.id, status: { not: 'CANCELLED' } } });
+      if (live) throw new RegistrationError(`${name} already has a ticket for this event.`);
+    }
+    const ban = await findMatchingBan({ legalName: name, email: friendEmail, telegramId: user?.telegramId, telegramUsername: user?.telegramUsername });
+    if (ban) throw new RegistrationError(`A ticket can't be bought for ${name}. Contact the organizers.`);
+    out.push({ name, email: friendEmail, user });
+  }
+  return out;
 }
 
 /// Creates the User a registration needs when there's no signed-in account to
@@ -172,6 +372,10 @@ export async function findOrCreateHeadlessUser({ eventId, legalName, fursonaName
 /// response formats differ, so that part isn't shared).
 export async function cancelRegistration(reg) {
   await prisma.registration.update({ where: { id: reg.id }, data: { status: 'CANCELLED' } });
+  if (reg.status === 'PENDING_PAYMENT') {
+    await abandonPendingPayments(reg.id);
+    await releaseDiscount(reg.id);
+  }
   return promoteFromWaitlist(reg.eventId);
 }
 
@@ -179,16 +383,31 @@ export async function cancelRegistration(reg) {
 export async function promoteFromWaitlist(eventId) {
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event?.capacity) return null;
-  const confirmed = await prisma.registration.count({ where: { eventId, status: 'CONFIRMED' } });
-  if (confirmed >= event.capacity) return null;
+  const held = await prisma.registration.count({ where: { eventId, status: { in: HOLDS_SEAT } } });
+  if (held >= event.capacity) return null;
   const next = await prisma.registration.findFirst({
     where: { eventId, status: 'WAITLIST' },
     orderBy: { createdAt: 'asc' },
+    include: { ticketTier: true },
   });
   if (!next) return null;
-  return prisma.registration.update({
-    where: { id: next.id },
-    data: { status: 'CONFIRMED' },
-    include: { user: true, event: true },
+  // Something to pay online: a timed hold, the same as a fresh paid
+  // registration (lib/payments.js expires it and promotes the next person
+  // if it isn't paid). Otherwise straight to confirmed.
+  const charge = registrationCharge({ tierPriceCents: next.ticketTier?.priceCents, discountCents: next.discountCents, donationCents: next.donationCents });
+  const toPay = charge.totalCents >= STRIPE_MIN_CHARGE_CENTS && next.source !== 'admin' && stripeEnabled();
+  return prisma.$transaction(async (tx) => {
+    const moved = await tx.registration.updateMany({ where: { id: next.id, status: 'WAITLIST' }, data: { status: toPay ? 'PENDING_PAYMENT' : 'CONFIRMED' } });
+    if (!moved.count) return null;
+    if (toPay) {
+      await tx.payment.create({
+        data: {
+          registrationId: next.id, method: 'STRIPE', status: 'PENDING',
+          amountCents: charge.totalCents, donationCents: charge.donationCents, currency: next.ticketTier.currency,
+          expiresAt: new Date(Date.now() + (env.stripe.checkoutMinutes + 2) * 60_000),
+        },
+      });
+    }
+    return tx.registration.findUnique({ where: { id: next.id }, include: { user: true, event: true, ticketTier: true } });
   });
 }

@@ -130,7 +130,10 @@ input, select, textarea {
   background: var(--card); color: var(--ink); width: 100%;
 }
 textarea { min-height: 110px; resize: vertical; }
-input[type='checkbox'] { width: auto; }
+input[type='checkbox'], input[type='radio'] { width: auto; }
+div.field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.choice { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; font-weight: 400; color: var(--ink); cursor: pointer; }
+.choice input { margin-top: 3px; }
 input[type='file'] { border: 1px dashed var(--rule); padding: 9px 10px; font-size: 13px; }
 .help { font-weight: 400; color: var(--ink-3); font-size: 12.5px; }
 .grid-2 { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; min-width: 0; }
@@ -191,6 +194,15 @@ a.stub:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 .tier.selected { border-color: var(--signal); background: color-mix(in srgb, var(--signal) 7%, var(--card)); }
 .tier .tier-name { font-weight: 700; font-size: 14px; }
 .tier .tier-help { font-size: 12px; color: var(--ink-3); }
+.tier .tier-help:empty { display: none; }
+.tier .tier-price { font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tier:disabled { cursor: not-allowed; opacity: .5; }
+.tier:disabled:hover { border-color: var(--rule); }
+
+/* ---- tier list (event page, read-only) ---- */
+.tier-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.tier-list li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid var(--rule); }
+.tier-list li:first-child { border-top: 0; padding-top: 0; }
 
 /* ---- tables ---- */
 /* auto width + min-width:100% lets columns size to their content (growing
@@ -220,25 +232,43 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 /* ---- admin frame ---- */
 .admin { display: grid; grid-template-columns: 210px 1fr; gap: 28px; align-items: start; }
 .admin-content { min-width: 0; }
-.side { position: sticky; top: 70px; display: grid; gap: 2px; }
-.side a { display: block; padding: 9px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }
+.side { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow-y: auto; }
+.side-links { display: grid; gap: 2px; }
+.side-group { display: grid; gap: 2px; margin-bottom: 10px; align-content: start; }
+.side-group .eyebrow { padding: 6px 12px 2px; margin: 0; }
+.side a { display: block; padding: 8px 12px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 500; }
+.side a:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .side a[aria-current='page'] { background: var(--ink); color: var(--paper); }
-/* Below the breakpoint the sidebar sits above the content instead of beside
-   it, so a tall sticky column of links would either eat the screen or hide
-   content as you scroll — turn it into a wrapped row of pills instead,
-   the same pattern already used for the per-event .tabbar below. */
-@media (max-width: 860px) {
-  .admin { grid-template-columns: 1fr; }
-  .side { position: static; display: flex; flex-wrap: wrap; gap: 6px; }
-  .side .eyebrow { display: none; }
-  .side a { padding: 7px 12px; }
+.side .side-back { font-size: 13px; color: var(--ink-2); }
+.side-event {
+  margin: 4px 12px 12px; font: 700 17px/1.25 var(--display); color: var(--ink);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
 }
+/* Inside an event, the instance-wide links stay reachable but step back. */
+.side-quiet { padding-top: 10px; border-top: 1px solid var(--rule); }
+.side-quiet a { padding: 6px 12px; font-size: 13px; }
+.side-toggle { display: none; }
 
-/* ---- per-event sub-nav ---- */
-.tabbar { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; flex-wrap: wrap; }
-.tabbar a { padding: 7px 14px; border-radius: 9px; color: var(--ink-2); text-decoration: none; font-size: 14px; font-weight: 600; }
-.tabbar a:hover { background: var(--paper); }
-.tabbar a[aria-current='page'] { background: var(--ink); color: var(--paper); }
+/* Below the breakpoint the sidebar sits above the content. A wall of
+   wrapped links pushed every page down, so it folds into one button that
+   names where you are and opens the full menu. */
+@media (max-width: 860px) {
+  .admin { grid-template-columns: 1fr; gap: 16px; }
+  .side { position: static; max-height: none; overflow: visible; }
+  .side-toggle {
+    display: flex; gap: 10px; align-items: center; width: 100%; padding: 11px 14px; border-radius: 10px;
+    border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: 600 14px var(--body); cursor: pointer; text-align: left;
+  }
+  .side-toggle > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side:not(.open) .side-links { display: none; }
+  .side.open .side-links { margin-top: 8px; padding: 10px; border: 1px solid var(--rule); border-radius: 12px; background: var(--card); }
+  .side.open .side-links { grid-template-columns: 1fr 1fr; column-gap: 8px; }
+  .side.open .side-back, .side.open .side-event { grid-column: 1 / -1; }
+  /* Overview gets its own row; the instance links share one full row in two columns. */
+  .side.open .side-group:first-of-type, .side.open .side-quiet { grid-column: 1 / -1; }
+  .side.open .side-quiet { grid-template-columns: 1fr 1fr; }
+  .side.open .side-quiet .eyebrow { grid-column: 1 / -1; }
+}
 
 /* ---- scanner ---- */
 .scanner { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 1; max-width: 460px; }
@@ -327,3 +357,176 @@ tr:hover td { background: color-mix(in srgb, var(--platform) 3%, transparent); }
 .site-footer { max-width: 1080px; margin: 0 auto; padding: 0 20px 32px; text-align: center; }
 .site-footer .hero-rule { margin: 0 0 18px; }
 .site-footer p { margin: 0; line-height: 1.7; }
+
+/* ---- payment disclosure ---- */
+.payment-notice { display: flex; gap: 6px; align-items: flex-start; margin: 0; text-align: left; }
+
+/* ---- busy buttons ----
+   aria-busy is set automatically by lib/busy.js while a click's API requests
+   are in flight; data-busy is for buttons that stay busy past their request
+   (e.g. while redirecting to Stripe). Either one shows a spinner and stops
+   double-submits. */
+.btn[aria-busy='true'], .btn[data-busy='true'] { pointer-events: none; cursor: progress; }
+.btn[aria-busy='true']::before, .btn[data-busy='true']::before {
+  content: ''; width: 1em; height: 1em; flex: 0 0 auto; box-sizing: border-box;
+  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+  animation: btn-spin .7s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  /* The global rule above stops the rotation; a pulsing ring still reads as "working". */
+  .btn[aria-busy='true']::before, .btn[data-busy='true']::before { animation: btn-pulse 1.2s ease-in-out infinite !important; }
+}
+@keyframes btn-pulse { 50% { opacity: .35; } }
+
+/* ---- seat-hold countdown ---- */
+.hold-countdown { font-size: 14px; color: var(--ink-2); }
+.hold-countdown strong { font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hold-countdown.urgent strong { color: var(--signal); }
+.hold-countdown.expired { color: var(--stop); font-weight: 600; }
+
+/* ---- refunded payments: greyed out, clearly finished ---- */
+.refunded-box {
+  display: inline-block; font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: 6px; white-space: nowrap;
+  color: var(--ink-3); background: color-mix(in srgb, var(--ink-3) 14%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--ink-3) 30%, var(--rule));
+}
+tr.refunded-row td { color: var(--ink-3); }
+tr.refunded-row td .mono { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--ink-3) 60%, transparent); }
+
+/* ---- register popup ---- */
+.reg-section { display: grid; gap: 12px; padding-top: 4px; }
+.reg-section + .reg-section { border-top: 1px solid var(--rule); padding-top: 16px; }
+.reg-heading { font: 700 13px/1.2 var(--body); letter-spacing: 0; color: var(--ink); margin: 0; }
+.reg-heading .help { font-weight: 400; }
+
+/* Choice chips — same selected look as the ticket cards. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font: 600 14px/1 var(--body); padding: 10px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--card); color: var(--ink);
+  transition: border-color .12s ease, background .12s ease;
+}
+.chip:hover { border-color: var(--ink-3); }
+.chip.selected { border-color: var(--signal); background: color-mix(in srgb, var(--signal) 10%, var(--card)); }
+.chip-input { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px 0 14px; cursor: text; }
+.chip-input input { border: 0; background: transparent; padding: 9px 4px; width: 72px; font: inherit; color: inherit; }
+.chip-input input:focus { outline: none; }
+
+.reg-summary {
+  display: grid; gap: 8px; padding: 14px 16px; border-radius: 10px;
+  background: color-mix(in srgb, var(--ink-3) 7%, var(--card)); border: 1px solid var(--rule); font-size: 14px;
+}
+.reg-summary .reg-discount { color: var(--go); }
+.reg-summary .reg-total { border-top: 1px solid var(--rule); padding-top: 8px; font-size: 15px; }
+.link-btn { background: none; border: 0; padding: 0; font: 600 13px/1.4 var(--body); color: var(--platform); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---- hotel block pickup meter ---- */
+/* The track is a lighter step of the fill's own hue, so the state reads
+   across the whole bar, not just the filled part. */
+.pickup-meter { --meter: var(--go); position: relative; height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--meter) 18%, var(--card)); overflow: hidden; }
+.pickup-meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--meter); }
+.pickup-meter.short { --meter: var(--signal); }
+/* The contract's pickup target, as a tick on the track. */
+.pickup-meter > i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); opacity: .55; }
+
+/* ---- scanner door status ---- */
+.door-status { display: grid; gap: 12px; }
+.door-stats { display: flex; flex-wrap: wrap; gap: 28px; }
+.door-stats > div { display: grid; gap: 2px; }
+.door-stats .eyebrow { margin: 0; }
+.door-stats strong { font: 600 26px/1.1 var(--display); }
+
+/* Rows that open something when clicked (incident list). */
+tr.clickable { cursor: pointer; }
+
+/* ---- public schedule ---- */
+.schedule-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 18px; }
+.schedule-bar .seg { flex-wrap: wrap; }
+.schedule { display: grid; gap: 18px; }
+.schedule-slot { display: grid; grid-template-columns: 84px 1fr; gap: 14px; align-items: start; }
+.schedule-time { display: grid; gap: 2px; padding-top: 14px; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) {
+  .schedule-slot { grid-template-columns: 1fr; gap: 6px; }
+  .schedule-time { padding-top: 0; grid-auto-flow: column; justify-content: start; gap: 8px; }
+}
+.session { display: grid; gap: 6px; }
+/* A grid child stretches to the full row by default; the track pill should hug its label. */
+.session > .pill { justify-self: start; }
+.session.starred { border-color: color-mix(in srgb, var(--signal) 45%, var(--rule)); }
+.star {
+  flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--rule);
+  background: var(--card); color: var(--ink-2); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.star:hover { border-color: var(--signal); }
+.star.on { background: var(--signal); border-color: var(--signal); color: #fff; }
+
+/* ---- event overview ---- */
+/* A share of a limit: the fill carries the state, the track is a lighter
+   step of the same hue (same rule as .pickup-meter). */
+.meter { --meter: var(--go); position: relative; height: 8px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--meter) 18%, var(--card)); }
+.meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--meter); }
+.meter.signal { --meter: var(--signal); }
+.meter.stop { --meter: var(--stop); }
+.overview-stats .stat-tile { align-content: start; }
+a.stat-link, a.overview-row { color: inherit; text-decoration: none; transition: border-color .15s; }
+a.stat-link:hover, a.overview-row:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--rule)); }
+.attention { list-style: none; margin: 0; padding: 0; display: grid; }
+.attention li { display: flex; gap: 10px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--rule); }
+.attention li:first-child { border-top: 0; padding-top: 0; }
+.attention li .pill { flex: 0 0 auto; }
+.attention a { color: var(--ink); text-decoration: none; }
+.attention a:hover { text-decoration: underline; }
+
+/* ---- loading skeletons (components/Skeleton.jsx) ---- */
+.bone {
+  display: block; max-width: 100%; border-radius: 6px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ink) 7%, var(--card)) 0%,
+    color-mix(in srgb, var(--ink) 12%, var(--card)) 50%,
+    color-mix(in srgb, var(--ink) 7%, var(--card)) 100%);
+  background-size: 200% 100%;
+  animation: bone-shimmer 1.4s ease-in-out infinite;
+}
+.bone-lines { display: grid; gap: 8px; }
+@keyframes bone-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+/* Waits a beat before showing, so a fast load never flashes grey boxes. */
+.skeleton { animation: skeleton-in .2s ease-out .15s both; }
+@keyframes skeleton-in { from { opacity: 0; } }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* ---- audit log feed ---- */
+.chip.sm { font-size: 13px; padding: 7px 12px; }
+.audit-feed { list-style: none; margin: 0; padding: 0; }
+.audit-entry { display: grid; grid-template-columns: 64px 28px 1fr; gap: 12px; align-items: start; padding: 12px 18px; border-top: 1px solid var(--rule); }
+.audit-entry:first-child { border-top: 0; }
+.audit-time { font: 500 12px/28px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.audit-system { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--paper); border: 1px dashed var(--rule); color: var(--ink-3); font-size: 14px; }
+.audit-body { min-width: 0; padding-top: 3px; }
+.audit-line { margin: 0; overflow-wrap: anywhere; }
+.audit-target { font-weight: 600; color: var(--ink); }
+a.audit-target { color: var(--platform); }
+.audit-target.deleted { color: var(--ink-3); font-weight: 500; }
+.audit-details { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 6px 0 0; font-size: 13px; }
+.audit-details > div { display: flex; gap: 6px; min-width: 0; }
+.audit-details dt { color: var(--ink-3); }
+.audit-details dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .audit-entry { grid-template-columns: 28px 1fr; padding: 12px 14px; }
+  .audit-time { grid-column: 2; grid-row: 2; line-height: 1.4; }
+}
+
+/* ---- staff permission picker ---- */
+.perm-areas { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); align-items: start; }
+.perm-area { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 14px 8px; min-width: 0; }
+.perm-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 4px; }
+.perm-head .eyebrow { margin: 0; }
+.staff-actions { gap: 6px; flex-wrap: nowrap; justify-content: flex-end; }
+.staff-actions .btn { white-space: nowrap; }
+.perm { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; font-size: 14px; cursor: pointer; border-top: 1px solid var(--rule); }
+.perm:first-of-type { border-top: 0; }
+.perm input { margin-top: 3px; }
+.perm.inherited { cursor: default; }
+.perm.inherited strong { color: var(--ink-2); }

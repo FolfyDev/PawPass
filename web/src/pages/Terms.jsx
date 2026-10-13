@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useSession } from '../lib/session.jsx';
 import { usePageMeta } from '../lib/meta.js';
 import Breadcrumbs from '../components/Breadcrumbs.jsx';
@@ -9,13 +11,20 @@ export default function Terms() {
   const entity = settings?.legal?.entityName || settings?.orgName || 'this instance';
   const contact = settings?.legal?.contactEmail || settings?.supportEmail || '';
 
+  // In-page links like /legal/privacy#payments: the router doesn't scroll to
+  // the hash on its own.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+  }, [hash]);
+
   return (
     <article style={{ padding: '40px 0 60px', maxWidth: 720 }}>
       <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: 'Terms of Service' }]} />
       <p className="eyebrow">Legal</p>
       <div className="hero-rule" style={{ maxWidth: 80 }} />
       <h1>Terms of Service</h1>
-      <p className="muted small">Last updated: September 1, 2026</p>
+      <p className="muted small">Last updated: October 8, 2026</p>
 
       <div className="stack" style={{ gap: 22 }}>
         <p>
@@ -39,7 +48,7 @@ export default function Terms() {
           <p>
             You may sign in with a Telegram account or with an email and password. You are responsible for keeping
             your credentials secure. The preferred name you provide at registration must match the photo ID you bring
-            to check-in  providing false identity information may result in your registration being cancelled at
+            to check-in. Providing false identity information may result in your registration being cancelled at
             the door.
           </p>
         </section>
@@ -54,19 +63,31 @@ export default function Terms() {
           </p>
         </section>
 
-        <section>
+        <section id="payments" style={{ scrollMarginTop: 80 }}>
           <h2>4. Payments</h2>
           <p>
-            Where an event offers a paid or donation tier, payment is completed through PayPal or recorded directly
-            by event staff (for onsite/cash payments)  PawPass itself does not process or store payment card
-            details. Refund and cancellation policies are set by each event's organizers, not by us.
+            Where an event offers paid tickets, you pay either online through Stripe or in person to event staff.
+            Online payments are made on Stripe's secure hosted checkout page and charged by <strong>{entity}</strong>.
+            PawPass itself never receives, processes or stores your card details. See the{' '}
+            <Link to="/legal/privacy#payments">privacy policy</Link> for exactly what is shared with Stripe.
+          </p>
+          <p>
+            Choosing a paid ticket holds your spot for a limited time while you pay. If payment isn't completed in
+            that time, the hold ends and the spot is released. Your ticket is confirmed only once Stripe confirms the
+            payment. Prices are shown in the currency the organizers set, and your card issuer may add its own fees
+            for foreign currencies.
+          </p>
+          <p>
+            Refund and cancellation policies are set by each event's organizers, not by PawPass. Cancelling a
+            registration does not refund it automatically; contact the organizers. If a payment is fully refunded,
+            the ticket it paid for is cancelled.
           </p>
         </section>
 
         <section>
           <h2>5. Acceptable use</h2>
           <p>
-            You agree not to misuse the platform  including attempting to access another attendee's ticket or
+            You agree not to misuse the platform, including attempting to access another attendee's ticket or
             account, submitting fraudulent registrations, or interfering with check-in or badge printing at an
             event. We may suspend or cancel a registration or account that violates these Terms.
           </p>

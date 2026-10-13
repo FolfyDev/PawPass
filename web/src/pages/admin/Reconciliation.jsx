@@ -1,28 +1,54 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
-import EventTabs from '../../components/EventTabs.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
-const METHODS = ['CASH', 'CARD', 'PAYPAL', 'OTHER'];
+const minus = (n) => (n ? `−${money(n)}` : money(0));
+const METHOD_LABEL = { CASH: 'Cash', CARD: 'Card', PAYPAL: 'PayPal', STRIPE: 'Stripe (online)', OTHER: 'Other' };
+const CATEGORIES = [['tickets', 'Tickets'], ['donations', 'Donations'], ['merch', 'Merch'], ['vendors', 'Vendor tables']];
 
-function MethodTable({ title, byMethod, total }) {
+function Stat({ label, value, big }) {
   return (
-    <div className="card" style={{ padding: 0, overflow: 'auto' }}>
-      <p className="eyebrow" style={{ padding: '14px 16px 0' }}>{title}</p>
+    <div className="stack" style={{ gap: 2 }}>
+      <span className="eyebrow">{label}</span>
+      <strong className="mono" style={{ fontSize: big ? 30 : 20 }}>{value}</strong>
+    </div>
+  );
+}
+
+/// One table: a row per payment method that actually has money on it, a
+/// column per kind of income. Count shown small next to each amount.
+function Breakdown({ data }) {
+  const rows = data.methods.filter((m) => CATEGORIES.some(([k]) => data[k][m]?.count));
+  if (!rows.length) return <p className="muted" style={{ margin: 0 }}>Nothing collected yet.</p>;
+  const cell = (k, m) => {
+    const v = data[k][m];
+    if (!v?.count) return <span className="muted">-</span>;
+    return <>{money(v.total)} <span className="small muted">×{v.count}</span></>;
+  };
+  const rowTotal = (m) => CATEGORIES.reduce((sum, [k]) => sum + (data[k][m]?.total || 0), 0);
+  return (
+    <div style={{ overflow: 'auto' }}>
       <table>
-        <thead><tr><th>Method</th><th>Count</th><th>Total</th></tr></thead>
+        <thead>
+          <tr><th>Method</th>{CATEGORIES.map(([k, label]) => <th key={k} style={{ textAlign: 'right' }}>{label}</th>)}<th style={{ textAlign: 'right' }}>Total</th></tr>
+        </thead>
         <tbody>
-          {METHODS.map((m) => (
+          {rows.map((m) => (
             <tr key={m}>
-              <td>{m}</td>
-              <td className="mono">{byMethod[m]?.count ?? 0}</td>
-              <td className="mono">{money(byMethod[m]?.total)}</td>
+              <td>{METHOD_LABEL[m] || m}</td>
+              {CATEGORIES.map(([k]) => <td key={k} className="mono" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{cell(k, m)}</td>)}
+              <td className="mono" style={{ textAlign: 'right' }}><strong>{money(rowTotal(m))}</strong></td>
             </tr>
           ))}
         </tbody>
         <tfoot>
-          <tr><td><strong>Total</strong></td><td /><td className="mono"><strong>{money(total)}</strong></td></tr>
+          <tr>
+            <td><strong>Total</strong></td>
+            {CATEGORIES.map(([k]) => <td key={k} className="mono" style={{ textAlign: 'right' }}><strong>{money(data[`${k}Total`])}</strong></td>)}
+            <td className="mono" style={{ textAlign: 'right' }}><strong>{money(data.grandTotal)}</strong></td>
+          </tr>
         </tfoot>
       </table>
     </div>
@@ -39,7 +65,7 @@ export default function Reconciliation() {
     api.get(`/api/admin/events/${id}/reconciliation`).then(setData);
   }, [id]);
 
-  if (!event || !data) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!event || !data) return <PageSkeleton />;
 
   return (
     <>
@@ -50,27 +76,34 @@ export default function Reconciliation() {
         </div>
         <a className="btn" href={`${api.base}/api/admin/events/${id}/reconciliation.csv`}>Export CSV</a>
       </div>
-      <EventTabs id={id} />
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <p className="eyebrow" style={{ marginBottom: 4 }}>Grand total collected</p>
-        <p style={{ fontSize: 32, fontWeight: 700, margin: 0 }}>{money(data.grandTotal)}</p>
-        <p className="small muted" style={{ margin: '6px 0 0' }}>
-          {money(data.donationsTotal)} from donations · {money(data.merchTotal)} from merch
-        </p>
+      <div className="card row" style={{ marginBottom: 20, gap: 40, alignItems: 'flex-end' }}>
+        <Stat label="Grand total" value={money(data.grandTotal)} big />
+        <Stat label="Tickets" value={money(data.ticketsTotal)} />
+        <Stat label="Donations" value={money(data.donationsTotal)} />
+        <Stat label="Merch" value={money(data.merchTotal)} />
+        {data.vendorsTotal > 0 && <Stat label="Vendor tables" value={money(data.vendorsTotal)} />}
       </div>
 
-      {data.unrecordedDonations > 0 && (
+      {data.stripe?.count > 0 && (
+        <div className="card row" style={{ marginBottom: 20, gap: 40, alignItems: 'flex-end' }}>
+          <Stat label="Stripe charged" value={money(data.stripe.grossCents / 100)} />
+          <Stat label="Refunded" value={minus(data.stripe.refundedCents / 100)} />
+          <Stat label="Stripe fees" value={minus(data.stripe.feeCents / 100)} />
+          <Stat label="Net payout" value={money(data.stripe.netCents / 100)} />
+        </div>
+      )}
+
+      {data.unpaidTickets > 0 && (
         <p className="note" style={{ marginBottom: 20 }}>
-          {data.unrecordedDonations} donation-tier registration{data.unrecordedDonations === 1 ? '' : 's'} with no payment method recorded
-          (paid — or not — via the PayPal link on their own, never confirmed at the door) are excluded from this total.
-          Check <Link to={`/admin/events/${id}/attendees`}>Attendees</Link> for the "Unrecorded" tag.
+          {data.unpaidTickets} registration{data.unpaidTickets === 1 ? '' : 's'} on a paid ticket still owe{data.unpaidTickets === 1 ? 's' : ''} {money(data.unpaidTotal)} in
+          total (pay-at-the-door tickets nobody has collected on yet) and {data.unpaidTickets === 1 ? 'is' : 'are'} not counted above.
+          Check <Link to={`/admin/events/${id}/attendees`}>Attendees</Link> for the "Owes" tag.
         </p>
       )}
 
-      <div className="grid-2" style={{ gap: 20 }}>
-        <MethodTable title="Donations (registrations + in-person)" byMethod={data.donations} total={data.donationsTotal} />
-        <MethodTable title="Merch sales" byMethod={data.merch} total={data.merchTotal} />
+      <div className="card">
+        <Breakdown data={data} />
       </div>
     </>
   );

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../../src/lib/db.js';
 import { blindIndex } from '../../src/lib/crypto.js';
+import { STAFF_DEFAULTS } from '../../src/lib/permissions.js';
 
 // Every test file imports this module before touching the app, so this is
 // the one place to flag "we're in the test suite" — the registration rate
@@ -31,9 +32,28 @@ assertTestDatabase();
 const CLEAR_ORDER = [
   'auditLog',
   'ban',
+  'incidentNote',
+  'incidentPerson',
+  'incident',
   'sale',
   'donation',
+  'stripeEvent',
+  'payment',
+  'vendorApplication',
+  'vendorTableType',
+  'checkIn',
+  'sessionStar',
+  'panelSubmission',
+  'scheduleSession',
+  'eventRoom',
+  'volunteerSignup',
+  'roomReservation',
+  'roomBlockNight',
+  'roomBlock',
+  'hotel',
+  'volunteerShift',
   'registration',
+  'ticketTier',
   'merchItem',
   'voucherCode',
   'emailCampaign',
@@ -42,6 +62,8 @@ const CLEAR_ORDER = [
   'botSession',
   'event',
   'badgeTemplate',
+  'staffGroupMember',
+  'staffGroup',
   'user',
   'setting',
 ];
@@ -57,10 +79,14 @@ export async function closeDb() {
 let seq = 0;
 const next = () => ++seq;
 
-export function createEvent(overrides = {}) {
+/// Every event needs at least one active ticket tier to accept
+/// registrations; by default it gets one free "Attendee" tier, same as a v1
+/// event after the v2 migration. Pass `tiers` to replace it ([] for none).
+/// The created tiers come back on `event.ticketTiers`, in the order given.
+export async function createEvent(overrides = {}, { tiers = [{ name: 'Attendee' }] } = {}) {
   const n = next();
   const now = new Date();
-  return prisma.event.create({
+  const event = await prisma.event.create({
     data: {
       slug: `test-event-${n}-${Date.now()}`,
       title: `Test Event ${n}`,
@@ -70,6 +96,11 @@ export function createEvent(overrides = {}) {
       ...overrides,
     },
   });
+  event.ticketTiers = [];
+  for (const [i, t] of tiers.entries()) {
+    event.ticketTiers.push(await prisma.ticketTier.create({ data: { eventId: event.id, sortOrder: i, ...t } }));
+  }
+  return event;
 }
 
 export function createUser(overrides = {}) {
@@ -82,7 +113,10 @@ export function createUser(overrides = {}) {
   });
 }
 
-export async function createStaff({ role = 'ADMIN', password = 'staff-password-123', ...overrides } = {}) {
+/// An admin lands in the "Staff" group with the default permissions, the
+/// same place the 0015 migration puts every existing admin. Pass
+/// `staffGroup: false` for an admin with only what `permissions` grants.
+export async function createStaff({ role = 'ADMIN', password = 'staff-password-123', staffGroup = true, ...overrides } = {}) {
   const n = next();
   const user = await prisma.user.create({
     data: {
@@ -93,6 +127,12 @@ export async function createStaff({ role = 'ADMIN', password = 'staff-password-1
       ...overrides,
     },
   });
+  if (role === 'ADMIN' && staffGroup) {
+    const group = await prisma.staffGroup.upsert({
+      where: { name: 'Staff' }, update: {}, create: { name: 'Staff', permissions: STAFF_DEFAULTS },
+    });
+    await prisma.staffGroupMember.create({ data: { userId: user.id, groupId: group.id } });
+  }
   return { user, password };
 }
 

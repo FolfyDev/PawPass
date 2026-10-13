@@ -33,6 +33,13 @@ export async function sendOtpEmail(email, code) {
   });
 }
 
+/// A short plain-text notice (refunds, cancellation decisions). Callers
+/// decide whether a missing SMTP config is worth reporting.
+export async function sendNoticeEmail(to, subject, text) {
+  if (!to) return;
+  await getTransport().sendMail({ from: env.smtp.from, to, subject, text });
+}
+
 export async function sendRegistrationConfirmation(reg, event, settings) {
   if (!reg.email) return;
   const tx = getTransport();

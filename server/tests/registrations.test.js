@@ -124,13 +124,91 @@ describe('registrations', () => {
     assert.equal(ok.status, 200);
   });
 
-  test('forces the donation tier when the event requires payment', async () => {
-    const event = await createEvent({ donationRequired: true, donationPaypalLink: 'https://paypal.me/test' });
-    const res = await request(app)
-      .post(`/api/events/${event.slug}/register`)
-      .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true, tier: 'FREE' });
+  test('requires choosing a ticket type when an event has more than one', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Attendee' }, { name: 'Sponsor', priceCents: 5000 }] });
+    const [attendee, sponsor] = event.ticketTiers;
+
+    const none = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true });
+    assert.equal(none.status, 400);
+
+    const free = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true, ticketTierId: attendee.id });
+    assert.equal(free.status, 200);
+    assert.equal(free.body.tierName, 'Attendee');
+    assert.equal(free.body.balanceDueCents, 0);
+
+    // No Stripe configured: a paid tier is confirmed with the balance due at the door.
+    const paid = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'John Doe', email: nextEmail(), acceptedTos: true, ticketTierId: sponsor.id });
+    assert.equal(paid.status, 200);
+    assert.equal(paid.body.status, 'CONFIRMED');
+    assert.equal(paid.body.tierName, 'Sponsor');
+    assert.equal(paid.body.balanceDueCents, 5000);
+    assert.equal(paid.body.checkoutUrl, undefined);
+  });
+
+  test('refuses a tier that is inactive or belongs to another event', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Attendee' }, { name: 'Old', active: false }] });
+    const other = await createEvent();
+    for (const ticketTierId of [event.ticketTiers[1].id, other.ticketTiers[0].id]) {
+      const res = await request(app).post(`/api/events/${event.slug}/register`)
+        .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true, ticketTierId });
+      assert.equal(res.status, 400);
+    }
+  });
+
+  test('closes registration when no tier is on sale', async () => {
+    const event = await createEvent({}, { tiers: [] });
+    const res = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /No tickets/);
+  });
+
+  test('stops selling a tier at its own limit, without waitlisting', async () => {
+    const event = await createEvent({ waitlistEnabled: true }, { tiers: [{ name: 'Early bird', capacity: 1 }, { name: 'Attendee' }] });
+    const [early] = event.ticketTiers;
+    const a = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'First Attendee', email: nextEmail(), acceptedTos: true, ticketTierId: early.id });
+    assert.equal(a.status, 200);
+    const b = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Second Attendee', email: nextEmail(), acceptedTos: true, ticketTierId: early.id });
+    assert.equal(b.status, 400);
+    assert.match(b.body.error, /sold out/);
+
+    const page = await request(app).get(`/api/events/${event.slug}`);
+    assert.deepEqual(page.body.tiers.map((t) => [t.name, t.soldOut]), [['Early bird', true], ['Attendee', false]]);
+  });
+
+  test('a voucher bypasses tiers and records no tier', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Sponsor', priceCents: 5000 }, { name: 'Attendee' }] });
+    const voucher = await createVoucher(event.id);
+    const res = await request(app).post(`/api/events/${event.slug}/register`)
+      .send({ legalName: 'Jane Doe', email: nextEmail(), acceptedTos: true, voucherCode: voucher.code });
     assert.equal(res.status, 200);
-    assert.equal(res.body.tier, 'DONATION');
+    assert.equal(res.body.ticketTierId, null);
+    assert.equal(res.body.badgeTier, 'Organizer');
+  });
+
+  test('kiosk records an in-person payment for a paid tier', async () => {
+    const event = await createEvent({}, { tiers: [{ name: 'Sponsor', priceCents: 5000 }] });
+    const { user, password } = await createStaff({ role: 'ADMIN' });
+    const agent = request.agent(app);
+    await agent.post('/api/auth/password').send({ email: user.email, password });
+
+    const res = await agent.post('/api/admin/registrations').send({
+      eventId: event.id, legalName: 'Walk In', ticketTierId: event.ticketTiers[0].id,
+      payment: { method: 'CASH', amount: '50.00', note: 'exact change' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.paidCents, 5000);
+    assert.equal(res.body.paymentMethod, 'CASH');
+    assert.equal(res.body.balanceDueCents, 0);
+
+    const recon = await agent.get(`/api/admin/events/${event.id}/reconciliation`);
+    assert.equal(recon.body.tickets.CASH.total, 50);
+    assert.equal(recon.body.unpaidTickets, 0);
   });
 
   test('admin search finds an attendee by a partial, case-insensitive name match, even though the field is encrypted at rest', async () => {

@@ -1,13 +1,15 @@
+import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useSession } from '../../lib/session.jsx';
 import { Field, Empty } from '../../components/Bits.jsx';
+import { PageSkeleton } from '../../components/Skeleton.jsx';
 
 const BLANK = { legalName: '', email: '', telegramId: '', telegramUsername: '', reason: '' };
 
 export default function Bans() {
-  const { user } = useSession();
-  const isOwner = user.role === 'OWNER';
+  const { can } = useSession();
+  const canManage = can('bans.manage');
   const [bans, setBans] = useState(null);
   const [attempts, setAttempts] = useState(null);
   const [draft, setDraft] = useState(BLANK);
@@ -35,7 +37,7 @@ export default function Bans() {
     catch (e) { setMsg(e.message); setMsgOk(false); }
   };
 
-  if (!bans || !attempts) return <p className="muted" style={{ paddingTop: 40 }}>Loading…</p>;
+  if (!bans || !attempts) return <PageSkeleton />;
 
   return (
     <>
@@ -44,7 +46,7 @@ export default function Bans() {
 
       {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`} style={{ marginBottom: 16 }}>{msg}</p>}
 
-      {isOwner && (
+      {canManage && (
         <div className="card stack" style={{ marginBottom: 24 }}>
           <h2 style={{ margin: 0 }}>Add a ban</h2>
           <div className="grid-2">
@@ -65,7 +67,7 @@ export default function Bans() {
       {bans.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'auto', marginBottom: 32 }}>
           <table>
-            <thead><tr><th>Preferred name</th><th>Email</th><th>Telegram</th><th>Reason</th><th>Added</th>{isOwner && <th />}</tr></thead>
+            <thead><tr><th>Preferred name</th><th>Email</th><th>Telegram</th><th>Reason</th><th>Added</th>{canManage && <th />}</tr></thead>
             <tbody>
               {bans.map((b) => (
                 <tr key={b.id}>
@@ -76,11 +78,14 @@ export default function Bans() {
                       ? <>{b.telegramUsername ? `@${b.telegramUsername}` : ''}{b.telegramId ? <><br />id {b.telegramId}</> : ''}</>
                       : '-'}
                   </td>
-                  <td className="small muted">{b.reason || '-'}</td>
+                  <td className="small muted">
+                    {b.reason || '-'}
+                    {b.incidentId && <> · <Link to={`/admin/incidents/${b.incidentId}`}>Incident report</Link></>}
+                  </td>
                   <td className="small muted" style={{ whiteSpace: 'nowrap' }}>
                     {new Date(b.createdAt).toLocaleDateString()}{b.createdBy ? ` - ${b.createdBy.displayName}` : ''}
                   </td>
-                  {isOwner && (
+                  {canManage && (
                     <td style={{ textAlign: 'right' }}>
                       <button className="btn sm danger" onClick={() => remove(b)}>Remove</button>
                     </td>

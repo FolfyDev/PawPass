@@ -11,9 +11,15 @@ import { loadUser, issueToken, setSessionCookie, redeemLoginCode, LoginCodeError
 import { authRouter, loginLimiter } from './routes/auth.js';
 import { publicRouter } from './routes/public.js';
 import { adminRouter } from './routes/admin.js';
+import { incidentRouter } from './routes/incidents.js';
+import { schedulePublicRouter, scheduleAdminRouter } from './routes/schedule.js';
+import { vendorPublicRouter, vendorAdminRouter } from './routes/vendors.js';
+import { overviewRouter } from './routes/overview.js';
 import { badgeRouter } from './routes/badges.js';
 import { STARTER_TEMPLATE } from './badges/template.js';
 import { escapeHtml } from './lib/html.js';
+import { stripeWebhook, createWebhookLimiters } from './lib/payments.js';
+import { verifyEncryptionKey } from './lib/keycheck.js';
 
 function isLocalDev() {
   try {
@@ -34,11 +40,11 @@ if (env.encryptionKey === 'insecure-dev-encryption-key-change-me' && !isLocalDev
 
 const MIN_SECRET_LENGTH = 32;
 if (env.jwtSecret.length < MIN_SECRET_LENGTH && !isLocalDev()) {
-  console.error(`Refusing to start: JWT_SECRET is too short (${env.jwtSecret.length} chars) — use at least ${MIN_SECRET_LENGTH} random characters.`);
+  console.error(`Refusing to start: JWT_SECRET is too short (${env.jwtSecret.length} chars). Use at least ${MIN_SECRET_LENGTH} random characters.`);
   process.exit(1);
 }
 if (env.encryptionKey.length < MIN_SECRET_LENGTH && !isLocalDev()) {
-  console.error(`Refusing to start: ENCRYPTION_KEY is too short (${env.encryptionKey.length} chars) — use at least ${MIN_SECRET_LENGTH} random characters.`);
+  console.error(`Refusing to start: ENCRYPTION_KEY is too short (${env.encryptionKey.length} chars). Use at least ${MIN_SECRET_LENGTH} random characters.`);
   process.exit(1);
 }
 if ((env.owner.password || 'change-me-now') === 'change-me-now' && !isLocalDev()) {
@@ -46,7 +52,14 @@ if ((env.owner.password || 'change-me-now') === 'change-me-now' && !isLocalDev()
 }
 
 export const app = express();
-app.set('trust proxy', 1);
+// Requests arrive through two proxies in production — Cloudflare Tunnel or
+// Caddy, then the web container's nginx — so trusting a fixed hop count of 1
+// made req.ip the outer proxy's address for every visitor, and turned each
+// rate limiter into one shared bucket for the whole site. Trusting only hops
+// on loopback/private addresses lands on the real client instead, and a client
+// can't spoof it: the edge proxy appends the true address after anything the
+// client put in X-Forwarded-For, and that public address is where trust stops.
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -71,6 +84,9 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors({ origin: [env.webUrl], credentials: true }));
+// Before express.json(): Stripe's signature covers the raw request bytes, and
+// a parsed-then-reserialized body won't verify.
+app.post('/api/stripe/webhook', ...createWebhookLimiters(), express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhook);
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(loadUser);
@@ -89,7 +105,7 @@ app.get('/robots.txt', (_req, res) => {
 });
 
 app.get('/sitemap.xml', async (_req, res) => {
-  const events = await prisma.event.findMany({ where: { published: true }, select: { slug: true, updatedAt: true } });
+  const events = await prisma.event.findMany({ where: { published: true }, select: { slug: true, createdAt: true } });
   const staticUrls = [
     { loc: '/', priority: '1.0' },
     { loc: '/login', priority: '0.3' },
@@ -98,13 +114,19 @@ app.get('/sitemap.xml', async (_req, res) => {
   ];
   const urls = [
     ...staticUrls.map((u) => `  <url><loc>${env.webUrl}${u.loc}</loc><priority>${u.priority}</priority></url>`),
-    ...events.map((e) => `  <url><loc>${env.webUrl}/e/${e.slug}</loc><lastmod>${e.updatedAt.toISOString().slice(0, 10)}</lastmod><priority>0.8</priority></url>`),
+    ...events.map((e) => `  <url><loc>${env.webUrl}/e/${e.slug}</loc><lastmod>${e.createdAt.toISOString().slice(0, 10)}</lastmod><priority>0.8</priority></url>`),
   ];
   res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`);
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api', schedulePublicRouter);
+app.use('/api', vendorPublicRouter);
 app.use('/api', publicRouter);
+app.use('/api/admin/incidents', incidentRouter);
+app.use('/api/admin', scheduleAdminRouter);
+app.use('/api/admin', vendorAdminRouter);
+app.use('/api/admin', overviewRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/badges', badgeRouter);
 
@@ -137,11 +159,12 @@ app.get('/l/:code', loginLimiter, async (req, res) => {
 });
 
 app.use((err, req, res, _next) => {
-  console.error(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} — user ${req.user?.id ?? 'anon'}`, err);
+  console.error(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} user ${req.user?.id ?? 'anon'}`, err);
   res.status(500).json({ error: 'Something went wrong on our end.' });
 });
 
 export async function bootstrap() {
+  await verifyEncryptionKey();
   if ((await prisma.badgeTemplate.count()) === 0) {
     await prisma.badgeTemplate.create({ data: { ...STARTER_TEMPLATE, isDefault: true } });
   }

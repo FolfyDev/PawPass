@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Field, Pill } from '../../components/Bits.jsx';
+import { useSession } from '../../lib/session.jsx';
 
 const AUDIENCES = [
   ['all', 'Everyone registered'],
@@ -10,6 +11,8 @@ const AUDIENCES = [
 ];
 
 export default function Email() {
+  const { can } = useSession();
+  const canSend = can('email.send');
   const [events, setEvents] = useState([]);
   const [sent, setSent] = useState([]);
   const [draft, setDraft] = useState({ eventId: '', subject: '', body: '', audience: 'all' });
@@ -27,6 +30,27 @@ export default function Email() {
       setMsg(dryRun ? `${r.recipients} people would receive this.` : `Sent to ${r.sent} of ${r.recipients}.`);
       setMsgOk(true);
       if (!dryRun) { setDraft({ ...draft, subject: '', body: '' }); load(); }
+    } catch (e) { setMsg(e.message); setMsgOk(false); }
+  };
+
+  // Without the send permission a campaign is saved as a draft for someone
+  // who has it to send from the list below.
+  const saveDraft = async () => {
+    setMsg('');
+    try {
+      await api.post('/api/admin/campaigns', draft);
+      setMsg('Saved as a draft. Someone who can send emails can send it from the list below.');
+      setMsgOk(true);
+      setDraft({ ...draft, subject: '', body: '' });
+      load();
+    } catch (e) { setMsg(e.message); setMsgOk(false); }
+  };
+  const sendDraft = async (c) => {
+    if (!confirm(`Send "${c.subject}" now?`)) return;
+    setMsg('');
+    try {
+      const r = await api.post(`/api/admin/campaigns/${c.id}/send`, { dryRun: false });
+      setMsg(`Sent to ${r.sent} of ${r.recipients}.`); setMsgOk(true); load();
     } catch (e) { setMsg(e.message); setMsgOk(false); }
   };
 
@@ -54,11 +78,18 @@ export default function Email() {
           <textarea style={{ minHeight: 200 }} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
         </Field>
         {msg && <p className={`note ${msgOk ? 'good' : 'bad'}`}>{msg}</p>}
-        <div className="row">
-          <button className="btn" onClick={() => send(true)}>Count recipients</button>
-          <button className="btn signal" disabled={!draft.subject || !draft.body} onClick={() => send(false)}>Send now</button>
-        </div>
-        <p className="small muted" style={{ margin: 0 }}>Only people who gave an email address receive these. Telegram-only attendees will not.</p>
+        {canSend ? (
+          <div className="row">
+            <button className="btn" onClick={() => send(true)}>Count recipients</button>
+            <button className="btn signal" disabled={!draft.subject || !draft.body} onClick={() => send(false)}>Send now</button>
+          </div>
+        ) : (
+          <div className="row">
+            <button className="btn primary" disabled={!draft.subject || !draft.body} onClick={saveDraft}>Save draft</button>
+            <span className="small muted">Sending needs the Send emails permission.</span>
+          </div>
+        )}
+        <p className="small muted" style={{ margin: 0 }}>Only sent to people with an email address.</p>
       </div>
 
       <h2>Sent</h2>
@@ -70,7 +101,12 @@ export default function Email() {
               <tr key={c.id}>
                 <td>{c.subject}</td>
                 <td className="small muted">{c.audience}</td>
-                <td className="small">{c.sentAt ? new Date(c.sentAt).toLocaleString() : <Pill>Draft</Pill>}</td>
+                <td className="small">
+                  {c.sentAt ? new Date(c.sentAt).toLocaleString() : <span className="row" style={{ gap: 8 }}>
+                    <Pill>Draft</Pill>
+                    {canSend && <button className="btn sm" onClick={() => sendDraft(c)}>Send</button>}
+                  </span>}
+                </td>
                 <td>{c.sentCount}</td>
               </tr>
             ))}
